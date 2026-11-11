@@ -795,14 +795,19 @@ mod tests {
         }
     }
 
-    const DEFAULT: &str = include_str!("../../comment-budget.toml");
+    const DEFAULT: &str = "\
+source_percent = 10
+test_percent = 5
+allowance_chars = 300
+test_paths = [\"**/tests/**\", \"**/*_test.rs\"]
+";
 
     fn config(text: &str) -> Result<Config, String> {
         parse_config(text)
     }
 
     #[test]
-    fn the_template_config_parses() {
+    fn a_config_with_the_default_values_parses() {
         assert_eq!(
             config(DEFAULT),
             Ok(Config {

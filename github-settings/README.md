@@ -64,6 +64,7 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | 从不是 PR 的分支贴伪造的 `CI` 成功状态 | 满足了旧的状态检查规则，但必跑的 workflow 仍然挡住合并 |
 | head 提交写 `[skip ci]` | 什么都没跑，PR 一直被挡住 |
 | `ci.yml` 里写了 `on: pull_request` | 没有多跑一次 |
+| 必跑的 workflow 那次运行的 `event` | `pull_request` |
 
 每个 repo 要做的设置见 [repo-settings 第 1 节](../repo-settings/README.md#1-设置)"必跑的 CI"和"CI 文件"两行，限制见那里第 3 节。
 

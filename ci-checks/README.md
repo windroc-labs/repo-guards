@@ -8,28 +8,32 @@
 
 ## 语言级
 
-现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。最后三列是 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置待做。
+现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置待做。
 
-| # | 工具 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | Rust | Python | TypeScript |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | formatter | 用检查模式跑，格式不一致就失败；CI 从不改写代码 | formatter 配置 | 放宽规则 | 每个 PR | rustfmt | ruff format | prettier |
-| 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
-| 3 | 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/` | 注释预算配置 | 注释堆砌 | 每个 PR | [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
-| 4 | 类型检查 | 下文 [类型检查规则](#类型检查规则)全部开着 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
-| 5 | 死代码 | 只算发布代码里的调用：只有测试调用的代码也是死代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
-| 6 | 重复代码 | 没有大段重复；现有的重复记进重复基线，基线只能变小（jscpd `--baseline`、`--fail-on-new-clones`）；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | jscpd | jscpd | jscpd |
-| 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
-| 8 | 覆盖率 | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%（diff-cover，三种语言通用）。不设 100%：100% 会逼出空测试，断言由变异测试把关。只算发布代码：测试文件和生成文件不进分母，排除名单写在锁住的覆盖率配置里。第 9 项用同一份报告和配置 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | cargo-llvm-cov：分支要 `--branch`（只支持 nightly）；排除用 `--ignore-filename-regex`（没有配置文件，写在 CI 命令里）；`src` 里的 `#[cfg(test)] mod tests` 正则排除不了，要给它加 `#[cfg_attr(coverage_nightly, coverage(off))]` | coverage.py：`[run] branch = true`、`[run] omit` | vitest 的 v8 coverage（报分支）：`coverage.include` 写发布源码的 glob（默认只算测试 import 过的文件，没测的文件不进分母）、`coverage.exclude` |
-| 9 | CRAP 分数（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR | 没有现成工具，用覆盖率报告和复杂度结果算 | 同左 | 同左 |
-| 10 | 变异测试 | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） | cargo-mutants | mutmut | Stryker |
-| 11 | sanitizer | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR | ASan、TSan、Miri | 不适用 | 不适用 |
-| 12 | 文档测试（按项目需要） | 文档里的示例能跑，结果和文档一致 | 文档 | 文档和代码脱节 | 每个 PR | `cargo test --doc` | doctest | 无标准工具 |
+| # | 项 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | [formatter](#formatter) | 用检查模式跑，格式不一致就失败；CI 从不改写代码 | formatter 配置 | 放宽规则 | 每个 PR |
+| 2 | [linter](#linter-规则) | 下文规则全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR |
+| 3 | [注释预算](#注释预算) | 每个改动的文件，注释字符数不超过代码字符数的一定比例 | 注释预算配置 | 注释堆砌 | 每个 PR |
+| 4 | [类型检查](#类型检查规则) | 下文规则全部开着 | 类型检查配置 | 放宽规则 | 每个 PR |
+| 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR |
+| 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR |
+| 7 | [依赖检查](#依赖检查) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR |
+| 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR |
+| 9 | [CRAP 分数](#crap-分数)（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR |
+| 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |
+| 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |
+| 12 | [文档测试](#文档测试)（按项目需要） | 文档里的示例能跑，结果和文档一致 | 文档 | 文档和代码脱节 | 每个 PR |
 
-覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
+### formatter
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| [rustfmt](rust/README.md#formatterrustfmt) | [ruff format](python/README.md#formatterruff-format) | [prettier](typescript/README.md#formatterprettier) |
 
 ### linter 规则
 
-linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。
+linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
 
 | 类 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|---|
@@ -68,7 +72,7 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `banned-api`（`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
 | escape hatch | 不用 any 或类型未知的值 | 绕开类型检查 | 不适用 | `ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` |
 | escape hatch | 屏蔽类型检查的注释写明规则 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） |
-| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量（`CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`），普通配置变量照常读；变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓 | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI\|VITEST\|NODE_ENV\|(GITHUB\|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]`，并禁解构 `process.env`：`VariableDeclarator[id.type="ObjectPattern"][init.object.name="process"][init.property.name="env"]` |
+| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量，普通配置变量照常读；见[测试标记变量](#测试标记变量) | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，见[测试标记变量](#测试标记变量) |
 | 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `banned-api`（`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
 | 不检测测试环境 | 测试模块以外不用测试专用编译开关 | 测试环境走特判 | 无现成规则（`cfg(test)`） | 不适用 | 不适用 |
 | 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `banned-api`（`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
@@ -82,7 +86,23 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `disallowed-methods`（`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
 | 测试质量 | 测试里没有行内覆盖重试次数、超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `banned-api`（`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
 
+#### 测试标记变量
+
+"发布代码不按名字读 CI 或测试标记变量"一条的细节。标记变量指 `CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`。变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓。
+
+TypeScript 用 `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI|VITEST|NODE_ENV|(GITHUB|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]`，并禁解构 `process.env`：`VariableDeclarator[id.type="ObjectPattern"][init.object.name="process"][init.property.name="env"]`。
+
+### 注释预算
+
+代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/`。怎么量、上限多少，见各语言 README 的"注释预算"一节：
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
+
 ### 类型检查规则
+
+工具：Rust 用[编译器](rust/README.md#类型检查编译器)，Python 用 [pyright](python/README.md#类型检查pyright)，TypeScript 用 [tsc](typescript/README.md#类型检查tsc)。
 
 类型检查配置至少开着这些规则。只列类型检查器自己查的规则（rustc 及其 lint、pyright、tsc）；linter 实现的在 [linter 规则](#linter-规则)。
 
@@ -97,21 +117,100 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | 屏蔽类型检查的注释写明规则，多余的报错 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `reportUnnecessaryTypeIgnoreComment`；写明规则见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) |
 | 不用已废弃的 API | 用上将删的接口 | `deprecated` | `reportDeprecated`（strict） | 见 [linter 规则](#linter-规则) |
 
+### 死代码
+
+文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
+
+### 重复代码
+
+三种语言都用 jscpd；重复基线用 `--baseline`、`--fail-on-new-clones`。
+
+### 依赖检查
+
+除了白名单，还要求：不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描。
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
+
+### 覆盖率
+
+PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在锁住的覆盖率配置里。第 9 项用同一份报告和配置。
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| cargo-llvm-cov：分支要 `--branch`（只支持 nightly）；排除用 `--ignore-filename-regex`（没有配置文件，写在 CI 命令里）；`src` 里的 `#[cfg(test)] mod tests` 正则排除不了，要给它加 `#[cfg_attr(coverage_nightly, coverage(off))]` | coverage.py：`[run] branch = true`、`[run] omit` | vitest 的 v8 coverage（报分支）：`coverage.include` 写发布源码的 glob（默认只算测试 import 过的文件，没测的文件不进分母）、`coverage.exclude` |
+
+覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
+
+### CRAP 分数
+
+没有现成工具，三种语言都用覆盖率报告和复杂度结果算。
+
+### 变异测试
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| cargo-mutants | mutmut | Stryker |
+
+### sanitizer
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| ASan、TSan、Miri | 不适用 | 不适用 |
+
+### 文档测试
+
+| Rust | Python | TypeScript |
+|---|---|---|
+| `cargo test --doc` | doctest | 无标准工具 |
+
 ## 流程级
 
-本 repo 只定要求，各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。
+本 repo 只定要求，各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。表下几节是要求较长的检查的细节。
 
 | # | 检查 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 |
 |---|---|---|---|---|---|
-| 13 | 行内豁免 | 各工具的豁免都算：lint、类型检查、覆盖率排除、跳过标记、死代码和重复代码的忽略、sanitizer 抑制、"生成文件"头。每一处豁免都要在豁免白名单里登记（工具、文件、规则编号、所在函数、次数、原因）；没登记的、次数对不上的、登记了但代码里已经没有的，都失败。例外：Rust 加在 `#[cfg(test)] mod tests` 上的 `coverage(off)` 不用登记（见第 8 项），加在别处的照样登记 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR |
-| 14 | 测试结果状态门 | 结果文件存在，且是这次运行生成的；里面每个测试都是 passed：skipped、expected-fail、重试过、flaky 的数量为 0，状态白名单里的除外。另跑一次只收集不执行（collect-only），测试数要一致。测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |
+| 13 | [行内豁免](#行内豁免) | 每一处豁免都要在豁免白名单里登记，登记和代码对不上就失败 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR |
+| 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |
 | 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |
 | 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |
 | 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开。跑检查工具的 job 不安装也不运行 PR 代码；运行 PR 代码的 job 只产出结果文件，由另一个 job 解析判定 | 检查工具清单 | PR 的代码或依赖改掉检查工具或它的结果；工具升级让检查悄悄变松 | 每个 PR |
-| 18 | 生成内容 | 生成文件用锁住的生成器重新生成，逐字节相同；带"生成"头的文件必须在生成路径名单里；二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里；golden 和快照文件锁住，测试从不以更新模式运行 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
+| 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
-| 21 | `.github/` 改动单独成 PR | 改了 `.github/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
+| 21 | [`.github/` 改动单独成 PR](#github-改动单独成-pr) | 改了 `.github/` 下任何文件的 PR，不能改别的文件 | `.github/` 里的 CI 文件 | 改 CI 的 PR 只经过旧版或它自己改过的检查，夹带的别的改动也就没经过新版检查 | 每个 PR |
+
+### 行内豁免
+
+- 各工具的豁免都算：lint、类型检查、覆盖率排除、跳过标记、死代码和重复代码的忽略、sanitizer 抑制、"生成文件"头。
+- 登记的内容：工具、文件、规则编号、所在函数、次数、原因。
+- 没登记的、次数对不上的、登记了但代码里已经没有的，都失败。
+- 例外：Rust 加在 `#[cfg(test)] mod tests` 上的 `coverage(off)` 不用登记（见[第 8 项](#覆盖率)），加在别处的照样登记。
+
+### 测试结果状态门
+
+- 结果文件存在，且是这次运行生成的。
+- skipped、expected-fail、重试过、flaky 的数量为 0，状态白名单里的除外。
+- 另跑一次只收集不执行（collect-only），测试数要一致。
+- 测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外。
+
+### 生成内容
+
+- 生成文件用锁住的生成器重新生成，逐字节相同。
+- 带"生成"头的文件必须在生成路径名单里。
+- 二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里。
+- golden 和快照文件锁住，测试从不以更新模式运行。
+
+### `.github/` 改动单独成 PR
+
+实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它。
+
+为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
 
 ## CODEOWNERS
 

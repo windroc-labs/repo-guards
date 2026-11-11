@@ -3,11 +3,12 @@
   "target": "branch",
   "enforcement": "active",
   "conditions": {
-    "repository_id": {
-      "repository_ids": [
-        1450956760,
-        1453385099
-      ]
+    "repository_name": {
+      "include": [
+        "~ALL"
+      ],
+      "exclude": [],
+      "protected": false
     },
     "ref_name": {
       "include": [

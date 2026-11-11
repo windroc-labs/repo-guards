@@ -34,7 +34,7 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 |---|---|---|
 | 正确性 | 没有用不到的变量和 import；不吞异常（空 catch、裸 except）；不遮蔽变量；浮点数不做相等比较；不用已废弃的 API | 常见 bug |
 | 可读性 | 函数长度、参数个数、嵌套深度、圈复杂度或认知复杂度、文件长度都有上限；命名风格统一 | 难读难改的代码 |
-| 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。每种语言用该语言自己写一份实现，放在 `ci-checks/<语言>/` 下，见 [Rust](rust/README.md#注释预算)、[Python](python/README.md#注释预算) | 注释堆砌 |
+| 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。每种语言用该语言自己写一份实现，放在 `ci-checks/<语言>/` 下，见 [Rust](rust/README.md#注释预算)、[Python](python/README.md#注释预算)、[TypeScript](typescript/README.md#注释预算) | 注释堆砌 |
 | 危险写法 | 库代码不用崩溃式捷径（unwrap、panic 之类）；测试里不 sleep、不读真实时间 | 崩溃、时好时坏的测试 |
 | escape hatch | 动态 import、eval 和动态执行、反射访问私有符号、unsafe 或 FFI、不检查的强制转换成 any 类类型：每处都要在 escape hatch 白名单里（路径、符号、原因） | 用 escape hatch 绕开类型检查和分层规则 |
 | 不检测测试环境 | 发布代码不读 CI 或测试标记（CI 环境变量、测试框架是否已加载、测试模块以外的测试专用编译开关），不按主机名、用户、当前目录分支，不 import mock 库：放进禁用 API 列表 | 在测试环境走特判，生产走另一条路 |

@@ -18,7 +18,7 @@
 
 ## 注释预算
 
-[`comment-budget/`](comment-budget/) 是 linter 规则表里"注释预算"的 Python 实现：一个只用标准库的脚本，要 Python 3.11 及以上（读配置用 `tomllib`）。
+[`comment-budget/`](comment-budget/) 是 [`ci-checks`](../README.md#语言级) 第 3 项"注释预算"的 Python 实现：一个只用标准库的脚本，要 Python 3.11 及以上（读配置用 `tomllib`）。
 
 | 项 | 内容 |
 |---|---|

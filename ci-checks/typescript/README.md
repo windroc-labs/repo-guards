@@ -51,3 +51,39 @@
 ```
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。改脚本后在该目录跑 `npm test` 和 `npx tsc`。
+
+## 死代码（knip）
+
+| 文件 | 作用 |
+|---|---|
+| [`knip.json`](knip.json) | `entry`、`project` 换成发布代码的 glob，结尾的 `!` 标成发布代码；`--production` 只认带 `!` 的，测试文件不算入口，只有测试用到的 export 也会报 |
+| [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
+
+`ci.yml` 里一步（之前用 `npm ci` 装好依赖）：
+
+```yaml
+- run: npx knip --production
+```
+
+同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。
+
+## 重复代码（jscpd）
+
+| 文件 | 作用 |
+|---|---|
+| [`../.jscpd.json`](../.jscpd.json) | 三种语言共用。`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`baseline` 是重复基线的路径，相对配置文件所在目录；`failOnNewClones` 为 0：不在基线里的重复都失败 |
+| [`package.json`](package.json) | `devDependencies` 固定 jscpd 的版本 |
+
+复制到 `.github/checks/jscpd.json`，基线 `.github/checks/jscpd-baseline.json` 和它放在同一目录，CODEOWNERS 锁住。基线要 jscpd 5.1.0 及以上（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`）。接入时生成基线，之后只能变小：
+
+```sh
+npx jscpd --config .github/checks/jscpd.json --update-baseline .
+```
+
+`ci.yml` 里一步（之前用 `npm ci` 装好依赖）：
+
+```yaml
+- run: npx jscpd --config .github/checks/jscpd.json .
+```
+
+基线文件不存在时直接失败。`ignorePattern` 算行内豁免。

@@ -50,3 +50,36 @@
 ```
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
+
+## 死代码（编译器、cargo-machete）
+
+不用模板。编译器的 `dead_code` 只有在 CI 用 `-D warnings` 跑时才让构建失败；不带 `--tests`，`#[cfg(test)]` 的代码不参与编译，只有测试调用的函数也会报。cargo-machete 不用配置。`ci.yml` 里两步：
+
+```yaml
+- env:
+    RUSTFLAGS: -D warnings
+  run: cargo check --workspace --all-features
+- run: cargo install cargo-machete --version 0.9.2 --locked && cargo machete
+```
+
+`#[allow(dead_code)]` 和 `[package.metadata.cargo-machete] ignored` 算行内豁免。
+
+## 重复代码（jscpd）
+
+| 文件 | 作用 |
+|---|---|
+| [`../.jscpd.json`](../.jscpd.json) | 三种语言共用。`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`baseline` 是重复基线的路径，相对配置文件所在目录；`failOnNewClones` 为 0：不在基线里的重复都失败 |
+
+复制到 `.github/checks/jscpd.json`，基线 `.github/checks/jscpd-baseline.json` 和它放在同一目录，CODEOWNERS 锁住。基线要 jscpd 5.1.0 及以上（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），版本固定为 5.4.3。接入时生成基线，之后只能变小：
+
+```sh
+jscpd --config .github/checks/jscpd.json --update-baseline .
+```
+
+`ci.yml` 里一步：
+
+```yaml
+- run: cargo install jscpd --version 5.4.3 --locked && jscpd --config .github/checks/jscpd.json .
+```
+
+基线文件不存在时直接失败。`ignorePattern` 算行内豁免。

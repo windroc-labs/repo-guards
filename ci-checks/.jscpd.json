@@ -1,0 +1,17 @@
+{
+  "format": ["rust", "python", "typescript", "tsx", "javascript", "jsx"],
+  "minTokens": 50,
+  "minLines": 5,
+  "ignore": [
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/test_*.py",
+    "**/*_test.py",
+    "**/*_test.rs",
+    "**/*.test.*",
+    "**/*.spec.*"
+  ],
+  "gitignore": true,
+  "baseline": "jscpd-baseline.json",
+  "failOnNewClones": 0
+}

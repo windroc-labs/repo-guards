@@ -49,3 +49,37 @@
 ```
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
+
+## 死代码（vulture、deptry）
+
+| 文件 | 作用 |
+|---|---|
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 换成发布代码目录，`exclude` 排除测试文件，只有测试调用的函数也会报；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 `pyproject.toml` 读，默认不扫根目录的 `tests`。两者的版本固定在 `dev` 组 |
+
+`ci.yml` 里一步（之前装好 `dev` 组）：
+
+```yaml
+- run: vulture && deptry .
+```
+
+vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁免。
+
+## 重复代码（jscpd）
+
+| 文件 | 作用 |
+|---|---|
+| [`../.jscpd.json`](../.jscpd.json) | 三种语言共用。`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`baseline` 是重复基线的路径，相对配置文件所在目录；`failOnNewClones` 为 0：不在基线里的重复都失败 |
+
+复制到 `.github/checks/jscpd.json`，基线 `.github/checks/jscpd-baseline.json` 和它放在同一目录，CODEOWNERS 锁住。基线要 jscpd 5.1.0 及以上（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），PyPI 上的 `jscpd` 是同一个二进制，版本固定在 `dev` 组。接入时生成基线，之后只能变小：
+
+```sh
+jscpd --config .github/checks/jscpd.json --update-baseline .
+```
+
+`ci.yml` 里一步（之前装好 `dev` 组）：
+
+```yaml
+- run: jscpd --config .github/checks/jscpd.json .
+```
+
+基线文件不存在时直接失败。`ignorePattern` 算行内豁免。

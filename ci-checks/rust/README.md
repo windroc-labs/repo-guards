@@ -43,7 +43,7 @@
 
 ## 死代码（编译器、cargo-machete）
 
-不用模板。`rust.yml` 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`：`#[cfg(test)]` 的代码不参与编译，只有测试调用的函数也会报。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
+不用模板。`rust.yml` 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`（为什么见[死代码](../README.md#死代码)）。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
 
 `#[allow(dead_code)]` 和 `[package.metadata.cargo-machete] ignored` 算行内豁免。
 

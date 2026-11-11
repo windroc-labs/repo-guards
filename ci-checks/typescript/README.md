@@ -50,7 +50,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`knip.json`](knip.json) | `entry`、`project` 由 `typescript.yml` 的 `knip-entry`、`knip-project` 输入代替（JSON 数组，默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`），结尾的 `!` 标成发布代码；`--production` 只认带 `!` 的，测试文件不算入口，只有测试用到的 export 也会报 |
+| [`knip.json`](knip.json) | `entry`、`project` 由 `typescript.yml` 的 `knip-entry`、`knip-project` 输入代替（JSON 数组，默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`），结尾的 `!` 标成发布代码，供 `--production` 用（见[死代码](../README.md#死代码)） |
 | [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
 
 `typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。

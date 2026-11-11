@@ -16,5 +16,5 @@ reportUnnecessaryTypeIgnoreComment = "error"
 
 [tool.vulture]
 paths = ["src"]
-exclude = ["tests/", "test_*.py", "*_test.py"]
+exclude = ["tests/", "*/test_*.py", "*_test.py"]
 min_confidence = 60

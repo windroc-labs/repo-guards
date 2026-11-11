@@ -51,7 +51,7 @@
 
 ### linter 规则
 
-所有规则都开在 error 级，warning 也让 CI 失败（Rust 用 `-D warnings`，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
+所有规则都开在 error 级，warning 也让 CI 失败（Rust 用 `-D warnings`，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
 
 | 类 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|---|
@@ -80,8 +80,8 @@
 | 可读性 | 不用相对 import | 移动文件就断 | 不适用 | `TID252` | `import/no-relative-parent-imports`（eslint-plugin-import） |
 | 可读性 | 公开函数的参数和返回值写类型 | 接口类型靠推断 | 不适用（见[类型检查规则](#类型检查规则)） | `ANN` | `@typescript-eslint/explicit-module-boundary-types` |
 | 危险写法 | 库代码不用崩溃式捷径 | 崩溃 | `clippy::unwrap_used`、`clippy::expect_used`、`clippy::panic` | `S101` | `@typescript-eslint/no-non-null-assertion` |
-| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `disallowed-methods`（`std::thread::sleep`） | `TID251`（`banned-api`：`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
-| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `disallowed-methods`（`SystemTime::now`、`Instant::now`） | `TID251`（`banned-api`：`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
+| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`std::thread::sleep`） | `TID251`（`banned-api`：`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
+| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`SystemTime::now`、`Instant::now`） | `TID251`（`banned-api`：`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
 | 危险写法 | 不残留调试器 | 发布代码停住 | 不适用 | `T100` | `no-debugger` |
 | 危险写法 | 不残留调试输出 | 输出泄露、刷屏 | `clippy::dbg_macro`、`clippy::print_stdout`、`clippy::print_stderr` | `T20` | `no-console` |
 | 危险写法 | 不用已废弃的 API | 用上将删的接口 | 见[类型检查规则](#类型检查规则) | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-deprecated` |
@@ -93,14 +93,15 @@
 | escape hatch | 不用 any 或类型未知的值 | 绕开类型检查 | 不适用 | `ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` |
 | escape hatch | 屏蔽类型检查的注释写明规则 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） |
 | 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量，普通配置变量照常读；见[测试标记变量](#测试标记变量) | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，见[测试标记变量](#测试标记变量) |
+| 不检测测试环境 | 测试模块以外不用测试专用编译开关（`cfg(test)`） | 测试环境走特判 | 无现成规则（自己写的检查） | 不适用 | 不适用 |
 | 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `TID251`（`banned-api`：`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
-| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `TID251`（`banned-api`：`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
+| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `clippy::disallowed_methods`（`disallowed-methods`：`std::env::current_dir`） | `TID251`（`banned-api`：`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
 | 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `TID251`（`banned-api`：`unittest.mock`） | `no-restricted-imports` |
 | 不新增占位 | 不新增 TODO、FIXME 注释 | 留占位冒充完成 | 无现成规则 | `FIX` | `no-warning-comments` |
 | 不新增占位 | 不新增"未实现"占位 | 留占位冒充完成 | `clippy::todo`、`clippy::unimplemented` | 无现成规则 | 无现成规则 |
 | 测试质量 | 每个测试有断言 | 空测试 | 无现成规则 | 无现成规则 | `vitest/expect-expect`（`@vitest/eslint-plugin`） |
 | 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129` | 无现成规则 |
-| 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `disallowed-methods`（`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
+| 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `clippy::disallowed_methods`（`disallowed-methods`：`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
 | 测试质量 | 测试里没有行内覆盖超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `TID251`（`banned-api`：`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
 
 #### 测试标记变量
@@ -234,6 +235,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 - skipped、expected-fail、重试过、flaky 的数量为 0，状态白名单里的除外。
 - 另跑一次只收集不执行（collect-only），测试数要一致。
 - 测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外。
+- 这些也抓 focus 或禁用的测试、行内覆盖的重试次数，所以 linter 规则里不再单列这几条。
 
 ### 生成内容
 

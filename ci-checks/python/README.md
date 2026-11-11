@@ -48,7 +48,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件，只有测试调用的函数也会报；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
 
 `python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 

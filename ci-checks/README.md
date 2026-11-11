@@ -56,7 +56,6 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 | 18 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 19 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
 | 20 | workflow 改动单独成 PR | 改了 `.github/workflows/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
-| 21 | 改检查配置就全量扫 | PR 改了只查改动文件的检查（比如注释预算）的配置或脚本时，这次运行加 `--all` | `.github/` 里的 CI 文件 | 改了规则后，没改动的旧文件不达标却没人发现 | 每个 PR |
 
 ## CODEOWNERS
 

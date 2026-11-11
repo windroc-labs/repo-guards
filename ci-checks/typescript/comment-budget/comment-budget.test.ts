@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, it, type TestContext } from "node:test";
@@ -18,7 +18,11 @@ import {
   type Counts,
 } from "./comment-budget.ts";
 
-const DEFAULT = readFileSync(new URL("../comment-budget.toml", import.meta.url), "utf8");
+const DEFAULT = `source_percent = 10
+test_percent = 5
+allowance_chars = 300
+test_paths = ["**/*.test.ts", "**/*.spec.ts", "**/*.test.tsx", "**/*.spec.tsx", "**/__tests__/**", "**/tests/**"]
+`;
 
 const counts = (comment: string, code: string): Counts => ({
   comment: chars(comment),
@@ -109,7 +113,7 @@ describe("measuring", () => {
 });
 
 describe("configuring", () => {
-  it("parses the template config", () => {
+  it("parses a config with the default values", () => {
     assert.deepEqual(parseConfig(DEFAULT), {
       source_percent: 10,
       test_percent: 5,

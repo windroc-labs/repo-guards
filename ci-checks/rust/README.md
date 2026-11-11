@@ -2,18 +2,6 @@
 
 [`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。
 
-## `rust.yml` 的三个 job
-
-| job | 跑什么 | PR 代码 |
-|---|---|---|
-| static | Cargo config、Format、Comment budget、Unused dependencies、Dependency rules | 不编译也不运行 |
-| build | `cargo check` 和 `cargo clippy`，`--message-format=json` 输出存成结果文件，上传为 `rust-results` | 运行（`build.rs`、过程宏），只产出结果文件，不判定 |
-| judge | [`judge/judge.py`](judge/judge.py) 读 `rust-results`：每行都得是 JSON，有 `success: true` 的 `build-finished`，没有 error 或 warning 级的 `compiler-message`；结果文件缺了或解析不了也失败 | 不检出 |
-
-工具版本只写在 `rust.yml` 里。rustup 缺失时装固定版本的 `rustup-init` 并校验 sha256；安装步骤的工作目录在 repo 外。static 和 build 清空 `RUSTC_WRAPPER` 等 wrapper 变量，并用 `CARGO_ENCODED_RUSTFLAGS=-Dwarnings` 盖过 PR 的 rustflags。
-
-Cargo config 步：repo 里每个已跟踪的 `.cargo/config` 和 `.cargo/config.toml` 都要能解析，且不能有 `rustflags`、`rustdocflags`、`rustc`、`rustc-wrapper`、`rustc-workspace-wrapper`、`rustdoc`、`alias` 键（`alias` 能盖掉 fmt、clippy 这类外部子命令），也不能有含 `cap-lints` 的字符串。这步失败时，Format、Unused dependencies、Dependency rules 不跑。测试：在 `judge/` 跑 `python3 -m unittest judge_test`。
-
 ## formatter（rustfmt）
 
 | 文件 | 作用 |
@@ -47,15 +35,15 @@ Cargo config 步：repo 里每个已跟踪的 `.cargo/config` 和 `.cargo/config
 
 格式是 TOML 的一个子集：顶层 `键 = 值`，值只有整数和字符串数组，`#` 注释，空行。
 
-`rust.yml` 的 Comment budget 步在 repo 外编译本目录的检查器，再在 repo 里用本目录的配置对 PR 的 base 跑。超标时用删注释来过，不要靠加代码压低比例。
+`rust.yml` 的 Comment budget 步用本目录的检查器和配置，对 PR 的 base 跑。超标时用删注释来过，不要靠加代码压低比例。
 
 ## 类型检查（编译器）
 
-没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，build job 的 Lint 步（clippy）和 Type check and dead code 步都带 `-D warnings`，由 judge job 判定失败。
+没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，`rust.yml` 的 Lint 步（clippy）和 Type check and dead code 步都带 `-D warnings`，让它失败。
 
 ## 死代码（编译器、cargo-machete）
 
-不用模板。build job 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`（为什么见[死代码](../README.md#死代码)）。static job 的 Unused dependencies 步跑 cargo-machete，不用配置。
+不用模板。`rust.yml` 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`（为什么见[死代码](../README.md#死代码)）。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
 
 `#[allow(dead_code)]` 和 `[package.metadata.cargo-machete] ignored` 算行内豁免。
 
@@ -66,4 +54,4 @@ Cargo config 步：repo 里每个已跟踪的 `.cargo/config` 和 `.cargo/config
 | [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；没有 crate 能带 `build.rs`；许可证只准 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC；漏洞和 yanked 的版本都失败 |
 | [`deny-merge/`](deny-merge/) | 把 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
-repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。static job 的 Dependency rules 步合并后跑 cargo-deny。
+repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 用 `name@version` 写死版本；它为空时 cargo-deny 不限制包名。

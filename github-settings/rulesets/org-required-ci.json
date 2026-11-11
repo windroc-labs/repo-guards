@@ -1,5 +1,5 @@
 {
-  "name": "require ci REPO",
+  "name": "REPO",
   "target": "branch",
   "enforcement": "active",
   "conditions": {

@@ -1,0 +1,41 @@
+{
+  "name": "require ci guard",
+  "target": "branch",
+  "enforcement": "active",
+  "conditions": {
+    "repository_id": {
+      "repository_ids": [
+        1450956760,
+        1453385099
+      ]
+    },
+    "ref_name": {
+      "include": [
+        "~DEFAULT_BRANCH"
+      ],
+      "exclude": []
+    }
+  },
+  "rules": [
+    {
+      "type": "workflows",
+      "parameters": {
+        "do_not_enforce_on_create": false,
+        "workflows": [
+          {
+            "repository_id": 1453335304,
+            "path": ".github/workflows/guard.yml",
+            "ref": "refs/heads/main"
+          }
+        ]
+      }
+    }
+  ],
+  "bypass_actors": [
+    {
+      "actor_id": null,
+      "actor_type": "OrganizationAdmin",
+      "bypass_mode": "always"
+    }
+  ]
+}

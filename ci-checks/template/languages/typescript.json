@@ -1,101 +1,60 @@
 {
+  "files": [
+    "*.ts",
+    "*.tsx",
+    "*.mts",
+    "*.cts",
+    "*.js",
+    "*.jsx",
+    "*.mjs",
+    "*.cjs"
+  ],
+  "scopes": [
+    "^\\s*(?:export\\s+)?(?:default\\s+)?(?:async\\s+)?function\\*?\\s+(?P<name>\\w+)",
+    "^\\s*(?:export\\s+)?(?:default\\s+)?(?:abstract\\s+)?class\\s+(?P<name>\\w+)",
+    "^\\s*(?:export\\s+)?(?:const|let|var)\\s+(?P<name>\\w+)\\s*(?::[^=]+)?=\\s*(?:async\\s*)?(?:\\([^)]*\\)|\\w+)\\s*(?::[^=]+)?=>",
+    "^\\s*(?:(?:public|private|protected|static|async|readonly)\\s+)*(?!(?:if|for|while|switch|catch|return|function)\\b)(?P<name>\\w+)\\s*\\([^)]*\\)\\s*(?::[^{]+)?\\{\\s*$"
+  ],
+  "skip_to_next": "\\s*(?://|/\\*|\\*|@)",
   "exemptions": [
     {
       "tool": "lint",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
-      "pattern": "eslint-disable"
+      "pattern": "eslint-disable-next-line(?:\\s+(?P<codes>[\\w@/-]+(?:\\s*,\\s*[\\w@/-]+)*))?",
+      "next": true
+    },
+    {
+      "tool": "lint",
+      "pattern": "eslint-disable(?!-next-line)(?:-line)?(?:\\s+(?P<codes>[\\w@/-]+(?:\\s*,\\s*[\\w@/-]+)*))?"
     },
     {
       "tool": "type",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
-      "pattern": "@ts-(ignore|expect-error|nocheck)"
+      "pattern": "@ts-(?P<codes>ignore|expect-error)",
+      "next": true
+    },
+    {
+      "tool": "type",
+      "pattern": "@ts-(?P<codes>nocheck)"
     },
     {
       "tool": "format",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
-      "pattern": "prettier-ignore"
+      "pattern": "prettier-ignore",
+      "next": true
     },
     {
       "tool": "coverage",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
-      "pattern": "(c8|v8|istanbul)[[:space:]]+ignore"
+      "pattern": "(?:c8|v8|istanbul)\\s+ignore(?:\\s+(?P<codes>next|if|else|file|start|stop))?",
+      "next": true
     },
     {
       "tool": "skip",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
-      "pattern": "(^|[^[:alnum:]_.])((it|test|describe)\\.(skip|todo|fails|only)|x(it|test|describe))\\("
+      "pattern": "(?:^|[^\\w.])(?P<codes>(?:it|test|describe)\\.(?:skip|todo|fails|only)|x(?:it|test|describe))\\("
     },
     {
       "tool": "mutation",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
       "pattern": "Stryker disable"
     },
     {
       "tool": "generated",
-      "files": [
-        "*.ts",
-        "*.tsx",
-        "*.mts",
-        "*.cts",
-        "*.js",
-        "*.jsx",
-        "*.mjs",
-        "*.cjs"
-      ],
       "pattern": "@generated"
     }
   ],

@@ -1,45 +1,45 @@
 {
+  "files": [
+    "*.rs"
+  ],
+  "scopes": [
+    "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:(?:const|async|unsafe|extern\\s+\\\"[^\\\"]*\\\")\\s+)*fn\\s+(?P<name>\\w+)",
+    "^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:mod|trait|struct|enum)\\s+(?P<name>\\w+)",
+    "^\\s*impl(?:<[^>]*>)?\\s+(?:[\\w:<>, ]+\\s+for\\s+)?(?P<name>\\w+)"
+  ],
+  "skip_to_next": "\\s*(?:#\\[|//)",
   "exemptions": [
     {
       "tool": "lint",
-      "files": [
-        "*.rs"
-      ],
-      "pattern": "#!?\\[(allow|expect)\\("
+      "pattern": "#\\[(?:allow|expect)\\((?P<codes>[^)]*)\\)",
+      "next": true
+    },
+    {
+      "tool": "lint",
+      "pattern": "#!\\[(?:allow|expect)\\((?P<codes>[^)]*)\\)"
     },
     {
       "tool": "format",
-      "files": [
-        "*.rs"
-      ],
-      "pattern": "rustfmt::skip"
+      "pattern": "#!?\\[rustfmt::skip\\]",
+      "next": true
     },
     {
       "tool": "coverage",
-      "files": [
-        "*.rs"
-      ],
-      "pattern": "coverage\\(off\\)"
+      "pattern": "coverage\\(off\\)",
+      "next": true
     },
     {
       "tool": "skip",
-      "files": [
-        "*.rs"
-      ],
-      "pattern": "#\\[ignore"
+      "pattern": "#\\[ignore\\b",
+      "next": true
     },
     {
       "tool": "mutation",
-      "files": [
-        "*.rs"
-      ],
-      "pattern": "mutants::skip"
+      "pattern": "#\\[mutants::skip\\]",
+      "next": true
     },
     {
       "tool": "generated",
-      "files": [
-        "*.rs"
-      ],
       "pattern": "@generated"
     }
   ],

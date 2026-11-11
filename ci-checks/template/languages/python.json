@@ -1,54 +1,66 @@
 {
+  "files": [
+    "*.py",
+    "*.pyi"
+  ],
+  "scopes": [
+    "^\\s*(?:async\\s+)?def\\s+(?P<name>\\w+)",
+    "^\\s*class\\s+(?P<name>\\w+)"
+  ],
+  "skip_to_next": "\\s*[#@]",
   "exemptions": [
     {
       "tool": "lint",
-      "files": [
-        "*.py",
-        "*.pyi"
-      ],
-      "pattern": "#[[:space:]]*(noqa|ruff:[[:space:]]*noqa|pylint:[[:space:]]*disable)"
+      "pattern": "#\\s*noqa(?::\\s*(?P<codes>[A-Z]+\\d+(?:\\s*,\\s*[A-Z]+\\d+)*))?"
+    },
+    {
+      "tool": "lint",
+      "pattern": "#\\s*(?:ruff|flake8)\\s*:\\s*noqa(?::\\s*(?P<codes>[A-Z]+\\d+(?:\\s*,\\s*[A-Z]+\\d+)*))?"
+    },
+    {
+      "tool": "lint",
+      "pattern": "#\\s*pylint:\\s*disable=(?P<codes>[\\w-]+(?:\\s*,\\s*[\\w-]+)*)"
     },
     {
       "tool": "type",
-      "files": [
-        "*.py",
-        "*.pyi"
-      ],
-      "pattern": "#[[:space:]]*(type|pyright):[[:space:]]*ignore"
+      "pattern": "#\\s*type:\\s*ignore(?:\\[(?P<codes>[^\\]]*)\\])?"
+    },
+    {
+      "tool": "type",
+      "pattern": "#\\s*pyright:\\s*ignore(?:\\[(?P<codes>[^\\]]*)\\])?"
+    },
+    {
+      "tool": "type",
+      "pattern": "#\\s*pyright:\\s*(?P<codes>basic|standard|off)\\b"
     },
     {
       "tool": "format",
-      "files": [
-        "*.py"
-      ],
-      "pattern": "#[[:space:]]*fmt:[[:space:]]*(off|skip)"
+      "pattern": "#\\s*fmt:\\s*(?P<codes>off|skip)\\b"
     },
     {
       "tool": "coverage",
-      "files": [
-        "*.py"
-      ],
-      "pattern": "#[[:space:]]*pragma:[[:space:]]*no[[:space:]]*cover"
+      "pattern": "(?i:#\\s*pragma:?\\s*no\\s*cover)"
     },
     {
       "tool": "skip",
-      "files": [
-        "*.py"
-      ],
-      "pattern": "(pytest\\.mark\\.(skip|skipif|xfail)|pytest\\.(skip|xfail)\\(|unittest\\.skip)"
+      "pattern": "@pytest\\.mark\\.(?P<codes>skip|skipif|xfail)\\b",
+      "next": true
+    },
+    {
+      "tool": "skip",
+      "pattern": "\\bpytest\\.(?P<codes>skip|xfail)\\("
+    },
+    {
+      "tool": "skip",
+      "pattern": "@unittest\\.(?P<codes>skip\\w*)",
+      "next": true
     },
     {
       "tool": "mutation",
-      "files": [
-        "*.py"
-      ],
-      "pattern": "#[[:space:]]*pragma:[[:space:]]*no[[:space:]]*mutate"
+      "pattern": "#\\s*pragma:\\s*no\\s*mutate"
     },
     {
       "tool": "generated",
-      "files": [
-        "*.py"
-      ],
       "pattern": "@generated"
     }
   ],

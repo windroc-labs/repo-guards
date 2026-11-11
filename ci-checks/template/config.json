@@ -9,12 +9,14 @@
     "deny.toml",
     "rust-toolchain.toml"
   ],
-  "exemption_allowlist": [
+  "exemptions": [
     {
       "tool": "lint",
       "path": "src/ffi.rs",
-      "max": 2,
-      "reason": "FFI bindings need allow(non_camel_case_types)"
+      "code": "non_camel_case_types",
+      "count": 1,
+      "reason": "C names in the generated bindings",
+      "scope": "ffi"
     }
   ]
 }

@@ -19,7 +19,7 @@
 | 5 | 死代码 | 没有用不到的代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 代码质量，不防作弊：工具把测试里的调用也算作使用 | 每个 PR | 编译器 `dead_code`、cargo-machete（没用的依赖） | ruff、vulture | tsc、knip |
 | 6 | 重复代码 | 没有大段重复 | 检查配置 | 代码质量，不防作弊：改个名字就躲过 | 每个 PR | jscpd | jscpd | jscpd |
 | 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包 | 每个 PR | cargo-deny | pip-audit | npm audit |
-| 8 | 覆盖率 | 总覆盖率不低于门槛，也不低于 merge-base。PR 改动的行被测试执行到的比例不低于门槛（diff-cover，三种语言通用）；门槛不设 100%：100% 会逼出空测试，断言由变异测试把关 | 覆盖率门槛 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率 | 每个 PR | cargo-llvm-cov | coverage.py | vitest 的 v8 coverage |
+| 8 | 覆盖率 | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%（diff-cover，三种语言通用）。不设 100%：100% 会逼出空测试，断言由变异测试把关。只算发布代码：测试文件和生成文件不进分母，排除名单写在锁住的覆盖率配置里。第 9 项用同一份报告和配置 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | cargo-llvm-cov：分支要 `--branch`（只支持 nightly）；排除用 `--ignore-filename-regex`（没有配置文件，写在 CI 命令里） | coverage.py：`[run] branch = true`、`[run] omit` | vitest 的 v8 coverage（报分支）：`coverage.exclude` |
 | 9 | CRAP 分数（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR | 没有现成工具，用覆盖率报告和复杂度结果算 | 同左 | 同左 |
 | 10 | 变异测试 | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） | cargo-mutants | mutmut | Stryker |
 | 11 | sanitizer | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR | ASan、TSan、Miri | 不适用 | 不适用 |

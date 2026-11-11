@@ -26,7 +26,7 @@ jobs:
             const defaultBranch = context.payload.repository.default_branch;
             const workflow = '.github/workflows/ci.yml';
             const waitSeconds = 3600;
-            const pollSeconds = 20;
+            const pollSeconds = 10;
 
             // Returns a failure message, or null.
             async function blocker() {

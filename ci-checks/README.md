@@ -23,7 +23,7 @@
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
 ## 语言级
 
@@ -172,7 +172,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
 | 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`：先 `uv export --format requirements-txt`，再 `pip-audit -r`） | `npm audit` |
-| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 | pip-licenses：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 | license-checker-rseidelsohn：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 |
+| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | pip-licenses：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
 ### 覆盖率

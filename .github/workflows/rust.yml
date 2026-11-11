@@ -89,5 +89,5 @@ jobs:
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
-          uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
+          uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check

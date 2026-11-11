@@ -97,7 +97,7 @@ jobs:
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
-          allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).licenses.allow.join(";"))' "$RG/typescript/comment-budget" "$RG/rust/deny.toml")
+          allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).allow.join(";"))' "$RG/typescript/comment-budget" "$RG/licenses.toml")
           args=(--onlyAllow "$allowed" --excludePrivatePackages)
           if [[ -f "$EXCEPTIONS" ]]; then
             args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")

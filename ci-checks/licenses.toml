@@ -1,0 +1,30 @@
+allow = [
+    "MIT",
+    "MIT-0",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "BlueOak-1.0.0",
+    "CC-BY-4.0",
+    "PSF-2.0",
+]
+
+[python-classifiers]
+"MIT License" = "MIT"
+"MIT No Attribution License (MIT-0)" = "MIT-0"
+"Apache Software License" = "Apache-2.0"
+# Known gap: pip reports the bare "BSD License" for every BSD variant, BSD-4-Clause included.
+"BSD License" = "BSD-3-Clause"
+"Zero-Clause BSD (0BSD)" = "0BSD"
+"ISC License (ISCL)" = "ISC"
+"zlib/libpng License" = "Zlib"
+"Boost Software License 1.0 (BSL-1.0)" = "BSL-1.0"
+"Blue Oak Model License (BlueOak-1.0.0)" = "BlueOak-1.0.0"
+"Python Software Foundation License" = "PSF-2.0"

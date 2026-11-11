@@ -6,6 +6,7 @@ from pathlib import Path
 from deny_merge import main
 
 SHARED = Path(__file__).parent.parent / "deny.toml"
+LICENSES = Path(__file__).parent.parent.parent / "licenses.toml"
 
 PROJECT = """\
 [bans]
@@ -29,7 +30,7 @@ class Merging(unittest.TestCase):
             project_path = Path(tmp, "allowlist.toml")
             project_path.write_text(project)
             out = Path(tmp, "deny.toml")
-            code = main([str(SHARED), str(project_path), str(out)])
+            code = main([str(SHARED), str(LICENSES), str(project_path), str(out)])
             return code, tomllib.loads(out.read_text()) if out.exists() else None
 
     def test_allowlists_are_appended_and_shared_rules_kept(self):
@@ -40,17 +41,19 @@ class Merging(unittest.TestCase):
         self.assertEqual(merged["bans"]["build"]["allow-build-scripts"], ["libc"])
         self.assertEqual(merged["sources"]["allow-git"], ["https://github.com/example/repo"])
         self.assertEqual(merged["licenses"]["exceptions"], [{"crate": "ring", "allow": ["OpenSSL"]}])
-        for key in ("allow", "private"):
-            self.assertEqual(merged["licenses"][key], shared["licenses"][key])
+        self.assertEqual(merged["licenses"]["allow"], tomllib.loads(LICENSES.read_text())["allow"])
+        self.assertEqual(merged["licenses"]["private"], shared["licenses"]["private"])
         self.assertEqual(merged["sources"]["unknown-git"], "deny")
         self.assertEqual(merged["sources"]["allow-registry"], shared["sources"]["allow-registry"])
         self.assertEqual(merged["advisories"], shared["advisories"])
         self.assertEqual(merged["graph"], shared["graph"])
 
-    def test_empty_allowlist_reproduces_shared_config(self):
+    def test_empty_allowlist_reproduces_shared_config_with_license_allow(self):
         code, merged = self.run_main("")
         self.assertEqual(code, 0)
-        self.assertEqual(merged, tomllib.loads(SHARED.read_text()))
+        expected = tomllib.loads(SHARED.read_text())
+        expected["licenses"]["allow"] = tomllib.loads(LICENSES.read_text())["allow"]
+        self.assertEqual(merged, expected)
 
     def test_rule_keys_cannot_be_loosened(self):
         for project in (
@@ -69,7 +72,7 @@ class Merging(unittest.TestCase):
     def test_missing_project_file_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp, "deny.toml")
-            self.assertEqual(main([str(SHARED), str(Path(tmp, "missing.toml")), str(out)]), 2)
+            self.assertEqual(main([str(SHARED), str(LICENSES), str(Path(tmp, "missing.toml")), str(out)]), 2)
             self.assertFalse(out.exists())
 
 

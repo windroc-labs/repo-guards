@@ -65,12 +65,13 @@ def dump(table: dict[str, Any], path: tuple[str, ...] = ()) -> list[str]:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: deny_merge.py SHARED_DENY_TOML PROJECT_ALLOWLIST_TOML OUTPUT", file=sys.stderr)
+    if len(argv) != 4:
+        print("usage: deny_merge.py SHARED_DENY_TOML LICENSES_TOML PROJECT_ALLOWLIST_TOML OUTPUT", file=sys.stderr)
         return 2
-    shared_path, project_path, output = (Path(a) for a in argv)
+    shared_path, licenses_path, project_path, output = (Path(a) for a in argv)
     try:
         shared = tomllib.loads(shared_path.read_text())
+        shared.setdefault("licenses", {})["allow"] = tomllib.loads(licenses_path.read_text())["allow"]
         project = tomllib.loads(project_path.read_text())
         output.write_text("\n".join(dump(merge(shared, project))) + "\n")
     except (OSError, tomllib.TOMLDecodeError, Error) as error:

@@ -5,7 +5,6 @@ all-features = true
 yanked = "deny"
 
 [licenses]
-allow = ["MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"]
 private = { ignore = true }
 
 [bans]

@@ -51,7 +51,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；没有 crate 能带 `build.rs`；许可证只准 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC；漏洞和 yanked 的版本都失败 |
-| [`deny-merge/`](deny-merge/) | 把 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
+| [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；没有 crate 能带 `build.rs`；许可证只准 [`licenses.toml`](../licenses.toml) 的 `allow`；漏洞和 yanked 的版本都失败 |
+| [`deny-merge/`](deny-merge/) | 把 [`licenses.toml`](../licenses.toml) 的 `allow` 和 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
 repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 用 `name@version` 写死版本；它为空时 cargo-deny 不限制包名。

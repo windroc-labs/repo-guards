@@ -1,5 +1,5 @@
 [dependency-groups]
-dev = ["ruff==0.17.4"]
+dev = ["ruff==0.17.4", "pyright==1.1.414"]
 
 [tool.ruff]
 line-length = 100
@@ -9,3 +9,7 @@ indent-width = 4
 indent-style = "space"
 quote-style = "double"
 line-ending = "lf"
+
+[tool.pyright]
+typeCheckingMode = "strict"
+reportUnnecessaryTypeIgnoreComment = "error"

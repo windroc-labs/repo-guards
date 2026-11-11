@@ -50,3 +50,7 @@
 ```
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
+
+## 类型检查（编译器）
+
+没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，用 `cargo clippy -- -D warnings` 让它失败。

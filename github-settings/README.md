@@ -2,6 +2,8 @@
 
 ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这些条件"。两样都要设好。
 
+这里是共用、设一次的设置（Enterprise、Organization、账号）；每个 repo 都要做的设置见 [`repo-settings/`](../repo-settings/README.md)。
+
 ## 1. 设置分几层
 
 按范围从宽到窄：
@@ -15,7 +17,7 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 
 个人账号下的 repo 没有 Enterprise 和 Organization 这两层，只有账号和 Repo。账号和 Repo 这两层的要求，无论是个人 repo、Organization repo，还是 Enterprise 下的 Organization repo，都一样；Organization 和 Enterprise 只是在上面多加一层上限。
 
-下面每层一张表。"套餐"一列写的是最低要求的套餐：个人账号有 Free、Pro，Organization 有 Free、Team，再往上是 Enterprise Cloud。✅ 表示 Free 就有；⚠️ 表示要付费套餐，后面写要什么套餐。一格里分情况时，每种情况一行。
+下面除 Repo 层外，每层一张表。"套餐"一列写的是最低要求的套餐：个人账号有 Free、Pro，Organization 有 Free、Team，再往上是 Enterprise Cloud。✅ 表示 Free 就有；⚠️ 表示要付费套餐，后面写要什么套餐。一格里分情况时，每种情况一行。
 
 ## 2. Enterprise（共用，设一次；没有 Enterprise 套餐就跳过）
 
@@ -36,12 +38,24 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | 基础权限 | 不能是 Admin | 设成 Admin，所有成员对所有 repo 都是 admin | Organization > Settings > Member privileges > Base permissions | ✅ 全部 |
 | 团队 | 没有团队对 repo 有 admin | 团队成员会继承 admin，子团队也会继承 | Organization > Teams | ✅ 全部 |
 | Organization 角色 | 没有人有 "All-repository admin"、"CI/CD admin"，或带 "Manage organization ref update rules and rulesets" 的自定义角色 | All-repository admin 一次就给了所有 repo 的 admin；CI/CD admin 能改 Actions 策略、管理 secrets；后者能改 Organization rulesets | Organization > Settings > Organization roles > Role assignments（含 Teams 标签） | ⚠️ 自定义角色：Enterprise Cloud<br>⚠️ 预设角色：文档说法不一，每个套餐都要查 |
-| GitHub Apps | 没有 Administration；只给需要的 repo；workflows 写权限可以保留 | 有 Administration 就能改 ruleset；能访问的 repo 越少，出事时影响越小；workflows 写权限的理由见第 5 节 | Organization > Settings > GitHub Apps > 每个 App | ✅ 全部 |
-| Actions：`GITHUB_TOKEN` | 默认只读 | PR 里的代码会在 CI 里跑。这只管没写 `permissions:` 的 workflow，写了的可以给自己加写权限（见第 5 节"CI 状态伪造"） | Organization > Settings > Actions > General > Workflow permissions：选 "Read repository contents and packages permissions" | ✅ 全部 |
+| GitHub Apps | 没有 Administration；只给需要的 repo；workflows 写权限可以保留 | 有 Administration 就能改 ruleset；能访问的 repo 越少，出事时影响越小；workflows 写权限的理由见 [repo-settings 第 2 节](../repo-settings/README.md#2-ruleset-文件) | Organization > Settings > GitHub Apps > 每个 App | ✅ 全部 |
+| Actions：`GITHUB_TOKEN` | 默认只读 | PR 里的代码会在 CI 里跑。这只管没写 `permissions:` 的 workflow，写了的可以给自己加写权限（见下文"CI 状态伪造"） | Organization > Settings > Actions > General > Workflow permissions：选 "Read repository contents and packages permissions" | ✅ 全部 |
 | Actions：创建和批准 PR | 不允许 | 打开的话，workflow 可以自己批准 PR | 同上：不勾 "Allow GitHub Actions to create and approve pull requests" | ✅ 全部 |
 | 必跑的 workflow | Organization ruleset `require ci guard`（`rulesets/org-required-guard.json`）要求每个选中 repo 进默认分支的 PR 跑 repo-guards 的 `.github/workflows/guard.yml`。repo 用 "Selected repositories" 选；加一个 repo，要在那里加，也要加进 JSON 的 `repository_id.repository_ids` | 检查逻辑放在项目 repo 之外，worker 改不到；只能在 Organization 或 Enterprise 层设，不能在 repo 层设 | Organization > Settings > Repository > Rulesets > require ci guard > Target repositories | ⚠️ Team（2026-11-11 在 Team 套餐的 Organization 界面上确认） |
 | 2FA | 要求所有成员和外部协作者开 2FA | 账号被盗时多一道门槛 | Organization > Settings > Authentication security | ✅ 全部 |
 | token 策略 | 待定：禁止 classic token，fine-grained token 需要 owner 批准 | 管住访问 Organization 资源的 PAT。管不到 `gh auth login` 拿到的 OAuth token：GitHub CLI 是特权 OAuth App，OAuth App 限制也拦不住它 | Organization > Settings > Personal access tokens | ✅ 全部 |
+
+| Ruleset 文件 | 层 | 管什么 |
+|---|---|---|
+| `rulesets/org-required-guard.json` | Organization | 必跑 repo-guards 的 guard（见上表"必跑的 workflow"一行） |
+
+### CI 状态伪造
+
+有写权限的人能让一个 workflow 给自己加 `statuses: write`，给 PR 的提交贴一个伪造的 `CI` 成功状态。提交信息里再写 `[skip ci]`，真正的 CI 就不跑，伪造的成功成了唯一的结果。
+
+现在的堵法：repo-guards 的 `.github/workflows/guard.yml` 等目标 repo 自己的 `.github/workflows/ci.yml` 在这个 PR 上的运行，那次运行成功才通过。guard 由 Organization ruleset 要求必跑（见上表"必跑的 workflow"一行），目标 repo 改不了它，也跳不过它：必跑的 workflow 被跳过时，PR 不能合并。2026-11-11 实测有效。
+
+每个 repo 要做的设置见 [repo-settings 第 1 节](../repo-settings/README.md#1-设置)"必跑的 guard"和"CI 文件"两行，限制见那里第 3 节。
 
 ## 4. 账号（共用，每个账号设一次）
 
@@ -49,44 +63,4 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 |---|---|---|---|---|
 | owner | 开 2FA，保存好恢复码；凭证绝不给 agent | owner 能绕过所有规则 | 账号 Settings > Password and authentication | ✅ 全部 |
 
-其他账号层的设置（token 权限、授权过的 App、外部协作者自己的账号）GitHub 没法强制；真正的限制是第 3 节（Organization）和第 5 节（repo 角色）。
-
-## 5. Repo（每个 repo 都要做）
-
-| 设置 | 要求 | 原因 | 去哪里检查 | 套餐 |
-|---|---|---|---|---|
-| 协作者 | 只有 owner 是 Admin；agent 账号和外部协作者最高 Write，没有自定义 repo 角色 | Admin 能修改或删除 ruleset | repo > Settings > Collaborators and teams；最终结果用 `gh api --paginate "repos/<owner>/<repo>/collaborators?affiliation=all&permission=admin" --jq '.[].login'` 查，它把 Owner、基础权限、团队、Organization 角色带来的 admin 都算进去 | ✅ 全部<br>⚠️ 自定义 repo 角色：Enterprise Cloud |
-| Rulesets | 导入下表 Repo 层的两个文件 | 合并必须满足的条件 | repo > Settings > Rules > Rulesets | ✅ 公开 repo：全部<br>⚠️ 私有 repo：Pro 或 Team |
-| 必跑的 guard | 这个 repo 在 Organization ruleset `require ci guard` 的目标 repo 里，并满足下文"接入一个 repo 的前提" | 没有它，CI 状态能伪造（见下文"CI 状态伪造"） | Organization > Settings > Repository > Rulesets > require ci guard > Target repositories；`gh api repos/<owner>/<repo>/rules/branches/<默认分支> --jq '.[].type'` 里有 `workflows` | ⚠️ Team |
-| Ruleset 绕过名单 | 只有 owner，不能有 App、团队或角色 | 名单里的都能跳过检查 | 同上：每个 ruleset 的 Bypass list | ✅ 公开 repo：全部<br>⚠️ 私有 repo：Pro 或 Team |
-| CODEOWNERS | 至少覆盖 `.github/`（含 workflows）和 CODEOWNERS 文件本身；每个 owner 对 repo 都有写权限 | 不覆盖的话，改 workflow 和改 CODEOWNERS 都不用 owner 批准；没有写权限的 owner 不生效，那个路径就等于没锁 | repo 里的 `.github/CODEOWNERS`（GitHub 打开这个文件时会标出出错的行）；`gh api repos/<owner>/<repo>/codeowners/errors`；repo > Settings > Collaborators and teams | ✅ 公开 repo：全部<br>⚠️ 私有 repo：Pro 或 Team（强制 code owner 批准） |
-| Secrets（GitHub Actions secrets：存在 GitHub 设置里、workflow 运行时用的密钥，比如发布 token、API key；不是 repo 代码里的文件） | 放进 Environment，并把它的 Deployment branches 限制为只有默认分支；repo 级 secrets 为空，也没有 Organization 级 secrets 共享给这个 repo | 同一个 repo 的分支和 PR 会用改过的 workflow 跑，能读到 repo 级和共享过来的 Organization 级 secrets。Pro 和 Team 套餐的私有 repo 不能给 Environment 设必须审批，只能靠限制分支；Free 套餐的私有 repo 建不了 Environment，只能不放 secrets，或者升级套餐 | repo > Settings > Environments；repo > Settings > Secrets and variables > Actions；Organization > Settings > Secrets and variables | ✅ 公开 repo：全部<br>⚠️ 私有 repo：Environment 和限制分支要 Pro 或 Team；Organization secrets 共享过来要 Team |
-
-| Ruleset 文件 | 层 | 管什么 |
-|---|---|---|
-| `rulesets/protected-branches.json` | Repo | 默认分支和所有长期分支（长期分支一律以 `integration/` 开头）：必须走 PR、code owner 批准、CI 通过，禁止 force push 和删除 |
-| `rulesets/tags.json` | Repo | tag 可以创建，禁止修改和删除 |
-| `rulesets/org-required-guard.json` | Organization | 必跑 repo-guards 的 guard（见第 3 节"必跑的 workflow"） |
-
-workflows 写权限可以保留的理由：改 workflow 的 PR 合并要 code owner 批准；批准前跑起来，也拿不到只限默认分支使用的 Environment secrets。
-
-tag 任何有写权限的人都能创建，可以打在没合并的提交上，所以不要用推 tag 来触发发布。
-
-### CI 状态伪造
-
-有写权限的人能让一个 workflow 给自己加 `statuses: write`，给 PR 的提交贴一个伪造的 `CI` 成功状态。提交信息里再写 `[skip ci]`，真正的 CI 就不跑，伪造的成功成了唯一的结果。
-
-现在的堵法：repo-guards 的 `.github/workflows/guard.yml` 等目标 repo 自己的 `.github/workflows/ci.yml` 在这个 PR 上的运行，那次运行成功才通过。guard 由 Organization ruleset 要求必跑（见第 3 节），目标 repo 改不了它，也跳不过它：必跑的 workflow 被跳过时，PR 不能合并。2026-11-11 实测有效。
-
-接入一个 repo 的前提：
-- CI 文件叫 `.github/workflows/ci.yml`，由 `pull_request` 触发；
-- `.github/` 用 CODEOWNERS 锁住，并要求 code owner 批准（见上表 CODEOWNERS 一行）；
-- runner 必须是一次性的（见 windroc-labs/github-CI-runners）：常驻的 self-hosted runner 能被任何 workflow 污染；
-- 私有 repo 的 guard 跑在 self-hosted runner 上，公开 repo 的跑在 GitHub-hosted runner 上。
-
-限制：
-- 一个分支只要被别的 PR 用过，就合不进默认分支：推到新分支，开新 PR；
-- PR 的目标分支改过（手动或自动，比如叠起来的 PR），同样合不进；
-- fork 来的 PR 过不了，只能由 owner 绕过；
-- guard 不管 `integration/**` 分支，那里的代码要等进默认分支时才经过 CI 核验；
-- `.github/` 以外削弱测试抓不到，要靠顶层 README 第 5、6 层（隐藏验收测试、独立审计）。
+其他账号层的设置（token 权限、授权过的 App、外部协作者自己的账号）GitHub 没法强制；真正的限制是第 3 节（Organization）和 [repo-settings](../repo-settings/README.md)（repo 角色）。

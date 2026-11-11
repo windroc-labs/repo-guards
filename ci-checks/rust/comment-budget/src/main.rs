@@ -809,7 +809,7 @@ mod tests {
                 source_percent: 10,
                 test_percent: 5,
                 allowance_chars: 300,
-                test_paths: vec!["tests/**".into(), "**/*_test.rs".into()],
+                test_paths: vec!["**/tests/**".into(), "**/*_test.rs".into()],
             })
         );
         let spaced = "# top\n\nsource_percent=1 # a\ntest_percent = 2\nallowance_chars = 3\ntest_paths = [\n  \"a\\\"#\", # b\n  \"c\",\n]\n";
@@ -842,7 +842,7 @@ mod tests {
                 with("= 5", "= [\"5\"]"),
                 "`test_percent` must be an integer",
             ),
-            (with("[\"tests/**\", ", "[1, "), "expected a \"string\""),
+            (with("[\"**/tests/**\", ", "[1, "), "expected a \"string\""),
             (
                 with("= [", "= \"tests/**\" #["),
                 "`test_paths` must be a list of strings",
@@ -876,16 +876,11 @@ mod tests {
             "tests/unit/c.rs",
             "src/d_test.rs",
             "e_test.rs",
+            "crate/tests/b.rs",
         ] {
             assert!(config.is_test_path(path), "{path}");
         }
-        for path in [
-            "src/e.rs",
-            "contests/f.rs",
-            "tests.rs",
-            "src/test.rs",
-            "crate/tests/b.rs",
-        ] {
+        for path in ["src/e.rs", "contests/f.rs", "tests.rs", "src/test.rs"] {
             assert!(!config.is_test_path(path), "{path}");
         }
         assert!(glob("src/*.rs", "src/a.rs"));

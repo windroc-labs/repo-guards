@@ -52,6 +52,21 @@
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。改脚本后在该目录跑 `npm test` 和 `npx tsc`。
 
+## 类型检查（tsc）
+
+| 文件 | 作用 |
+|---|---|
+| [`tsconfig.json`](tsconfig.json) | 开 `strict` 和 `noUncheckedIndexedAccess`，对应 [类型检查规则](../README.md#类型检查规则) 的 TypeScript 一列；合并进已有的 `tsconfig.json` |
+| [`package.json`](package.json) | `devDependencies` 同样固定 typescript 的版本 |
+
+`ci.yml` 里一步（之前用 `npm ci` 装好依赖）：
+
+```yaml
+- run: npx tsc --noEmit
+```
+
+`// @ts-expect-error`、`// @ts-ignore`、`// @ts-nocheck` 算行内豁免。
+
 ## 死代码（knip）
 
 | 文件 | 作用 |

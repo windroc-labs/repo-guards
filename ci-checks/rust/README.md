@@ -51,6 +51,10 @@
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
 
+## 类型检查（编译器）
+
+没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，用 `cargo clippy -- -D warnings` 让它失败。
+
 ## 死代码（编译器、cargo-machete）
 
 不用模板。编译器的 `dead_code` 只有在 CI 用 `-D warnings` 跑时才让构建失败；不带 `--tests`，`#[cfg(test)]` 的代码不参与编译，只有测试调用的函数也会报。cargo-machete 不用配置。`ci.yml` 里两步：

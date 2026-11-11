@@ -50,6 +50,20 @@
 
 checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
 
+## 类型检查（pyright）
+
+| 文件 | 作用 |
+|---|---|
+| [`pyproject.toml`](pyproject.toml) | `[tool.pyright]` 开 `typeCheckingMode = "strict"`，再加 strict 不开的 `reportUnnecessaryTypeIgnoreComment`，对应 [类型检查规则](../README.md#类型检查规则) 的 Python 一列；`[dependency-groups]` 的 `dev` 组同样固定 pyright 的版本 |
+
+`ci.yml` 里一步（之前装好 `dev` 组）：
+
+```yaml
+- run: pyright
+```
+
+`# type: ignore`、`# pyright: ignore` 算行内豁免。
+
 ## 死代码（vulture、deptry）
 
 | 文件 | 作用 |

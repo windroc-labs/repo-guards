@@ -2,17 +2,15 @@
 
 第 3 层：不依赖项目设计的检查，每个 repo 的 `.github/workflows/ci.yml` 都要跑。依赖项目设计的架构检查在第 4 层，见 [`architecture/`](../architecture/README.md)。
 
-每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文"锁定"）。CI 只比对，不重新生成标准答案。目前每个 repo 在自己的 `ci.yml` 里实现这些检查。
+每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文 CODEOWNERS）。CI 只比对，不重新生成标准答案。目前每个 repo 在自己的 `ci.yml` 里实现这些检查。
 
 检查按实现方式分两组：流程级、语言级。"频率"一列：每个 PR，或定期。定期结果必须强制，不能只当建议：比如失败自动开 issue，挡住下一次发布。标"按项目需要"的检查适用才加。
 
-## 锁定
+## CODEOWNERS
 
-CODEOWNERS 除了第 2 层要求的 `.github/` 和 CODEOWNERS 本身（见 [repo-settings](../repo-settings/README.md)），还要锁本页每项启用的检查"标准答案"一列里的文件。
-
-- 配置和钩子文件用不带 `/` 的文件名模式（如 `conftest.py`），任何深度都匹配，新建的嵌套文件也被锁。
-- lockfile 的 diff 由依赖门检查，lockfile 本身锁不锁由 repo 自己定。
-- 实现文件不锁，其他新建文件和文件夹不需要 owner 批准，worker 才能自由改。
+| 项 | 要求 | 防什么 |
+|---|---|---|
+| CODEOWNERS | 本页每项启用的检查，"标准答案"一列里的文件都进 CODEOWNERS。配置和钩子文件用不带 `/` 的文件名模式（如 `conftest.py`），任何深度都匹配，新建的嵌套文件也被锁。lockfile 的 diff 由依赖门检查，lockfile 本身锁不锁由 repo 自己定。实现文件不锁，其他新建文件和文件夹不需要 owner 批准 | 不锁的话，worker 改标准答案不用 owner 批准，检查形同虚设；实现不锁，worker 才能自由改 |
 
 ## 流程级
 

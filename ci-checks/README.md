@@ -62,8 +62,8 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | escape hatch | 反射访问私有符号在白名单里 | 绕开封装 | 不适用 | `SLF001` | `no-restricted-syntax`（方括号访问私有成员） |
 | escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `banned-api`（`ctypes`） | 不适用 |
 | escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `banned-api`（`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
-| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量（`CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`），普通配置变量照常读；变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓 | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI\|VITEST\|NODE_ENV\|(GITHUB\|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]` |
-| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `banned-api`（`sys.modules`） | `no-restricted-syntax`（`process.env.VITEST`） |
+| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量（`CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`），普通配置变量照常读；变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓 | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI\|VITEST\|NODE_ENV\|(GITHUB\|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]`，并禁解构 `process.env`：`VariableDeclarator[id.type="ObjectPattern"][init.object.name="process"][init.property.name="env"]` |
+| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `banned-api`（`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
 | 不检测测试环境 | 测试模块以外不用测试专用编译开关 | 测试环境走特判 | 无现成规则（`cfg(test)`） | 不适用 | 不适用 |
 | 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `banned-api`（`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
 | 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `banned-api`（`unittest.mock`） | `no-restricted-imports` |

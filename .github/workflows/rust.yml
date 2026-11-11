@@ -63,23 +63,29 @@ jobs:
         with:
           workspaces: repo
           save-if: ${{ github.event_name == 'push' }}
-      - name: Format
-        run: cargo fmt --all --check -- --config-path "$RG/rust/rustfmt.toml"
-      - name: Lint
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
-      - name: Comment budget
-        run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
-      - name: Type check and dead code
-        env:
-          RUSTFLAGS: -D warnings
-        run: cargo check --workspace --all-features --locked
       - name: Install cargo-machete and cargo-deny
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete@0.9.2,cargo-deny@0.20.2
+      - name: Format
+        if: ${{ !cancelled() }}
+        run: cargo fmt --all --check -- --config-path "$RG/rust/rustfmt.toml"
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Comment budget
+        if: ${{ !cancelled() }}
+        run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
+      - name: Type check and dead code
+        if: ${{ !cancelled() }}
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --workspace --all-features --locked
       - name: Unused dependencies
+        if: ${{ !cancelled() }}
         run: cargo machete
       - name: Dependency rules
+        if: ${{ !cancelled() }}
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |

@@ -71,14 +71,18 @@ jobs:
       - name: Install the project
         run: npm ci --no-audit --no-fund
       - name: Format
+        if: ${{ !cancelled() }}
         run: prettier --check --config "$RG/typescript/.prettierrc.json" .
       - name: Comment budget
+        if: ${{ !cancelled() }}
         run: node "$RG/typescript/comment-budget/comment-budget.ts" --base "$BASE_REF" --config "$RG/typescript/comment-budget.toml"
       - name: Type check
+        if: ${{ !cancelled() }}
         run: |
           mapfile -t flags < <(node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).compilerOptions)) console.log(`--${k}\n${v}`)' "$RG/typescript/tsconfig.json")
           tsc --project tsconfig.json --noEmit "${flags[@]}"
       - name: Dead code and unused dependencies
+        if: ${{ !cancelled() }}
         env:
           ENTRY: ${{ inputs.knip-entry }}
           PROJECT: ${{ inputs.knip-project }}
@@ -86,8 +90,10 @@ jobs:
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           knip --production --config "$RUNNER_TEMP/knip.json"
       - name: Vulnerabilities
+        if: ${{ !cancelled() }}
         run: npm audit
       - name: Licenses
+        if: ${{ !cancelled() }}
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |

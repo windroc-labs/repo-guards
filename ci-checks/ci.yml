@@ -15,6 +15,7 @@ jobs:
     uses: windroc-labs/repo-guards/.github/workflows/rust.yml@0000000000000000000000000000000000000000
     with:
       runs-on: '"ubuntu-latest"'
+      working-directory: .
   python:
     uses: windroc-labs/repo-guards/.github/workflows/python.yml@0000000000000000000000000000000000000000
     with:

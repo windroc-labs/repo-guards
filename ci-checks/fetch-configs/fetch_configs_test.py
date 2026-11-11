@@ -47,7 +47,9 @@ class Run(unittest.TestCase):
         self.workflow = self.tmp / "ci.yml"
         self.out = self.tmp / ".repo-guards"
 
-    def run_fetch(self, workflow: str, files: dict[str, str]) -> tuple[int, list[tuple[str, str]]]:
+    def run_fetch(
+        self, workflow: str, files: dict[str, str], status: str = "ahead"
+    ) -> tuple[int, list[tuple[str, str]]]:
         self.workflow.write_text(workflow)
         calls: list[tuple[str, str]] = []
 
@@ -55,8 +57,23 @@ class Run(unittest.TestCase):
             calls.append((repo, sha))
             return archive(files)
 
-        code = run(["--workflow", str(self.workflow), "--out", str(self.out)], fetch)
+        def compare(repo: str, sha: str) -> str:
+            self.assertEqual((repo, sha), ("example-org/repo-guards", SHA))
+            return status
+
+        code = run(["--workflow", str(self.workflow), "--out", str(self.out)], fetch, compare)
         return code, calls
+
+    def test_sha_on_main_is_fetched(self):
+        for status in ("ahead", "identical"):
+            code, calls = self.run_fetch(caller(SHA), {"ci-checks/a.toml": "1\n"}, status)
+            self.assertEqual((code, calls), (0, [("example-org/repo-guards", SHA)]), status)
+
+    def test_sha_not_on_main_downloads_nothing(self):
+        for status in ("diverged", "behind"):
+            code, calls = self.run_fetch(caller(SHA), {"ci-checks/a.toml": "1\n"}, status)
+            self.assertEqual((code, calls), (2, []), status)
+            self.assertFalse(self.out.exists(), status)
 
     def test_extracts_only_ci_checks_at_the_pinned_sha(self):
         code, calls = self.run_fetch(

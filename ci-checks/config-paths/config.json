@@ -1,0 +1,12 @@
+{
+  "languages": [
+    "rust"
+  ],
+  "allowed": [
+    "rustfmt.toml",
+    "clippy.toml",
+    "deny.toml",
+    "rust-toolchain.toml",
+    "crates/*/build.rs"
+  ]
+}

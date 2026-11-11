@@ -48,6 +48,8 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | Ruleset 文件 | 层 | 管什么 |
 |---|---|---|
 | `rulesets/org-required-guard.json` | Organization | 必跑 repo-guards 的 guard（见上表"必跑的 workflow"一行） |
+| `rulesets/org-baseline.json` | Organization | 所有选中 repo 共用的分支规则，管默认分支和 `integration/**`：必须走 PR、code owner 批准、只能 squash 合并，禁止 force push 和删除；不含 CI 状态检查 |
+| `rulesets/org-baseline-tags.json` | Organization | 所有选中 repo 的 tag：可以创建，禁止修改和删除 |
 
 ### CI 状态伪造
 

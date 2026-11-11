@@ -1,8 +1,16 @@
 # CI 检查
 
-第 3 层：每个 repo 的 `.github/workflows/ci.yml` 要跑的检查。每项检查拿代码和一份"标准答案"比对，标准答案由第 2 层的 CODEOWNERS 锁住（见 [repo-settings](../repo-settings/README.md) 的 CODEOWNERS 一行），改它要 owner 批准。CI 只比对，不重新生成标准答案。
+第 3 层：每个 repo 的 `.github/workflows/ci.yml` 要跑的检查。每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文"锁定"）。CI 只比对，不重新生成标准答案。
 
 检查按查什么分四组，另有一组按项目需要。"频率"一列：每个 PR，或定期。
+
+## 锁定
+
+CODEOWNERS 除了第 2 层要求的 `.github/` 和 CODEOWNERS 本身（见 [repo-settings](../repo-settings/README.md)），还要锁本 repo 启用的每项检查"标准答案"一列里的文件。
+
+- 配置和钩子文件用不带 `/` 的文件名模式（如 `conftest.py`），任何深度都匹配，新建的嵌套文件也被锁。
+- lockfile 的 diff 由依赖门检查，lockfile 本身锁不锁由 repo 自己定。
+- 实现文件不锁，其他新建文件和文件夹不需要 owner 批准，worker 才能自由改。
 
 ## 结构
 

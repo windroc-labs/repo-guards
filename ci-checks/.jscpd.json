@@ -11,7 +11,7 @@
     "**/*.test.*",
     "**/*.spec.*"
   ],
-  "gitignore": true,
+  "gitignore": false,
   "baseline": "jscpd-baseline.json",
   "failOnNewClones": 0
 }

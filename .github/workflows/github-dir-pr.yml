@@ -14,25 +14,37 @@ permissions:
 jobs:
   github-dir-pr:
     name: .github changes in their own PR
-    if: github.event_name != 'push'
+    if: github.event_name == 'pull_request'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
     steps:
       - name: Check out
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: .github changes in their own PR
         shell: bash
         env:
-          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha }}
+          BASE_REF: origin/${{ github.base_ref }}
         run: |
-          changed=$(git diff --name-only "$BASE_REF"...HEAD)
-          workflows=$(grep '^\.github/' <<< "$changed" || true)
-          others=$(grep -v '^\.github/' <<< "$changed" || true)
-          if [[ -n "$workflows" && -n "$others" ]]; then
+          changed="$RUNNER_TEMP/changed"
+          git -c core.quotePath=false diff --name-only --no-renames -z "$BASE_REF"...HEAD > "$changed"
+          mapfile -d '' files < "$changed"
+          workflows=()
+          others=()
+          for f in "${files[@]}"; do
+            if [[ $f == .github/* ]]; then
+              workflows+=("$f")
+            else
+              others+=("$f")
+            fi
+          done
+          if (( ${#workflows[@]} && ${#others[@]} )); then
             echo "::error::A PR that changes .github/ must change nothing else"
-            printf '.github files:\n%s\nOther files:\n%s\n' "$workflows" "$others"
+            printf '.github files:\n'
+            printf '  %s\n' "${workflows[@]}"
+            printf 'Other files:\n'
+            printf '  %s\n' "${others[@]}"
             exit 1
           fi

@@ -16,9 +16,9 @@
 | 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
 | 3 | 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/` | 注释预算配置 | 注释堆砌 | 每个 PR | [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
 | 4 | 类型检查 | 下文 [类型检查规则](#类型检查规则)全部开着 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
-| 5 | 死代码 | 没有用不到的代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 代码质量，不防作弊：工具把测试里的调用也算作使用 | 每个 PR | 编译器 `dead_code`、cargo-machete（没用的依赖） | ruff、vulture | tsc、knip |
-| 6 | 重复代码 | 没有大段重复 | 检查配置 | 代码质量，不防作弊：改个名字就躲过 | 每个 PR | jscpd | jscpd | jscpd |
-| 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包 | 每个 PR | cargo-deny | pip-audit | npm audit |
+| 5 | 死代码 | 只算发布代码里的调用：只有测试调用的代码也是死代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
+| 6 | 重复代码 | 没有大段重复；现有的重复记进重复基线，基线只能变小（jscpd `--baseline`、`--fail-on-new-clones`）；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | jscpd | jscpd | jscpd |
+| 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
 | 8 | 覆盖率 | 总覆盖率不低于门槛，也不低于 merge-base。PR 改动的行被测试执行到的比例不低于门槛（diff-cover，三种语言通用）；门槛不设 100%：100% 会逼出空测试，断言由变异测试把关 | 覆盖率门槛 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率 | 每个 PR | cargo-llvm-cov | coverage.py | vitest 的 v8 coverage |
 | 9 | CRAP 分数（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR | 没有现成工具，用覆盖率报告和复杂度结果算 | 同左 | 同左 |
 | 10 | 变异测试 | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） | cargo-mutants | mutmut | Stryker |
@@ -106,7 +106,7 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | 18 | 生成内容 | 生成文件用锁住的生成器重新生成，逐字节相同；带"生成"头的文件必须在生成路径名单里；二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里；golden 和快照文件锁住，测试从不以更新模式运行 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
-| 21 | workflow 改动单独成 PR | 改了 `.github/workflows/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
+| 21 | `.github/` 改动单独成 PR | 改了 `.github/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
 
 ## CODEOWNERS
 
@@ -115,7 +115,7 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | 锁什么 | 包括 | 写法 | 防什么 |
 |---|---|---|---|
 | 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
-| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
+| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、重复基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
 | 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
 | 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
 | 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |

@@ -18,7 +18,7 @@
 | 4 | [类型检查](#类型检查规则) | 下文规则全部开着 | 类型检查配置 | 放宽规则 | 每个 PR |
 | 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR |
 | 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR |
-| 7 | [依赖检查](#依赖检查) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR |
+| 7 | [依赖检查](#依赖检查规则) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR |
 | 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR |
 | 9 | [CRAP 分数](#crap-分数)（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR |
 | 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |
@@ -129,13 +129,21 @@ TypeScript 用 `no-restricted-syntax`，如 `MemberExpression[object.property.na
 
 三种语言都用 jscpd；重复基线用 `--baseline`、`--fail-on-new-clones`。模板见各语言 README：[Rust](rust/README.md#重复代码jscpd)、[Python](python/README.md#重复代码jscpd)、[TypeScript](typescript/README.md#重复代码jscpd)。
 
-### 依赖检查
+### 依赖检查规则
 
-除了白名单，还要求：不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描。
+依赖检查至少开着这些规则。"脚本"指各 repo 自己写的检查；标"项目白名单"的，名单内容由各项目定，放进锁住的依赖白名单。
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
+| 规则 | 防什么 | Rust | Python | TypeScript |
+|---|---|---|---|---|
+| 新增或变了的包在依赖白名单里 | 引入改过的包 | cargo-deny `[bans]` `allow`，用 `name@version` 写死版本（项目白名单） | 无现成规则（脚本拿 `uv.lock` 和 base 比 diff，对照项目白名单） | 无现成规则（脚本拿 `package-lock.json` 和 base 比 diff，对照项目白名单） |
+| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | `.npmrc` `allow-git=none`、`allow-remote=none`、`allow-file=none`、`allow-directory=none` |
+| 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
+| 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
+| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
+| 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
+| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit | `npm audit` |
+| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]` `allow`（项目白名单） | pip-licenses `--allow-only`（项目白名单） | license-checker-rseidelsohn `--onlyAllow`（项目白名单） |
+| 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
 ### 覆盖率
 

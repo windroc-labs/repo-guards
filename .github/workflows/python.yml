@@ -71,7 +71,10 @@ jobs:
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
       - name: Type check
         if: ${{ !cancelled() }}
-        run: pyright --project "$RG/python/pyproject.toml" --pythonpath .venv/bin/python $SOURCE_DIRS
+        run: |
+          # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
+          python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
+          pyright --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() }}
         run: vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
@@ -79,7 +82,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
-          uv run --locked --with "$deptry" deptry .
+          uv run --locked --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
         run: |

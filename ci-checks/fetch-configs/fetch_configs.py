@@ -1,5 +1,6 @@
 import argparse
 import io
+import json
 import re
 import shutil
 import sys
@@ -34,6 +35,24 @@ def download(repo: str, sha: str) -> bytes:
         return response.read()
 
 
+def compare_status(repo: str, sha: str) -> str:
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/compare/{sha}...main",
+        headers={"Accept": "application/vnd.github+json"},
+    )
+    with urllib.request.urlopen(request, timeout=60) as response:
+        try:
+            return str(json.load(response)["status"])
+        except (ValueError, KeyError, TypeError) as error:
+            raise Error(f"unreadable compare response for {sha}: {error!r}") from error
+
+
+def check_on_main(repo: str, sha: str, compare: Callable[[str, str], str]) -> None:
+    status = compare(repo, sha)
+    if status not in ("ahead", "identical"):
+        raise Error(f"{sha} is not on {repo} main (compare status {status!r})")
+
+
 def extract(archive: bytes, out: Path) -> None:
     staging = out.with_name(out.name + ".partial")
     shutil.rmtree(staging, ignore_errors=True)
@@ -48,13 +67,18 @@ def extract(archive: bytes, out: Path) -> None:
     staging.rename(out)
 
 
-def run(argv: list[str], fetch: Callable[[str, str], bytes] = download) -> int:
+def run(
+    argv: list[str],
+    fetch: Callable[[str, str], bytes] = download,
+    compare: Callable[[str, str], str] = compare_status,
+) -> int:
     parser = argparse.ArgumentParser(description="Download the repo-guards configs that the caller CI pins.")
     parser.add_argument("--workflow", default=".github/workflows/ci.yml", type=Path)
     parser.add_argument("--out", default=".repo-guards", type=Path)
     args = parser.parse_args(argv)
     try:
         repo, sha = pinned(args.workflow.read_text())
+        check_on_main(repo, sha, compare)
         extract(fetch(repo, sha), args.out)
         (args.out / "SHA").write_text(sha + "\n")
     except (OSError, tarfile.TarError, Error) as error:

@@ -16,9 +16,9 @@
 | 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
 | 3 | 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/` | 注释预算配置 | 注释堆砌 | 每个 PR | [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
 | 4 | 类型检查 | 最严格模式；不准隐式 any 或 unknown；公开函数的参数和返回值都写类型；可能为空的值先处理再用 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
-| 5 | 死代码 | 没有用不到的代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 代码质量，不防作弊：工具把测试里的调用也算作使用 | 每个 PR | 编译器 `dead_code`、cargo-machete（没用的依赖） | ruff、vulture | tsc、knip |
-| 6 | 重复代码 | 没有大段重复 | 检查配置 | 代码质量，不防作弊：改个名字就躲过 | 每个 PR | jscpd | jscpd | jscpd |
-| 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包 | 每个 PR | cargo-deny | pip-audit | npm audit |
+| 5 | 死代码 | 只算发布代码里的调用：只有测试调用的代码也是死代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
+| 6 | 重复代码 | 没有大段重复；现有的重复记进重复基线，基线只能变小（jscpd `--baseline`、`--fail-on-new-clones`）；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | jscpd | jscpd | jscpd |
+| 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
 | 8 | 覆盖率 | 总覆盖率不低于门槛，也不低于 merge-base。PR 改动的行被测试执行到的比例不低于门槛（diff-cover，三种语言通用）；门槛不设 100%：100% 会逼出空测试，断言由变异测试把关 | 覆盖率门槛 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率 | 每个 PR | cargo-llvm-cov | coverage.py | vitest 的 v8 coverage |
 | 9 | CRAP 分数（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR | 没有现成工具，用覆盖率报告和复杂度结果算 | 同左 | 同左 |
 | 10 | 变异测试 | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） | cargo-mutants | mutmut | Stryker |

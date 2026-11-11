@@ -1,0 +1,105 @@
+name: TypeScript checks
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      knip-entry:
+        description: knip entry globs as JSON; a trailing ! marks shipped code
+        type: string
+        default: '["src/index.ts!"]'
+      knip-project:
+        description: knip project globs as JSON; a trailing ! marks shipped code
+        type: string
+        default: '["src/**/*.ts!"]'
+      license-exceptions:
+        description: The repo's packages exempt from the license check, one per line; may be absent
+        type: string
+        default: .github/checks/license-exceptions.txt
+
+permissions:
+  contents: read
+
+jobs:
+  typescript:
+    name: TypeScript
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 20
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Apply the shared .npmrc
+        run: |
+          # Environment variables outrank the repo's own .npmrc.
+          while IFS='=' read -r key value; do
+            [[ -n "$key" ]] && echo "npm_config_${key//-/_}=$value" >> "$GITHUB_ENV"
+          done < "$RG/typescript/.npmrc"
+      - name: Install the shared tools
+        run: |
+          mkdir -p "$RUNNER_TEMP/ts-tools"
+          cp "$RG/typescript/package.json" "$RUNNER_TEMP/ts-tools/"
+          npm install --prefix "$RUNNER_TEMP/ts-tools" --no-audit --no-fund --save-exact license-checker-rseidelsohn@5.0.1
+          npm ci --prefix "$RG/typescript/comment-budget" --no-audit --no-fund
+          echo "$RUNNER_TEMP/ts-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Install the project
+        run: npm ci --no-audit --no-fund
+      - name: Format
+        if: ${{ !cancelled() }}
+        run: prettier --check --config "$RG/typescript/.prettierrc.json" .
+      - name: Comment budget
+        if: ${{ !cancelled() }}
+        run: node "$RG/typescript/comment-budget/comment-budget.ts" --base "$BASE_REF" --config "$RG/typescript/comment-budget.toml"
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: |
+          mapfile -t flags < <(node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).compilerOptions)) console.log(`--${k}\n${v}`)' "$RG/typescript/tsconfig.json")
+          tsc --project tsconfig.json --noEmit "${flags[@]}"
+      - name: Dead code and unused dependencies
+        if: ${{ !cancelled() }}
+        env:
+          ENTRY: ${{ inputs.knip-entry }}
+          PROJECT: ${{ inputs.knip-project }}
+        run: |
+          node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
+          knip --production --config "$RUNNER_TEMP/knip.json"
+      - name: Vulnerabilities
+        if: ${{ !cancelled() }}
+        run: npm audit
+      - name: Licenses
+        if: ${{ !cancelled() }}
+        env:
+          EXCEPTIONS: ${{ inputs.license-exceptions }}
+        run: |
+          allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).licenses.allow.join(";"))' "$RG/typescript/comment-budget" "$RG/rust/deny.toml")
+          args=(--onlyAllow "$allowed" --excludePrivatePackages)
+          if [[ -f "$EXCEPTIONS" ]]; then
+            args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
+          fi
+          license-checker-rseidelsohn "${args[@]}"

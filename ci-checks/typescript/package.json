@@ -1,5 +1,8 @@
 {
   "devDependencies": {
-    "prettier": "3.10.0"
+    "jscpd": "5.4.3",
+    "knip": "6.45.1",
+    "prettier": "3.10.0",
+    "typescript": "7.0.2"
   }
 }

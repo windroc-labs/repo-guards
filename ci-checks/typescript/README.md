@@ -1,21 +1,15 @@
 # TypeScript 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置。文件复制到 repo 根目录，`package.json` 里的条目合并进已有的那份；顺序同主表。
+[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置，由 reusable workflow [`typescript.yml`](../../.github/workflows/typescript.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`typescript.yml` 按 [`package.json`](package.json) 把工具装在 repo 之外，再用 `npm ci` 装 repo 自己的依赖，npm 设置取 [`.npmrc`](.npmrc)（见[依赖检查规则](../README.md#依赖检查规则)）。各节写明它由哪一步跑；顺序同主表。
 
 ## formatter（prettier）
 
 | 文件 | 作用 |
 |---|---|
 | [`.prettierrc.json`](.prettierrc.json) | 格式选项 |
-| [`package.json`](package.json) | `devDependencies` 固定 prettier 的版本，不带 `^` 或 `~`；换成接入时的最新版本号。不固定的话，升级后同样的代码可能突然不过 |
+| [`package.json`](package.json) | `devDependencies` 固定 prettier 的版本，不带 `^` 或 `~`。不固定的话，升级后同样的代码可能突然不过 |
 
-`ci.yml` 里一步（之前用 `npm ci` 装好依赖）：
-
-```yaml
-- run: npx prettier --check .
-```
-
-只检查不改写，格式不对就失败。`// prettier-ignore` 算行内豁免。
+`typescript.yml` 的 Format 步只检查不改写，格式不对就失败。`// prettier-ignore` 算行内豁免。
 
 ## 注释预算
 
@@ -41,13 +35,22 @@
 
 格式是 TOML，只认这四个顶层键；整数不能为负，`1.0` 这样的浮点数也不行。
 
-`comment-budget/` 整个目录复制到 `.github/checks/typescript/comment-budget/`（`package.json` 不合并，单独一份），`comment-budget.toml` 复制到 `.github/checks/typescript/comment-budget.toml`。配置文件在 `.github/` 下，CODEOWNERS 锁住，改上限要 owner 批准；目录里的 `package.json`、`tsconfig.json` 按文件名也在 CODEOWNERS 里。`ci.yml` 里两步：
+`typescript.yml` 的 Comment budget 步用本目录的检查器和配置，对 PR 的 base 跑。超标时用删注释来过，不要靠加代码压低比例。改脚本后在该目录跑 `npm test` 和 `npx tsc`。
 
-```yaml
-- run: npm ci --ignore-scripts --prefix .github/checks/typescript/comment-budget
-- env:
-    BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-  run: node .github/checks/typescript/comment-budget/comment-budget.ts --base "$BASE_REF"
-```
+## 类型检查（tsc）
 
-checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。改脚本后在该目录跑 `npm test` 和 `npx tsc`。
+| 文件 | 作用 |
+|---|---|
+| [`tsconfig.json`](tsconfig.json) | 开 `strict` 和 `noUncheckedIndexedAccess`，对应 [类型检查规则](../README.md#类型检查规则) 的 TypeScript 一列。`typescript.yml` 的 Type check 步把这里的 `compilerOptions` 作为命令行参数加在 repo 自己的 `tsconfig.json` 上，命令行优先 |
+| [`package.json`](package.json) | `devDependencies` 同样固定 typescript 的版本 |
+
+`// @ts-expect-error`、`// @ts-ignore`、`// @ts-nocheck` 算行内豁免。
+
+## 死代码（knip）
+
+| 文件 | 作用 |
+|---|---|
+| [`knip.json`](knip.json) | `entry`、`project` 由 `typescript.yml` 的 `knip-entry`、`knip-project` 输入代替（JSON 数组，默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`），结尾的 `!` 标成发布代码，供 `--production` 用（见[死代码](../README.md#死代码)） |
+| [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
+
+`typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。

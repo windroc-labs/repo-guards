@@ -1,0 +1,20 @@
+{
+  "languages": [
+    "rust"
+  ],
+  "allowed_config_paths": [
+    "Cargo.toml",
+    "rustfmt.toml",
+    "clippy.toml",
+    "deny.toml",
+    "rust-toolchain.toml"
+  ],
+  "exemption_allowlist": [
+    {
+      "tool": "lint",
+      "path": "src/ffi.rs",
+      "max": 2,
+      "reason": "FFI bindings need allow(non_camel_case_types)"
+    }
+  ]
+}

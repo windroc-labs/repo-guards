@@ -1,0 +1,61 @@
+{
+  "exemptions": [
+    {
+      "tool": "lint",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "#!?\\[(allow|expect)\\("
+    },
+    {
+      "tool": "format",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "rustfmt::skip"
+    },
+    {
+      "tool": "coverage",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "coverage\\(off\\)"
+    },
+    {
+      "tool": "skip",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "#\\[ignore"
+    },
+    {
+      "tool": "mutation",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "mutants::skip"
+    },
+    {
+      "tool": "generated",
+      "files": [
+        "*.rs"
+      ],
+      "pattern": "@generated"
+    }
+  ],
+  "config_files": [
+    "rustfmt.toml",
+    ".rustfmt.toml",
+    "clippy.toml",
+    ".clippy.toml",
+    ".cargo/config.toml",
+    ".cargo/config",
+    ".cargo/mutants.toml",
+    "mutants.toml",
+    "deny.toml",
+    "rust-toolchain.toml",
+    "rust-toolchain",
+    ".config/nextest.toml",
+    "build.rs"
+  ]
+}

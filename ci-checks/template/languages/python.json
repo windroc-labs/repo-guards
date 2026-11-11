@@ -1,0 +1,70 @@
+{
+  "exemptions": [
+    {
+      "tool": "lint",
+      "files": [
+        "*.py",
+        "*.pyi"
+      ],
+      "pattern": "#[[:space:]]*(noqa|ruff:[[:space:]]*noqa|pylint:[[:space:]]*disable)"
+    },
+    {
+      "tool": "type",
+      "files": [
+        "*.py",
+        "*.pyi"
+      ],
+      "pattern": "#[[:space:]]*(type|pyright):[[:space:]]*ignore"
+    },
+    {
+      "tool": "format",
+      "files": [
+        "*.py"
+      ],
+      "pattern": "#[[:space:]]*fmt:[[:space:]]*(off|skip)"
+    },
+    {
+      "tool": "coverage",
+      "files": [
+        "*.py"
+      ],
+      "pattern": "#[[:space:]]*pragma:[[:space:]]*no[[:space:]]*cover"
+    },
+    {
+      "tool": "skip",
+      "files": [
+        "*.py"
+      ],
+      "pattern": "(pytest\\.mark\\.(skip|skipif|xfail)|pytest\\.(skip|xfail)\\(|unittest\\.skip)"
+    },
+    {
+      "tool": "mutation",
+      "files": [
+        "*.py"
+      ],
+      "pattern": "#[[:space:]]*pragma:[[:space:]]*no[[:space:]]*mutate"
+    },
+    {
+      "tool": "generated",
+      "files": [
+        "*.py"
+      ],
+      "pattern": "@generated"
+    }
+  ],
+  "config_files": [
+    "pyproject.toml",
+    "ruff.toml",
+    ".ruff.toml",
+    "setup.cfg",
+    "tox.ini",
+    "pytest.ini",
+    "conftest.py",
+    ".coveragerc",
+    "mypy.ini",
+    ".mypy.ini",
+    "pyrightconfig.json",
+    "sitecustomize.py",
+    "usercustomize.py"
+  ]
+}

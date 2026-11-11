@@ -1,0 +1,120 @@
+{
+  "exemptions": [
+    {
+      "tool": "lint",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "eslint-disable"
+    },
+    {
+      "tool": "type",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "@ts-(ignore|expect-error|nocheck)"
+    },
+    {
+      "tool": "format",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "prettier-ignore"
+    },
+    {
+      "tool": "coverage",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "(c8|v8|istanbul)[[:space:]]+ignore"
+    },
+    {
+      "tool": "skip",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "(^|[^[:alnum:]_.])((it|test|describe)\\.(skip|todo|fails|only)|x(it|test|describe))\\("
+    },
+    {
+      "tool": "mutation",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "Stryker disable"
+    },
+    {
+      "tool": "generated",
+      "files": [
+        "*.ts",
+        "*.tsx",
+        "*.mts",
+        "*.cts",
+        "*.js",
+        "*.jsx",
+        "*.mjs",
+        "*.cjs"
+      ],
+      "pattern": "@generated"
+    }
+  ],
+  "config_files": [
+    "package.json",
+    "tsconfig*.json",
+    "jsconfig*.json",
+    ".eslintrc*",
+    "eslint.config.*",
+    ".prettierrc*",
+    "prettier.config.*",
+    "vitest.config.*",
+    "vite.config.*",
+    "jest.config.*",
+    ".c8rc*",
+    ".nycrc*",
+    "stryker.conf.*",
+    "knip.json",
+    ".knip.json*",
+    ".npmrc"
+  ]
+}

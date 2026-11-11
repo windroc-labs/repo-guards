@@ -15,7 +15,7 @@
 | 1 | formatter | 用检查模式跑，格式不一致就失败；CI 从不改写代码 | formatter 配置 | 放宽规则 | 每个 PR | rustfmt | ruff format | prettier |
 | 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
 | 3 | 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/` | 注释预算配置 | 注释堆砌 | 每个 PR | [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
-| 4 | 类型检查 | 最严格模式；不准隐式 any 或 unknown；公开函数的参数和返回值都写类型；可能为空的值先处理再用 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
+| 4 | 类型检查 | 下文 [类型检查规则](#类型检查规则)全部开着 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
 | 5 | 死代码 | 只算发布代码里的调用：只有测试调用的代码也是死代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
 | 6 | 重复代码 | 没有大段重复；现有的重复记进重复基线，基线只能变小（jscpd `--baseline`、`--fail-on-new-clones`）；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | jscpd | jscpd | jscpd |
 | 7 | 依赖检查 | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；不准 path、git、URL 依赖，不准 override 或 patch，不准 submodule，不准新的 vendor 目录；不准没用的依赖；安装脚本关掉；测试插件自动加载关掉；做漏洞和许可证扫描 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | cargo-deny、cargo-machete | pip-audit、deptry | npm audit、knip |
@@ -29,17 +29,68 @@
 
 ### linter 规则
 
-linter 配置至少开着这些规则。这里写的是意图，各语言模板落成具体的规则名；某条在某种语言里不适用（比如 Rust 惯用同名重新绑定，"不遮蔽变量"不适用），模板里注明。
+linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。
 
-| 类 | 规则 | 防什么 |
-|---|---|---|
-| 正确性 | 没有用不到的变量和 import；不吞异常（空 catch、裸 except）；不遮蔽变量；浮点数不做相等比较；不用已废弃的 API | 常见 bug |
-| 可读性 | 函数长度、参数个数、嵌套深度、圈复杂度或认知复杂度、文件长度都有上限；命名风格统一 | 难读难改的代码 |
-| 危险写法 | 库代码不用崩溃式捷径（unwrap、panic 之类）；测试里不 sleep、不读真实时间 | 崩溃、时好时坏的测试 |
-| escape hatch | 动态 import、eval 和动态执行、反射访问私有符号、unsafe 或 FFI、不检查的强制转换成 any 类类型：每处都要在 escape hatch 白名单里（路径、符号、原因） | 用 escape hatch 绕开类型检查和分层规则 |
-| 不检测测试环境 | 发布代码不读 CI 或测试标记（CI 环境变量、测试框架是否已加载、测试模块以外的测试专用编译开关），不按主机名、用户、当前目录分支，不 import mock 库：放进禁用 API 列表 | 在测试环境走特判，生产走另一条路 |
-| 不新增占位 | 发布代码里不新增 TODO、FIXME 或"未实现"占位（和 base 比 diff） | 留占位冒充完成 |
-| 测试质量 | 每个测试有断言；没有恒真或常量断言；没有 focus 或禁用的测试；测试里没有宽泛的 catch；测试里没有行内覆盖重试次数、超时、随机种子、样例数 | 空测试、只跑部分测试、吞掉失败、在测试里局部放宽 |
+| 类 | 规则 | 防什么 | Rust | Python | TypeScript |
+|---|---|---|---|---|---|
+| 正确性 | 没有用不到的变量 | 漏用的值 | `unused_variables` | `F841` | `@typescript-eslint/no-unused-vars` |
+| 正确性 | 没有用不到的 import | 残留依赖 | `unused_imports` | `F401` | `@typescript-eslint/no-unused-vars` |
+| 正确性 | 没有用不到的参数 | 漏用的输入 | `unused_variables` | `ARG` | `@typescript-eslint/no-unused-vars` |
+| 正确性 | 不吞异常：空 catch、丢弃错误 | 错误被静默 | `unused_must_use`、`clippy::let_underscore_must_use` | `S110` | `no-empty` |
+| 正确性 | 不吞异常：裸 except、宽泛 except | 误吞无关异常 | 不适用 | `E722`、`BLE001` | 不适用 |
+| 正确性 | 不遮蔽变量 | 用错同名变量 | 不适用（惯用同名重新绑定） | `A`（只查内置名）、`PLW2901` | `@typescript-eslint/no-shadow` |
+| 正确性 | 浮点数不做相等比较 | 精度误差 | `clippy::float_cmp` | `RUF069`（preview） | 无现成规则 |
+| 正确性 | 不拿常量跟常量比较 | 恒真恒假的条件 | `clippy::eq_op`（只查两边相同） | `PLR0133` | `no-constant-binary-expression` |
+| 可读性 | 函数长度有上限 | 难读的长函数 | `clippy::too_many_lines` | `PLR0915` | `max-lines-per-function` |
+| 可读性 | 参数个数有上限 | 难用的接口 | `clippy::too_many_arguments` | `PLR0913` | `max-params` |
+| 可读性 | 嵌套深度有上限 | 难读的分支 | `clippy::excessive_nesting` | `PLR1702`（preview） | `max-depth` |
+| 可读性 | 圈复杂度或认知复杂度有上限 | 难测的函数 | `clippy::cognitive_complexity` | `C901` | `complexity` |
+| 可读性 | 文件长度有上限 | 大杂烩文件 | 无现成规则 | 无现成规则 | `max-lines` |
+| 可读性 | 命名风格统一 | 名字难认 | `non_snake_case`、`non_camel_case_types`、`non_upper_case_globals` | `N` | `@typescript-eslint/naming-convention` |
+| 可读性 | 不用布尔位置参数 | 调用处看不懂 | `clippy::fn_params_excessive_bools` | `FBT` | 无现成规则 |
+| 可读性 | 没有注释掉的代码 | 死代码藏在注释里 | 无现成规则 | `ERA001` | 无现成规则 |
+| 可读性 | 能简化的写法要简化 | 绕弯的写法 | `clippy::complexity`（组） | `SIM` | `no-else-return`、`no-lonely-if`、`no-unneeded-ternary`、`@typescript-eslint/prefer-optional-chain` |
+| 可读性 | 不用旧版本语法 | 过时写法 | `rust_2018_idioms`（组） | `UP` | `no-var`、`prefer-rest-params`、`prefer-spread`、`object-shorthand` |
+| 可读性 | 不用相对 import | 移动文件就断 | 不适用 | `TID252` | `import/no-relative-parent-imports`（eslint-plugin-import） |
+| 危险写法 | 库代码不用崩溃式捷径 | 崩溃 | `clippy::unwrap_used`、`clippy::expect_used`、`clippy::panic` | `S101` | `@typescript-eslint/no-non-null-assertion` |
+| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `disallowed-methods`（`std::thread::sleep`） | `banned-api`（`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
+| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `disallowed-methods`（`SystemTime::now`、`Instant::now`） | `banned-api`（`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
+| 危险写法 | 不残留调试器 | 发布代码停住 | 不适用 | `T100` | `no-debugger` |
+| 危险写法 | 不残留调试输出 | 输出泄露、刷屏 | `clippy::dbg_macro`、`clippy::print_stdout`、`clippy::print_stderr` | `T20` | `no-console` |
+| escape hatch | 动态 import 在白名单里 | 绕开分层规则 | 不适用 | `banned-api`（`importlib.import_module`） | `no-restricted-syntax`（`ImportExpression`） |
+| escape hatch | eval 和动态执行在白名单里 | 绕开类型检查 | 不适用 | `S307`、`S102` | `no-eval`、`no-implied-eval`、`no-new-func` |
+| escape hatch | 反射访问私有符号在白名单里 | 绕开封装 | 不适用 | `SLF001` | `no-restricted-syntax`（方括号访问私有成员） |
+| escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `banned-api`（`ctypes`） | 不适用 |
+| escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `banned-api`（`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
+| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量（`CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`），普通配置变量照常读；变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓 | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI\|VITEST\|NODE_ENV\|(GITHUB\|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]`，并禁解构 `process.env`：`VariableDeclarator[id.type="ObjectPattern"][init.object.name="process"][init.property.name="env"]` |
+| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `banned-api`（`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
+| 不检测测试环境 | 测试模块以外不用测试专用编译开关 | 测试环境走特判 | 无现成规则（`cfg(test)`） | 不适用 | 不适用 |
+| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `banned-api`（`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
+| 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `banned-api`（`unittest.mock`） | `no-restricted-imports` |
+| 不新增占位 | 不新增 TODO、FIXME 注释 | 留占位冒充完成 | 无现成规则 | `FIX` | `no-warning-comments` |
+| 不新增占位 | 不新增"未实现"占位 | 留占位冒充完成 | `clippy::todo`、`clippy::unimplemented` | 无现成规则 | 无现成规则 |
+| 测试质量 | 每个测试有断言 | 空测试 | 无现成规则 | 无现成规则 | `vitest/expect-expect`（`@vitest/eslint-plugin`） |
+| 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129`、`PT015` | 无现成规则 |
+| 测试质量 | 没有 focus 的测试 | 只跑部分测试 | 不适用 | 不适用 | `vitest/no-focused-tests` |
+| 测试质量 | 没有禁用的测试 | 只跑部分测试 | 无现成规则 | 无现成规则 | `vitest/no-disabled-tests` |
+| 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `disallowed-methods`（`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
+| 测试质量 | 测试里没有行内覆盖重试次数、超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `banned-api`（`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
+
+### 类型检查规则
+
+类型检查配置至少开着这些规则。
+
+| 规则 | 防什么 | Rust | Python | TypeScript |
+|---|---|---|---|---|
+| 最严格模式 | 放宽检查 | 编译器本身 | pyright `typeCheckingMode = "strict"` | tsc `strict` |
+| 不准 any 或类型未知的值 | 类型检查失效 | 不适用 | `reportUnknown*`（strict）、`ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` |
+| 公开函数的参数和返回值写类型 | 接口类型靠推断 | 编译器强制 | `ANN` | `@typescript-eslint/explicit-module-boundary-types` |
+| 可能为空的值先处理再用 | 空值崩溃 | 编译器强制（`Option`） | `reportOptional*`（strict） | `strictNullChecks`（strict） |
+| 按下标取值当作可能取不到 | 越界、缺键 | 不适用 | 无现成规则 | `noUncheckedIndexedAccess` |
+| 不做会丢数据的强制转换 | 截断、符号错误 | `clippy::cast_possible_truncation`、`clippy::cast_sign_loss` | 不适用 | 不适用 |
+| 不写多余的类型转换和比较 | 掩盖类型错误 | `clippy::unnecessary_cast` | `reportUnnecessaryCast`、`reportUnnecessaryComparison` | `@typescript-eslint/no-unnecessary-type-assertion`、`@typescript-eslint/no-unnecessary-condition` |
+| 屏蔽类型检查的注释写明规则，多余的报错 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003`、`reportUnnecessaryTypeIgnoreComment` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） |
+| 不用已废弃的 API | 用上将删的接口 | `deprecated` | `reportDeprecated` | `@typescript-eslint/no-deprecated` |
 
 ## 流程级
 

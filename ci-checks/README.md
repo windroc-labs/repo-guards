@@ -13,7 +13,7 @@
 | # | 工具 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | Rust | Python | TypeScript |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | formatter | 用检查模式跑，格式不一致就失败；CI 从不改写代码 | formatter 配置 | 放宽规则 | 每个 PR | rustfmt | ruff format | prettier |
-| 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、逃生口白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
+| 2 | linter | 下文 [linter 规则](#linter-规则)全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR | clippy | ruff | eslint（typescript-eslint） |
 | 3 | 类型检查 | 最严格模式；不准隐式 any 或 unknown；公开函数的参数和返回值都写类型；可能为空的值先处理再用 | 类型检查配置 | 放宽规则 | 每个 PR | 编译器 | pyright | tsc |
 | 4 | 死代码 | 没有用不到的代码。文件内的由 linter 或编译器查；公开了但没人调用的要专门工具 | 检查配置 | 代码质量，不防作弊：工具把测试里的调用也算作使用 | 每个 PR | 编译器 `dead_code`、cargo-machete（没用的依赖） | ruff、vulture | tsc、knip |
 | 5 | 重复代码 | 没有大段重复 | 检查配置 | 代码质量，不防作弊：改个名字就躲过 | 每个 PR | jscpd | jscpd | jscpd |
@@ -34,9 +34,9 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 |---|---|---|
 | 正确性 | 没有用不到的变量和 import；不吞异常（空 catch、裸 except）；不遮蔽变量；浮点数不做相等比较；不用已废弃的 API | 常见 bug |
 | 可读性 | 函数长度、参数个数、嵌套深度、圈复杂度或认知复杂度、文件长度都有上限；命名风格统一 | 难读难改的代码 |
-| 注释预算 | 新增注释行数有上限：代码自己说明自己 | 注释堆砌 |
+| 注释预算 | 每个改动的文件（和 base 的 merge-base 比 diff）：注释字符数（含文档注释、docstring；不算空白）不超过代码字符数的 10%，测试代码 5%，另加 300 字符固定额度。代码自己说明自己。每种语言用该语言自己写一份实现，放在 `ci-checks/<语言>/` 下，见 [Rust](rust/README.md#注释预算)、[Python](python/README.md#注释预算)、[TypeScript](typescript/README.md#注释预算) | 注释堆砌 |
 | 危险写法 | 库代码不用崩溃式捷径（unwrap、panic 之类）；测试里不 sleep、不读真实时间 | 崩溃、时好时坏的测试 |
-| 逃生口 | 动态 import、eval 和动态执行、反射访问私有符号、unsafe 或 FFI、不检查的强制转换成 any 类类型：每处都要在逃生口白名单里（路径、符号、原因） | 用逃生口绕开类型检查和分层规则 |
+| escape hatch | 动态 import、eval 和动态执行、反射访问私有符号、unsafe 或 FFI、不检查的强制转换成 any 类类型：每处都要在 escape hatch 白名单里（路径、符号、原因） | 用 escape hatch 绕开类型检查和分层规则 |
 | 不检测测试环境 | 发布代码不读 CI 或测试标记（CI 环境变量、测试框架是否已加载、测试模块以外的测试专用编译开关），不按主机名、用户、当前目录分支，不 import mock 库：放进禁用 API 列表 | 在测试环境走特判，生产走另一条路 |
 | 不新增占位 | 发布代码里不新增 TODO、FIXME 或"未实现"占位（和 base 比 diff） | 留占位冒充完成 |
 | 测试质量 | 每个测试有断言；没有恒真或常量断言；没有 focus 或禁用的测试；测试里没有宽泛的 catch；测试里没有行内覆盖重试次数、超时、随机种子、样例数 | 空测试、只跑部分测试、吞掉失败、在测试里局部放宽 |
@@ -63,7 +63,7 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 | 锁什么 | 包括 | 写法 | 防什么 |
 |---|---|---|---|
 | 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
-| 白名单和基线 | 豁免、逃生口、依赖、变异、状态、二进制白名单，删除名单；lint 基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
+| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
 | 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
 | 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
 | 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |
@@ -76,4 +76,4 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 |---|---|
 | Rust | `rustfmt.toml`, `.rustfmt.toml`, `clippy.toml`, `.clippy.toml`, `**/.cargo/config.toml`, `**/.cargo/config`, `**/.cargo/mutants.toml`, `mutants.toml`, `deny.toml`, `rust-toolchain.toml`, `rust-toolchain`, `**/.config/nextest.toml`, `build.rs` |
 | Python | `pyproject.toml`, `ruff.toml`, `.ruff.toml`, `setup.cfg`, `tox.ini`, `pytest.ini`, `conftest.py`, `.coveragerc`, `mypy.ini`, `.mypy.ini`, `pyrightconfig.json`, `sitecustomize.py`, `usercustomize.py` |
-| TypeScript | `package.json`, `tsconfig*.json`, `jsconfig*.json`, `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `prettier.config.*`, `vitest.config.*`, `vite.config.*`, `jest.config.*`, `.c8rc*`, `.nycrc*`, `stryker.conf.*`, `knip.json`, `.knip.json*`, `.npmrc` |
+| TypeScript | `package.json`, `.prettierignore`, `.eslintignore`, `tsconfig*.json`, `jsconfig*.json`, `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `prettier.config.*`, `vitest.config.*`, `vite.config.*`, `jest.config.*`, `.c8rc*`, `.nycrc*`, `stryker.conf.*`, `knip.json`, `.knip.json*`, `.npmrc` |

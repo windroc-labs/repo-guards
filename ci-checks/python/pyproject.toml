@@ -1,0 +1,11 @@
+[dependency-groups]
+dev = ["ruff==0.17.4"]
+
+[tool.ruff]
+line-length = 100
+indent-width = 4
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+line-ending = "lf"

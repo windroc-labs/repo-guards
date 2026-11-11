@@ -9,6 +9,7 @@
 ## 每个 repo 自己要做的
 
 1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`0000…` 换成 repo-guards 的 commit sha，`with:` 按下表填。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
+   换 sha 时 owner 先确认它在 repo-guards 的 `main` 上：`gh api repos/<org>/repo-guards/compare/<sha>...main --jq .status` 是 `ahead` 或 `identical`；`fetch_configs.py` 也查这一点。
 2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级 `uses:` 里钉住的版本。
 3. 自己的白名单和基线放进一个锁住的目录，默认 `.github/checks/`（`.github/` 已由 CODEOWNERS 锁住）。
 4. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
@@ -22,7 +23,7 @@
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读；Python 的 trove classifier 对照表在 [`rust/license-classifiers.toml`](rust/license-classifiers.toml)，不能比 `deny.toml` 的名单宽。
 
 ## 语言级
 
@@ -150,7 +151,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 
 ### 重复代码
 
-三种语言都用 jscpd 5.4.3（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
+三种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
 
 ```sh
 jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscpd-baseline.json --update-baseline .
@@ -164,14 +165,14 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
-| 新增或变了的包在依赖白名单里 | 引入改过的包 | cargo-deny `[bans]` `allow`，用 `name@version` 写死版本（项目白名单） | 无现成规则（脚本拿 `uv.lock` 和 base 比 diff，对照项目白名单） | 无现成规则（脚本拿 `package-lock.json` 和 base 比 diff，对照项目白名单） |
+| 新增或变了的包在依赖白名单里 | 引入改过的包 | ⚠️ 未实现：`deny.toml` 的 `bans.allow = []`，什么都不挡；计划用 cargo-deny `[bans]` `allow`，`name@version` 写死版本（项目白名单） | 无现成规则（脚本拿 `uv.lock` 和 base 比 diff，对照项目白名单） | 无现成规则（脚本拿 `package-lock.json` 和 base 比 diff，对照项目白名单） |
 | 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | [`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`、`allow-file=none`；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 |
 | 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
 | 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
 | 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`：先 `uv export --format requirements-txt`，再 `pip-audit -r`） | `npm audit` |
-| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]` `allow`（项目白名单） | pip-licenses `--allow-only`（项目白名单） | license-checker-rseidelsohn `--onlyAllow`（项目白名单） |
+| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 | pip-licenses：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 | license-checker-rseidelsohn：共用名单（[`rust/deny.toml`](rust/deny.toml)）；例外由项目定 |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
 ### 覆盖率
@@ -216,7 +217,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 | 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |
 | 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |
 | 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |
-| 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开。跑检查工具的 job 不安装也不运行 PR 代码；运行 PR 代码的 job 只产出结果文件，由另一个 job 解析判定 | 检查工具清单 | PR 的代码或依赖改掉检查工具或它的结果；工具升级让检查悄悄变松 | 每个 PR |
+| 17 | [工具版本](#工具版本) | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开；不需要 PR 代码的检查在不运行 PR 代码的 job 里跑，需要的只产出结果文件，由另一个 job 判定 | 检查工具清单 | PR 的代码或依赖改掉检查工具或它的结果；工具升级让检查悄悄变松 | 每个 PR |
 | 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
@@ -237,6 +238,11 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 - 测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外。
 - 这些也抓 focus 或禁用的测试、行内覆盖的重试次数，所以 linter 规则里不再单列这几条。
 
+### 工具版本
+
+- 每个语言 workflow 分三个 job：`static` 只读 PR 文件，从不安装、构建或加载 PR 代码；`build` 先在 checkout 外装工具，再装 PR 代码，再跑工具，结果写成 JSON 上传；`judge` 不 checkout PR 代码，下载结果用 repo-guards 的脚本判定，结果文件缺失或解析不了就失败。
+- 剩余风险：`build` job 里 PR 代码（Rust 的 `build.rs` 和过程宏、knip 加载的 TypeScript 配置文件、Python 依赖的 `.pth` 文件）和工具同在一个 job，能在上传前改写结果文件，`judge` 只核对格式；`static` job 从不运行 PR 代码。
+
 ### 生成内容
 
 - 生成文件用锁住的生成器重新生成，逐字节相同。
@@ -246,7 +252,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 
 ### `.github/` 改动单独成 PR
 
-实现：[`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml)，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动，只在 PR 上跑；它由 main 上的 `ci.yml` 调用，PR 删不掉它。
+实现：[`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml)，用 `git -c core.quotePath=false diff --name-only --no-renames -z "$BASE_REF"...HEAD` 列出改动：改名拆成删和增，旧路径也算；文件名按 NUL 分隔、不转义。只在 `pull_request` 上跑（merge queue 的 diff 是整组改动）；它由 main 上的 `ci.yml` 调用，PR 删不掉它。
 
 为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
 

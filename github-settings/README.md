@@ -38,26 +38,35 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | 基础权限 | 不能是 Admin | 设成 Admin，所有成员对所有 repo 都是 admin | Organization > Settings > Member privileges > Base permissions | ✅ 全部 |
 | 团队 | 没有团队对 repo 有 admin | 团队成员会继承 admin，子团队也会继承 | Organization > Teams | ✅ 全部 |
 | Organization 角色 | 没有人有 "All-repository admin"、"CI/CD admin"，或带 "Manage organization ref update rules and rulesets" 的自定义角色 | All-repository admin 一次就给了所有 repo 的 admin；CI/CD admin 能改 Actions 策略、管理 secrets；后者能改 Organization rulesets | Organization > Settings > Organization roles > Role assignments（含 Teams 标签） | ⚠️ 自定义角色：Enterprise Cloud<br>⚠️ 预设角色：文档说法不一，每个套餐都要查 |
-| GitHub Apps | 没有 Administration；只给需要的 repo；workflows 写权限可以保留 | 有 Administration 就能改 ruleset；能访问的 repo 越少，出事时影响越小；workflows 写权限的理由见 [repo-settings 第 2 节](../repo-settings/README.md#2-ruleset-文件) | Organization > Settings > GitHub Apps > 每个 App | ✅ 全部 |
+| GitHub Apps | 没有 Administration；只给需要的 repo；workflows 写权限可以保留 | 有 Administration 就能改 ruleset；能访问的 repo 越少，出事时影响越小；workflows 写权限的理由见 [repo-settings 第 2 节](../repo-settings/README.md#2-workflows-写权限和-tag) | Organization > Settings > GitHub Apps > 每个 App | ✅ 全部 |
 | Actions：`GITHUB_TOKEN` | 默认只读 | PR 里的代码会在 CI 里跑。这只管没写 `permissions:` 的 workflow，写了的可以给自己加写权限（见下文"CI 状态伪造"） | Organization > Settings > Actions > General > Workflow permissions：选 "Read repository contents and packages permissions" | ✅ 全部 |
 | Actions：创建和批准 PR | 不允许 | 打开的话，workflow 可以自己批准 PR | 同上：不勾 "Allow GitHub Actions to create and approve pull requests" | ✅ 全部 |
-| 必跑的 workflow | Organization ruleset `require ci guard`（`rulesets/org-required-guard.json`）要求每个选中 repo 进默认分支的 PR 跑 repo-guards 的 `.github/workflows/guard.yml`。repo 用 "Selected repositories" 选；加一个 repo，要在那里加，也要加进 JSON 的 `repository_id.repository_ids` | 检查逻辑放在项目 repo 之外，worker 改不到；只能在 Organization 或 Enterprise 层设，不能在 repo 层设 | Organization > Settings > Repository > Rulesets > require ci guard > Target repositories | ⚠️ Team（2026-11-11 在 Team 套餐的 Organization 界面上确认） |
+| 必跑的 workflow | 每个 repo 一个 Organization ruleset，名字就是 repo 名（模板 `rulesets/org-required-ci.json`）：只选这个 repo，管默认分支和 `integration/**`；唯一的规则是必跑这个 repo 自己的 `.github/workflows/ci.yml`，取这个 repo 默认分支上的版本，不钉提交；Organization admin 可以绕过。每个 repo 怎么建见 [repo-settings 第 1 节](../repo-settings/README.md#1-设置)"必跑的 CI"一行 | 跑的永远是默认分支上的 `ci.yml`，PR 改不了要跑什么，也跳不过（实测见下文"CI 状态伪造"）；必跑的 workflow 只能在 Organization 或 Enterprise 层设，不能在 repo 层设 | Organization > Settings > Repository > Rulesets > <repo> | ⚠️ Team（2026-11-11 在 Team 套餐的 Organization 界面上确认） |
 | 2FA | 要求所有成员和外部协作者开 2FA | 账号被盗时多一道门槛 | Organization > Settings > Authentication security | ✅ 全部 |
 | token 策略 | 禁止 classic token，fine-grained token 需要 owner 批准 | 管住访问 Organization 资源的 PAT。管不到 `gh auth login` 拿到的 OAuth token：GitHub CLI 是特权 OAuth App，OAuth App 限制也拦不住它 | Organization > Settings > Personal access tokens | ✅ 全部 |
 
 | Ruleset 文件 | 层 | 管什么 |
 |---|---|---|
-| `rulesets/org-required-guard.json` | Organization | 必跑 repo-guards 的 guard（见上表"必跑的 workflow"一行） |
-| `rulesets/org-baseline.json` | Organization | org 内所有 repo（新建 repo 自动纳入）共用的分支规则，管默认分支和 `integration/**`：必须走 PR、code owner 批准、只能 squash 合并，禁止 force push 和删除；不含 CI 状态检查 |
+| `rulesets/org-baseline.json` | Organization | org 内所有 repo（新建 repo 自动纳入）共用的分支规则，管默认分支和 `integration/**`：必须走 PR、code owner 批准、只能 squash 合并，禁止 force push 和删除；不含 CI 状态检查（伪造的状态能满足它，见下文） |
+| `rulesets/org-required-ci.json` | Organization | 每个 repo 一份的模板：必跑这个 repo 自己的 `ci.yml`（见上表"必跑的 workflow"一行）。`REPO` 和两处 `0` 是占位 |
 | `rulesets/org-baseline-tags.json` | Organization | org 内所有 repo（新建 repo 自动纳入）的 tag：可以创建，禁止修改和删除 |
 
 ### CI 状态伪造
 
-有写权限的人能让一个 workflow 给自己加 `statuses: write`，给 PR 的提交贴一个伪造的 `CI` 成功状态。提交信息里再写 `[skip ci]`，真正的 CI 就不跑，伪造的成功成了唯一的结果。
+有写权限的人能让一个 workflow 给自己加 `statuses: write`，给 PR 的提交贴一个伪造的 `CI` 成功状态。提交信息里再写 `[skip ci]`，真正的 CI 就不跑，伪造的成功成了唯一的结果。所以不用 `required_status_checks` 规则要求 `CI` 状态。
 
-现在的堵法：repo-guards 的 `.github/workflows/guard.yml` 等目标 repo 自己的 `.github/workflows/ci.yml` 在这个 PR 上的运行，那次运行成功才通过。guard 由 Organization ruleset 要求必跑（见上表"必跑的 workflow"一行），目标 repo 改不了它，也跳不过它：必跑的 workflow 被跳过时，PR 不能合并。2026-11-11 实测有效。
+现在的堵法是上表"必跑的 workflow"。2026-11-11 实测（私有 repo）：
 
-每个 repo 要做的设置见 [repo-settings 第 1 节](../repo-settings/README.md#1-设置)"必跑的 guard"和"CI 文件"两行，限制见那里第 3 节。
+| 情形 | 结果 |
+|---|---|
+| main 上的 `ci.yml` | 对 PR 的 merge commit 跑 |
+| PR 改了 `ci.yml`，比如削弱它 | 改过的版本从不运行，削弱 `ci.yml` 的 PR 被挡住 |
+| 从不是 PR 的分支贴伪造的 `CI` 成功状态 | 满足了旧的状态检查规则，但必跑的 workflow 仍然挡住合并 |
+| head 提交写 `[skip ci]` | 什么都没跑，PR 一直被挡住 |
+| `ci.yml` 里写了 `on: pull_request` | 没有多跑一次 |
+| 必跑的 workflow 那次运行的 `event` | `pull_request` |
+
+每个 repo 要做的设置见 [repo-settings 第 1 节](../repo-settings/README.md#1-设置)"必跑的 CI"和"CI 文件"两行，限制见那里第 3 节。
 
 ## 4. 账号（共用，每个账号设一次）
 

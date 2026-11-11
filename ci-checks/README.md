@@ -55,7 +55,7 @@ linter 配置至少开着这些规则。这里写的是意图，各语言模板�
 | 18 | 生成内容 | 生成文件用锁住的生成器重新生成，逐字节相同；带"生成"头的文件必须在生成路径名单里；二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里；golden 和快照文件锁住，测试从不以更新模式运行 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
-| 21 | workflow 改动单独成 PR | 改了 `.github/workflows/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
+| 21 | `.github/` 改动单独成 PR | 改了 `.github/` 下任何文件的 PR，不能改别的文件。实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它 | `.github/` 里的 CI 文件 | 必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查 | 每个 PR |
 
 ## CODEOWNERS
 

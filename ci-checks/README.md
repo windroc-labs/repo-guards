@@ -23,7 +23,7 @@
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读；Python 的 trove classifier 对照表在 [`rust/license-classifiers.toml`](rust/license-classifiers.toml)，不能比 `deny.toml` 的名单宽。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读。
 
 ## 语言级
 
@@ -217,7 +217,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 | 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |
 | 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |
 | 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |
-| 17 | [工具版本](#工具版本) | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开；不需要 PR 代码的检查在不运行 PR 代码的 job 里跑，需要的只产出结果文件，由另一个 job 判定 | 检查工具清单 | PR 的代码或依赖改掉检查工具或它的结果；工具升级让检查悄悄变松 | 每个 PR |
+| 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开 | 检查工具清单 | PR 的依赖换掉检查工具；工具升级让检查悄悄变松 | 每个 PR |
 | 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |
 | 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |
@@ -237,11 +237,6 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 - 另跑一次只收集不执行（collect-only），测试数要一致。
 - 测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外。
 - 这些也抓 focus 或禁用的测试、行内覆盖的重试次数，所以 linter 规则里不再单列这几条。
-
-### 工具版本
-
-- 每个语言 workflow 分三个 job：`static` 只读 PR 文件，从不安装、构建或加载 PR 代码；`build` 先在 checkout 外装工具，再装 PR 代码，再跑工具，结果写成 JSON 上传；`judge` 不 checkout PR 代码，下载结果用 repo-guards 的脚本判定，结果文件缺失或解析不了就失败。
-- 剩余风险：`build` job 里 PR 代码（Rust 的 `build.rs` 和过程宏、knip 加载的 TypeScript 配置文件、Python 依赖的 `.pth` 文件）和工具同在一个 job，能在上传前改写结果文件，`judge` 只核对格式；`static` job 从不运行 PR 代码。
 
 ### 生成内容
 

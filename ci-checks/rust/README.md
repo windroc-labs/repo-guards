@@ -19,7 +19,7 @@
 
 ## 注释预算
 
-[`comment-budget/`](comment-budget/) 是 linter 规则表里"注释预算"的 Rust 实现：一个不带依赖的 cargo 小程序，自带词法分析。
+[`comment-budget/`](comment-budget/) 是 [`ci-checks`](../README.md#语言级) 第 3 项"注释预算"的 Rust 实现：一个不带依赖的 cargo 小程序，自带词法分析。
 
 | 项 | 内容 |
 |---|---|

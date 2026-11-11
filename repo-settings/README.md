@@ -22,7 +22,7 @@ tag 任何有写权限的人都能创建，可以打在没合并的提交上，�
 
 ## 3. 必跑的 CI 的限制
 
-- PR 改了 `.github/workflows/` 下的文件，检查它的是 main 上旧版的 `ci.yml`，所以这种 PR 不能改别的（见 [ci-checks](../ci-checks/README.md#流程级) 第 20 项）；
+- PR 改了 `.github/workflows/` 下的文件，检查它的是 main 上旧版的 `ci.yml`，所以这种 PR 不能改别的（见 [ci-checks](../ci-checks/README.md#流程级) 第 21 项）；
 - 以下 2026-11-11 实测（私有 repo）：
   - PR 的目标分支改成默认分支（手动或自动，比如叠起来的 PR）：必跑的 workflow 不会因此运行，对旧目标分支跑过的结果不算，PR 一直被挡住，直到再 push 一次（旧的 `CI` 状态检查规则这时的结果见 [github-settings 的"CI 状态伪造"](../github-settings/README.md#ci-状态伪造)）；
   - 分支被别的 PR 用过（关掉一个通过的 PR，push 一个失败的提交，再打开）：新的 head 被挡住，旧 head 上的成功从不算到新 head 上；

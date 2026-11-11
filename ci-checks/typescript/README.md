@@ -19,7 +19,7 @@
 
 ## 注释预算
 
-[`comment-budget/`](comment-budget/) 是 linter 规则表里"注释预算"的 TypeScript 实现：一个 TypeScript 脚本，用 Node 自带的类型剥离直接运行，要 Node 22.18 及以上。依赖在它自己的 `package.json` 里固定版本：`typescript`（6.0.3，用它的语法分析找注释；7.x 的 JS API 还是 unstable）、`smol-toml`（读配置）；测试用 `node:test`。
+[`comment-budget/`](comment-budget/) 是 [`ci-checks`](../README.md#语言级) 第 3 项"注释预算"的 TypeScript 实现：一个 TypeScript 脚本，用 Node 自带的类型剥离直接运行，要 Node 22.18 及以上。依赖在它自己的 `package.json` 里固定版本：`typescript`（6.0.3，用它的语法分析找注释；7.x 的 JS API 还是 unstable）、`smol-toml`（读配置）；测试用 `node:test`。
 
 | 项 | 内容 |
 |---|---|

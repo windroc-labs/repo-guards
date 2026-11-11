@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 1 | GitHub 组织设置 | 各身份在 Organization 的权限（Owner、受管成员账号、外部协作者、App）；Actions 策略；必跑的 guard；2FA 和 token 策略。共用，设一次 | 本 repo [`github-settings/`](github-settings/README.md) |
 | 2 | Repo 设置 | repo 角色；rulesets（受保护分支、tag）和绕过名单；接入必跑的 guard；CI 文件 `.github/workflows/ci.yml`；CODEOWNERS 只锁检查本身；secrets 放进 Environment。每个 repo 都要做，各项要求见那里 | 本 repo [`repo-settings/`](repo-settings/README.md) |
-| 3 | CI 检查 | 接口快照比对，多一个或少一个对外接口都失败；分层规则检查，只经接口、不越层；契约测试按名字必跑，并核对测试清单。CI 只比对，不重新生成快照 | 待做 |
+| 3 | CI 检查 | 接口快照比对，多一个或少一个对外接口都失败；分层规则检查，只经接口、不越层；契约测试按名字必跑，并核对测试清单；lint 按锁住的配置跑，代码里新增的局部豁免（`#[allow(...)]`、`# noqa` 之类）让检查失败；覆盖率不低于锁住的门槛。CI 只比对，不重新生成快照 | 待做 |
 | 4 | 代码结构 | 每层一个出口；具体实现（比如某款芯片）通过工厂交出接口对象，上层叫不出实现的名字；每个接口一套契约测试，所有实现跑同一套 | 每个项目自己的设计；规范待做 |
 | 5 | 隐藏验收测试 | worker 看不到的测试，由 gate 或验收去跑。可见的测试会被特判、重载比较之类骗过 | 项目 repo 之外 |
 | 6 | 独立审计 | gate 用另一个模型看 diff，专门找满足字面、违反意图的改动：改测试、特判测试环境、为过规则绕弯的写法 | gate brief；模板待做 |

@@ -1,13 +1,18 @@
 use std::fs;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
-const ALLOWANCE: u64 = 300;
+const CONFIG: &str = ".github/checks/rust/comment-budget.toml";
+const KEYS: [&str; 4] = [
+    "source_percent",
+    "test_percent",
+    "allowance_chars",
+    "test_paths",
+];
 const PURPOSE: &str = "The comment budget keeps comments short: meet it by cutting comments or doc \
 comments, never by adding code to lower the ratio.";
-const USAGE: &str =
-    "usage: comment-budget [--base REF] [--source-limit PERCENT] [--test-limit PERCENT] [--all]";
+const USAGE: &str = "usage: comment-budget [--base REF] [--config PATH] [--all]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Lex {
@@ -309,23 +314,212 @@ fn measure(text: &str, whole_file_is_test: bool) -> Result<Measure, String> {
     Ok(result)
 }
 
-fn is_test_path(path: &str) -> bool {
-    path.starts_with("tests/") || path.contains("/tests/") || path.ends_with("_test.rs")
+fn glob(pattern: &str, path: &str) -> bool {
+    fn segments(pattern: &[&str], path: &[&str]) -> bool {
+        match pattern.split_first() {
+            None => path.is_empty(),
+            Some((&"**", rest)) => (0..=path.len()).any(|k| segments(rest, &path[k..])),
+            Some((p, rest)) => path
+                .split_first()
+                .is_some_and(|(s, tail)| segment(p, s) && segments(rest, tail)),
+        }
+    }
+    fn segment(pattern: &str, s: &str) -> bool {
+        match pattern.split_once('*') {
+            None => pattern == s,
+            Some((head, tail)) => s.strip_prefix(head).is_some_and(|rest| {
+                (0..=rest.len())
+                    .filter(|&k| rest.is_char_boundary(k))
+                    .any(|k| segment(tail, &rest[k..]))
+            }),
+        }
+    }
+    let pattern: Vec<_> = pattern.split('/').collect();
+    let path: Vec<_> = path.split('/').collect();
+    segments(&pattern, &path)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Config {
+    source_percent: u64,
+    test_percent: u64,
+    allowance_chars: u64,
+    test_paths: Vec<String>,
+}
+
+impl Config {
+    fn is_test_path(&self, path: &str) -> bool {
+        self.test_paths.iter().any(|p| glob(p, path))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Value {
+    Int(u64),
+    Strings(Vec<String>),
+    Other(String),
+}
+
+struct Toml<'a> {
+    rest: &'a str,
+    line: usize,
+}
+
+impl Toml<'_> {
+    fn peek(&self) -> Option<char> {
+        self.rest.chars().next()
+    }
+
+    fn bump(&mut self) -> Option<char> {
+        let c = self.peek()?;
+        self.rest = &self.rest[c.len_utf8()..];
+        self.line += usize::from(c == '\n');
+        Some(c)
+    }
+
+    fn take_while(&mut self, keep: impl Fn(char) -> bool) -> String {
+        let end = self.rest.find(|c| !keep(c)).unwrap_or(self.rest.len());
+        let (taken, rest) = self.rest.split_at(end);
+        self.rest = rest;
+        taken.into()
+    }
+
+    fn skip(&mut self, newlines: bool) {
+        loop {
+            match self.peek() {
+                Some('#') => drop(self.take_while(|c| c != '\n')),
+                Some('\n') if newlines => drop(self.bump()),
+                Some(c) if c != '\n' && c.is_whitespace() => drop(self.bump()),
+                _ => return,
+            }
+        }
+    }
+
+    fn error(&self, what: impl std::fmt::Display) -> String {
+        format!("line {}: {what}", self.line)
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        if self.bump() != Some('"') {
+            return Err(self.error("expected a \"string\""));
+        }
+        let mut s = String::new();
+        loop {
+            match self.bump() {
+                None | Some('\n') => return Err(self.error("unterminated string")),
+                Some('"') => return Ok(s),
+                Some('\\') => match self.bump() {
+                    Some(c @ ('"' | '\\')) => s.push(c),
+                    _ => return Err(self.error("only \\\" and \\\\ escapes are supported")),
+                },
+                Some(c) => s.push(c),
+            }
+        }
+    }
+
+    fn value(&mut self) -> Result<Value, String> {
+        match self.peek() {
+            Some('[') => {
+                self.bump();
+                let mut items = Vec::new();
+                loop {
+                    self.skip(true);
+                    if self.peek() == Some(']') {
+                        self.bump();
+                        return Ok(Value::Strings(items));
+                    }
+                    items.push(self.string()?);
+                    self.skip(true);
+                    match self.bump() {
+                        Some(',') => {}
+                        Some(']') => return Ok(Value::Strings(items)),
+                        _ => return Err(self.error("expected , or ] in list")),
+                    }
+                }
+            }
+            Some('"') => Ok(Value::Other(format!("\"{}\"", self.string()?))),
+            _ => {
+                let token = self.take_while(|c| !c.is_whitespace() && c != '#');
+                let digits = !token.is_empty() && token.bytes().all(|b| b.is_ascii_digit());
+                match token.parse() {
+                    Ok(n) if digits => Ok(Value::Int(n)),
+                    _ => Ok(Value::Other(token)),
+                }
+            }
+        }
+    }
+}
+
+fn parse_config(text: &str) -> Result<Config, String> {
+    let mut toml = Toml {
+        rest: text,
+        line: 1,
+    };
+    let mut values: Vec<(String, Value)> = Vec::new();
+    loop {
+        toml.skip(true);
+        if toml.peek().is_none() {
+            break;
+        }
+        let key = toml.take_while(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if key.is_empty() {
+            return Err(toml.error("expected key = value"));
+        }
+        if !KEYS.contains(&key.as_str()) {
+            return Err(toml.error(format!("unknown key `{key}`")));
+        }
+        if values.iter().any(|(k, _)| *k == key) {
+            return Err(toml.error(format!("duplicate key `{key}`")));
+        }
+        toml.skip(false);
+        if toml.bump() != Some('=') {
+            return Err(toml.error(format!("expected = after `{key}`")));
+        }
+        toml.skip(false);
+        let value = toml.value()?;
+        toml.skip(false);
+        if toml.peek().is_some_and(|c| c != '\n') {
+            return Err(toml.error(format!("unexpected text after `{key}` value")));
+        }
+        values.push((key, value));
+    }
+    let mut take = |key: &str| {
+        let at = values.iter().position(|(k, _)| k == key);
+        at.map(|i| values.remove(i).1)
+            .ok_or_else(|| format!("missing key `{key}`"))
+    };
+    let mut int = |key: &str| match take(key)? {
+        Value::Int(n) => Ok(n),
+        _ => Err(format!("`{key}` must be an integer")),
+    };
+    let (source_percent, test_percent, allowance_chars) = (
+        int("source_percent")?,
+        int("test_percent")?,
+        int("allowance_chars")?,
+    );
+    let test_paths = match take("test_paths")? {
+        Value::Strings(paths) => paths,
+        _ => return Err("`test_paths` must be a list of strings".into()),
+    };
+    Ok(Config {
+        source_percent,
+        test_percent,
+        allowance_chars,
+        test_paths,
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Options {
     base: String,
-    source_limit: u64,
-    test_limit: u64,
+    config: Option<PathBuf>,
     all: bool,
 }
 
 fn parse(args: &[String]) -> Result<Options, String> {
     let mut options = Options {
         base: "origin/main".into(),
-        source_limit: 10,
-        test_limit: 5,
+        config: None,
         all: false,
     };
     let mut args = args.iter();
@@ -335,15 +529,9 @@ fn parse(args: &[String]) -> Result<Options, String> {
             continue;
         }
         let value = args.next().ok_or_else(|| format!("{flag} needs a value"))?;
-        let percent = || {
-            value
-                .parse()
-                .map_err(|_| format!("{flag}: not a number: {value}"))
-        };
         match flag.as_str() {
             "--base" => options.base = value.clone(),
-            "--source-limit" => options.source_limit = percent()?,
-            "--test-limit" => options.test_limit = percent()?,
+            "--config" => options.config = Some(value.into()),
             _ => return Err(format!("unknown argument {flag}\n{USAGE}")),
         }
     }
@@ -405,22 +593,31 @@ fn run(args: &[String], cwd: &Path, out: &mut impl Write) -> Result<bool, String
     let options = parse(args)?;
     let root = git(cwd, &["rev-parse", "--show-toplevel"])?;
     let root = Path::new(root.trim());
+    let path = options
+        .config
+        .as_ref()
+        .map_or_else(|| root.join(CONFIG), |p| cwd.join(p));
+    let config = fs::read_to_string(&path)
+        .map_err(|e| e.to_string())
+        .and_then(|text| parse_config(&text))
+        .map_err(|e| format!("config {}: {e}", path.display()))?;
     let mut measured = Vec::new();
     for path in files(root, &options)? {
         let text = fs::read_to_string(root.join(&path)).map_err(|e| format!("{path}: {e}"))?;
-        let m = measure(&text, is_test_path(&path)).map_err(|e| format!("{path}: {e}"))?;
+        let m = measure(&text, config.is_test_path(&path)).map_err(|e| format!("{path}: {e}"))?;
         measured.push((path, m));
     }
+    let allowance = config.allowance_chars;
     let limit =
-        |m: &Measure| options.source_limit * m.source.code + options.test_limit * m.tests.code;
+        |m: &Measure| config.source_percent * m.source.code + config.test_percent * m.tests.code;
     let over: Vec<_> = measured
         .iter()
-        .filter(|(_, m)| (m.source.comment + m.tests.comment) * 100 > limit(m) + ALLOWANCE * 100)
+        .filter(|(_, m)| (m.source.comment + m.tests.comment) * 100 > limit(m) + allowance * 100)
         .collect();
     let scope = if options.all { "file" } else { "changed file" };
     let name = format!(
-        "comment budget (source {}%, tests {}% of code + {ALLOWANCE} characters per {scope})",
-        options.source_limit, options.test_limit
+        "comment budget (source {}%, tests {}% of code + {allowance} characters per {scope})",
+        config.source_percent, config.test_percent
     );
     let print =
         |out: &mut dyn Write, line: String| writeln!(out, "{line}").map_err(|e| e.to_string());
@@ -440,7 +637,7 @@ fn run(args: &[String], cwd: &Path, out: &mut impl Write) -> Result<bool, String
                 m.source.comment + m.tests.comment,
                 m.source.code + m.tests.code,
             );
-            let allowed = limit(m) / 100 + ALLOWANCE;
+            let allowed = limit(m) / 100 + allowance;
             print(
                 out,
                 format!(
@@ -598,19 +795,104 @@ mod tests {
         }
     }
 
+    const DEFAULT: &str = include_str!("../../comment-budget.toml");
+
+    fn config(text: &str) -> Result<Config, String> {
+        parse_config(text)
+    }
+
     #[test]
-    fn test_paths_make_the_whole_file_tests() {
+    fn the_template_config_parses() {
+        assert_eq!(
+            config(DEFAULT),
+            Ok(Config {
+                source_percent: 10,
+                test_percent: 5,
+                allowance_chars: 300,
+                test_paths: vec!["tests/**".into(), "**/*_test.rs".into()],
+            })
+        );
+        let spaced = "# top\n\nsource_percent=1 # a\ntest_percent = 2\nallowance_chars = 3\ntest_paths = [\n  \"a\\\"#\", # b\n  \"c\",\n]\n";
+        assert_eq!(
+            config(spaced).map(|c| c.test_paths),
+            Ok(vec!["a\"#".into(), "c".into()])
+        );
+    }
+
+    #[test]
+    fn config_errors_name_the_problem() {
+        let with = |from: &str, to: &str| DEFAULT.replacen(from, to, 1);
+        for (text, error) in [
+            (with("test_percent = 5\n", ""), "missing key `test_percent`"),
+            (with("test_paths", "test_globs"), "unknown key `test_globs`"),
+            (
+                format!("{DEFAULT}test_percent = 1\n"),
+                "duplicate key `test_percent`",
+            ),
+            (
+                with("= 10", "= \"10\""),
+                "`source_percent` must be an integer",
+            ),
+            (with("= 10", "= -1"), "`source_percent` must be an integer"),
+            (
+                with("= 300", "= 1.5"),
+                "`allowance_chars` must be an integer",
+            ),
+            (
+                with("= 5", "= [\"5\"]"),
+                "`test_percent` must be an integer",
+            ),
+            (with("[\"tests/**\", ", "[1, "), "expected a \"string\""),
+            (
+                with("= [", "= \"tests/**\" #["),
+                "`test_paths` must be a list of strings",
+            ),
+            (with("**\"", "**"), "expected , or ] in list"),
+            (
+                with("= 10", "= 10 11"),
+                "unexpected text after `source_percent` value",
+            ),
+            (
+                with("source_percent =", "source_percent"),
+                "expected = after",
+            ),
+            (with("**\",", "\\n\","), "escapes are supported"),
+            ("[section]\n".into(), "expected key = value"),
+        ] {
+            let got = config(&text).unwrap_err();
+            assert!(got.contains(error), "{text}: {got}");
+        }
+        assert_eq!(
+            config(&with("test_paths", "\n\nnope")),
+            Err("line 6: unknown key `nope`".into())
+        );
+    }
+
+    #[test]
+    fn test_path_globs_cross_directories_only_with_double_star() {
+        let config = config(DEFAULT).unwrap();
         for path in [
             "tests/a.rs",
-            "crate/tests/b.rs",
             "tests/unit/c.rs",
             "src/d_test.rs",
+            "e_test.rs",
         ] {
-            assert!(is_test_path(path), "{path}");
+            assert!(config.is_test_path(path), "{path}");
         }
-        for path in ["src/e.rs", "contests/f.rs", "tests.rs", "src/test.rs"] {
-            assert!(!is_test_path(path), "{path}");
+        for path in [
+            "src/e.rs",
+            "contests/f.rs",
+            "tests.rs",
+            "src/test.rs",
+            "crate/tests/b.rs",
+        ] {
+            assert!(!config.is_test_path(path), "{path}");
         }
+        assert!(glob("src/*.rs", "src/a.rs"));
+        assert!(!glob("src/*.rs", "src/a/b.rs"));
+        assert!(glob("**/tests/**", "crate/tests/b.rs"));
+        assert!(glob("a/**/b.rs", "a/b.rs"));
+        assert!(glob("*é*", "xéy"));
         let m = measure("fn f() {} // a\n", true).unwrap();
         assert_eq!(
             (m.source, m.tests),
@@ -621,22 +903,23 @@ mod tests {
     #[test]
     fn arguments_have_defaults_and_overrides() {
         let args = |s: &str| s.split_whitespace().map(String::from).collect::<Vec<_>>();
-        let default = parse(&[]).unwrap();
         assert_eq!(
-            (
-                default.base.as_str(),
-                default.source_limit,
-                default.test_limit,
-                default.all
-            ),
-            ("origin/main", 10, 5, false)
+            parse(&[]),
+            Ok(Options {
+                base: "origin/main".into(),
+                config: None,
+                all: false
+            })
         );
-        let set = parse(&args("--base HEAD --source-limit 20 --test-limit 3 --all")).unwrap();
         assert_eq!(
-            (set.base.as_str(), set.source_limit, set.test_limit, set.all),
-            ("HEAD", 20, 3, true)
+            parse(&args("--base HEAD --config c.toml --all")),
+            Ok(Options {
+                base: "HEAD".into(),
+                config: Some("c.toml".into()),
+                all: true
+            })
         );
-        for bad in ["--base", "--source-limit x", "--nope 1"] {
+        for bad in ["--base", "--config", "--source-limit 1", "--nope 1"] {
             assert!(parse(&args(bad)).is_err(), "{bad}");
         }
     }
@@ -651,6 +934,7 @@ mod tests {
             fs::create_dir_all(&dir).unwrap();
             let repo = Repo(dir);
             repo.git(&["init", "-q", "-b", "main"]);
+            repo.write(CONFIG, DEFAULT);
             repo
         }
 
@@ -744,6 +1028,26 @@ mod tests {
         let (result, out) = repo.run("--base main");
         assert_eq!(result, Ok(true), "{out}");
         assert!(out.contains(": 0 checked"), "{out}");
+    }
+
+    #[test]
+    fn the_config_path_can_be_overridden_and_must_exist() {
+        let repo = Repo::new("config");
+        repo.write("a.rs", "fn f() {}\n");
+        repo.write("strict.toml", &DEFAULT.replace("= 300", "= 0"));
+        repo.git(&["add", "a.rs"]);
+        repo.git(&["commit", "-q", "-m", "base"]);
+        let (result, out) = repo.run("--all --config strict.toml");
+        assert_eq!(result, Ok(true), "{out}");
+        assert!(out.contains("+ 0 characters per file"), "{out}");
+        let error = repo.run("--all --config missing.toml").0.unwrap_err();
+        assert!(
+            error.starts_with("config ") && error.contains("missing.toml"),
+            "{error}"
+        );
+        fs::remove_file(repo.0.join(CONFIG)).unwrap();
+        let error = repo.run("--all").0.unwrap_err();
+        assert!(error.contains(CONFIG), "{error}");
     }
 
     #[test]

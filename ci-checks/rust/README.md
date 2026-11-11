@@ -25,12 +25,23 @@
 |---|---|
 | 量什么 | 每个改动的 `.rs` 文件：注释字符数对比代码字符数，空白不算。改动文件 = 和 `--base` 的 merge-base 比 diff，删掉的不算 |
 | 注释 | `//`、`/* */`（可嵌套）和文档注释 `///`、`//!`、`/** */`、`/*! */`。字符串、raw 字符串、byte 字符串、字符字面量里的不算；第一行的 `#!` shebang 算代码 |
-| 测试 | `tests/` 目录下的文件、`*_test.rs`，以及 `#[cfg(test)] mod 名字 { … }` 行内模块的内容。`#[cfg(test)] mod 名字;` 指向的文件不认，除非路径本身符合上面两条 |
-| 上限 | 每个文件：源码代码字符的 10% 加测试代码字符的 5%，再加 300 个字符的固定额度。超了就失败 |
-| 参数 | `--base`（默认 `origin/main`）、`--source-limit`（默认 10）、`--test-limit`（默认 5）、`--all`（查全部已跟踪文件，不看 diff） |
-| 输出 | 超标文件逐个列出；最后给源码和测试各自的总比例。退出码：0 通过，1 超标，2 出错 |
+| 测试 | 路径匹配 `test_paths` 的文件，以及 `#[cfg(test)] mod 名字 { … }` 行内模块的内容（这条固定，不可配）。`#[cfg(test)] mod 名字;` 指向的文件不认，除非路径本身匹配 `test_paths` |
+| 上限 | 每个文件：源码代码字符的 `source_percent`% 加测试代码字符的 `test_percent`%，再加 `allowance_chars` 个字符的固定额度。超了就失败 |
+| 参数 | `--base`（默认 `origin/main`）、`--config`（配置文件路径，相对当前目录；默认 repo 根目录下的 `.github/checks/rust/comment-budget.toml`）、`--all`（查全部已跟踪文件，不看 diff） |
+| 输出 | 超标文件逐个列出；最后给源码和测试各自的总比例。退出码：0 通过，1 超标，2 出错（含配置文件缺失、未知键、缺键、类型不对） |
 
-整个目录复制到 `.github/checks/rust/comment-budget/`，`ci.yml` 里一步：
+设置全在配置文件里，每个键都必须写。模板 [`comment-budget.toml`](comment-budget.toml) 是默认值：
+
+| 键 | 类型 | 默认 | 含义 |
+|---|---|---|---|
+| `source_percent` | 整数 | 10 | 源码注释上限，占源码代码字符的百分比 |
+| `test_percent` | 整数 | 5 | 测试注释上限，占测试代码字符的百分比 |
+| `allowance_chars` | 整数 | 300 | 每个文件的固定额度（字符） |
+| `test_paths` | 字符串数组 | `["tests/**", "**/*_test.rs"]` | 整个文件算测试的路径 glob，相对 repo 根目录。`**` 跨目录，`*` 不跨 |
+
+格式是 TOML 的一个子集：顶层 `键 = 值`，值只有整数和字符串数组，`#` 注释，空行。
+
+`comment-budget/` 整个目录复制到 `.github/checks/rust/comment-budget/`，`comment-budget.toml` 复制到 `.github/checks/rust/comment-budget.toml`。配置文件在 `.github/` 下，CODEOWNERS 锁住，改上限要 owner 批准。`ci.yml` 里一步：
 
 ```yaml
 - env:

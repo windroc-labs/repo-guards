@@ -9,8 +9,8 @@
 | # | 层 | 内容 | 放在哪 |
 |---|---|---|---|
 | 1 | GitHub 组织设置 | 各身份在 Organization 的权限（Owner、受管成员账号、外部协作者、App）；Actions 策略；必跑的 guard；2FA 和 token 策略。共用，设一次 | 本 repo [`github-settings/`](github-settings/README.md) |
-| 2 | Repo 设置 | repo 角色；rulesets（受保护分支、tag）和绕过名单；接入必跑的 guard；CI 文件 `.github/workflows/ci.yml`；CODEOWNERS 只锁检查本身；secrets 放进 Environment。每个 repo 都要做，各项要求见那里 | 本 repo [`repo-settings/`](repo-settings/README.md) |
-| 3 | CI 检查 | 接口快照、分层规则、契约测试、测试清单、lint、类型检查、覆盖率、工作区不变等 14 项，每项拿代码和锁住的标准答案比对，逐项见那里 | 本 repo [`ci-checks/`](ci-checks/README.md)；共享 workflow 待做 |
+| 2 | Repo 设置 | repo 角色；rulesets（受保护分支、tag）和绕过名单；接入必跑的 guard；CI 文件 `.github/workflows/ci.yml`；CODEOWNERS 只锁检查本身；secrets 放进 Environment。每个 repo 都要做，各项要求见 [`repo-settings/`](repo-settings/README.md) | 本 repo [`repo-settings/`](repo-settings/README.md) |
+| 3 | CI 检查 | 接口快照、分层规则、契约测试、测试清单、lint、类型检查、覆盖率、工作区不变等 14 项，每项拿代码和锁住的标准答案比对，逐项见 [`ci-checks/`](ci-checks/README.md) | 本 repo [`ci-checks/`](ci-checks/README.md)；共享 workflow 待做 |
 | 4 | 代码结构 | 每层一个出口；具体实现（比如某款芯片）通过工厂交出接口对象，上层叫不出实现的名字；每个接口一套契约测试，所有实现跑同一套 | 每个项目自己的设计；规范待做 |
 | 5 | 隐藏验收测试 | worker 看不到的测试，由 gate 或验收去跑。可见的测试会被特判、重载比较之类骗过 | 项目 repo 之外 |
 | 6 | 独立审计 | gate 用另一个模型看 diff，专门找满足字面、违反意图的改动：改测试、特判测试环境、为过规则绕弯的写法 | gate brief；模板待做 |

@@ -119,7 +119,7 @@ TypeScript 用 `no-restricted-syntax`，如 `MemberExpression[object.property.na
 
 ### 死代码
 
-文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。
+文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。模板见各语言 README：[Rust](rust/README.md#死代码编译器cargo-machete)、[Python](python/README.md#死代码vulturedeptry)、[TypeScript](typescript/README.md#死代码knip)。
 
 | Rust | Python | TypeScript |
 |---|---|---|
@@ -127,7 +127,7 @@ TypeScript 用 `no-restricted-syntax`，如 `MemberExpression[object.property.na
 
 ### 重复代码
 
-三种语言都用 jscpd；重复基线用 `--baseline`、`--fail-on-new-clones`。
+三种语言都用 jscpd；重复基线用 `--baseline`、`--fail-on-new-clones`。模板见各语言 README：[Rust](rust/README.md#重复代码jscpd)、[Python](python/README.md#重复代码jscpd)、[TypeScript](typescript/README.md#重复代码jscpd)。
 
 ### 依赖检查
 

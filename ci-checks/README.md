@@ -2,13 +2,31 @@
 
 第 3 层：不依赖项目设计的检查，每个 repo 的 `.github/workflows/ci.yml` 都要跑。依赖项目设计的架构检查在第 4 层，见 [`architecture/`](../architecture/README.md)。
 
-每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文 CODEOWNERS）。CI 只比对，不重新生成标准答案。目前每个 repo 在自己的 `ci.yml` 里实现这些检查。
+每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文 CODEOWNERS）。CI 只比对，不重新生成标准答案。有模板的检查由本 repo 的 reusable workflow 跑：各 repo 的 `ci.yml` 按 commit sha 调用它们，它们从同一个 commit 的 repo-guards 读共用配置。共用配置改动要本 repo 的 owner 批准；`ci.yml` 在 `.github/` 下，换 sha 也要 owner 批准。其余检查每个 repo 在自己的 `ci.yml` 里实现。
 
 检查按实现方式分两组：语言级（按工具分）、流程级。"频率"一列：每个 PR，或定期。定期结果必须强制，不能只当建议：比如失败自动开 issue，挡住下一次发布。标"按项目需要"的检查适用才加。
 
+## 每个 repo 自己要做的
+
+1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`0000…` 换成 repo-guards 的 commit sha，`with:` 按下表填。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
+2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级 `uses:` 里钉住的版本。
+3. 自己的白名单和基线放进一个锁住的目录，默认 `.github/checks/`（`.github/` 已由 CODEOWNERS 锁住）。
+4. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
+5. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它从 `ci.yml` 读钉住的 sha，把那个 commit 的 `ci-checks/` 下载到 `.repo-guards/`；这个目录写进 `.gitignore`。测试：在该目录跑 `python3 -m unittest fetch_configs_test`。
+
+| workflow | 跑什么 | 输入（默认） |
+|---|---|---|
+| [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在） |
+| [`python.yml`](../.github/workflows/python.yml) | [Python](python/README.md) 各项和依赖检查 | `source-dirs`（`src`）、`license-exceptions`（`.github/checks/license-exceptions.txt`） |
+| [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `knip-entry`、`knip-project`、`license-exceptions`（同上） |
+| [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
+| [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
+
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.allow`，Python 和 TypeScript 也从那里读。
+
 ## 语言级
 
-现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置待做。
+现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置和跑它的步见各语言 README。
 
 | # | 项 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 |
 | --- | --- | --- | --- | --- | --- |
@@ -131,21 +149,27 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 
 ### 重复代码
 
-三种语言都用 jscpd；重复基线用 `--baseline`、`--fail-on-new-clones`。模板见各语言 README：[Rust](rust/README.md#重复代码jscpd)、[Python](python/README.md#重复代码jscpd)、[TypeScript](typescript/README.md#重复代码jscpd)。
+三种语言都用 jscpd 5.4.3（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
+
+```sh
+jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscpd-baseline.json --update-baseline .
+```
+
+`ignorePattern` 算行内豁免。
 
 ### 依赖检查规则
 
-依赖检查至少开着这些规则。"脚本"指各 repo 自己写的检查；标"项目白名单"的，名单内容由各项目定，放进锁住的依赖白名单。
+依赖检查至少开着这些规则。Rust 的配置模板见 [Rust README](rust/README.md#依赖检查cargo-deny)。"脚本"指各 repo 自己写的检查；标"项目白名单"的，名单内容由各项目定，放进锁住的依赖白名单。
 
 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
 | 新增或变了的包在依赖白名单里 | 引入改过的包 | cargo-deny `[bans]` `allow`，用 `name@version` 写死版本（项目白名单） | 无现成规则（脚本拿 `uv.lock` 和 base 比 diff，对照项目白名单） | 无现成规则（脚本拿 `package-lock.json` 和 base 比 diff，对照项目白名单） |
-| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | `.npmrc` `allow-git=none`、`allow-remote=none`、`allow-file=none`、`allow-directory=none` |
+| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | [`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`、`allow-file=none`；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 |
 | 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
 | 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
-| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit | `npm audit` |
+| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`：先 `uv export --format requirements-txt`，再 `pip-audit -r`） | `npm audit` |
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]` `allow`（项目白名单） | pip-licenses `--allow-only`（项目白名单） | license-checker-rseidelsohn `--onlyAllow`（项目白名单） |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
@@ -183,7 +207,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 
 ## 流程级
 
-本 repo 只定要求，各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。表下几节是要求较长的检查的细节。
+本 repo 只定要求（第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现），各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。表下几节是要求较长的检查的细节。
 
 | # | 检查 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 |
 |---|---|---|---|---|---|
@@ -220,7 +244,7 @@ PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：
 
 ### `.github/` 改动单独成 PR
 
-实现：`ci.yml` 里一步，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动；这一步跑的是 main 上的 `ci.yml`，PR 删不掉它。
+实现：[`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml)，用 `git diff --name-only "$BASE_REF"...HEAD` 列出改动，只在 PR 上跑；它由 main 上的 `ci.yml` 调用，PR 删不掉它。
 
 为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
 

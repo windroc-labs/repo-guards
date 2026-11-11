@@ -1,21 +1,15 @@
 # Rust 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Rust 配置。文件复制到 repo 根目录；顺序同主表。
+[`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。
 
 ## formatter（rustfmt）
 
 | 文件 | 作用 |
 |---|---|
 | [`rustfmt.toml`](rustfmt.toml) | 格式选项，都是 stable 版可用的；`edition` 不写，`cargo fmt` 从 `Cargo.toml` 读 |
-| [`rust-toolchain.toml`](rust-toolchain.toml) | 固定 rustfmt 和 clippy 的版本；`channel` 换成接入时的 stable 版本号。不固定的话，升级后同样的代码可能突然不过 |
+| [`rust-toolchain.toml`](rust-toolchain.toml) | 固定工具链版本，`rust.yml` 按它装 rustc、rustfmt 和 clippy。不固定的话，升级后同样的代码可能突然不过 |
 
-`ci.yml` 里一步：
-
-```yaml
-- run: cargo fmt --all --check
-```
-
-只检查不改写，格式不对就失败。`#[rustfmt::skip]` 算行内豁免。
+`rust.yml` 的 Format 步只检查不改写，格式不对就失败。`#[rustfmt::skip]` 算行内豁免。
 
 ## 注释预算
 
@@ -41,49 +35,23 @@
 
 格式是 TOML 的一个子集：顶层 `键 = 值`，值只有整数和字符串数组，`#` 注释，空行。
 
-`comment-budget/` 整个目录复制到 `.github/checks/rust/comment-budget/`，`comment-budget.toml` 复制到 `.github/checks/rust/comment-budget.toml`。配置文件在 `.github/` 下，CODEOWNERS 锁住，改上限要 owner 批准。`ci.yml` 里一步：
-
-```yaml
-- env:
-    BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-  run: cargo run --release --locked --manifest-path .github/checks/rust/comment-budget/Cargo.toml -- --base "$BASE_REF"
-```
-
-checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
+`rust.yml` 的 Comment budget 步用本目录的检查器和配置，对 PR 的 base 跑。超标时用删注释来过，不要靠加代码压低比例。
 
 ## 类型检查（编译器）
 
-没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，用 `cargo clippy -- -D warnings` 让它失败。
+没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，`rust.yml` 的 Lint 步（clippy）和 Type check and dead code 步都带 `-D warnings`，让它失败。
 
 ## 死代码（编译器、cargo-machete）
 
-不用模板。编译器的 `dead_code` 只有在 CI 用 `-D warnings` 跑时才让构建失败；不带 `--tests`，`#[cfg(test)]` 的代码不参与编译，只有测试调用的函数也会报。cargo-machete 不用配置。`ci.yml` 里两步：
-
-```yaml
-- env:
-    RUSTFLAGS: -D warnings
-  run: cargo check --workspace --all-features
-- run: cargo install cargo-machete --version 0.9.2 --locked && cargo machete
-```
+不用模板。`rust.yml` 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`：`#[cfg(test)]` 的代码不参与编译，只有测试调用的函数也会报。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
 
 `#[allow(dead_code)]` 和 `[package.metadata.cargo-machete] ignored` 算行内豁免。
 
-## 重复代码（jscpd）
+## 依赖检查（cargo-deny）
 
 | 文件 | 作用 |
 |---|---|
-| [`../.jscpd.json`](../.jscpd.json) | 三种语言共用。`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`baseline` 是重复基线的路径，相对配置文件所在目录；`failOnNewClones` 为 0：不在基线里的重复都失败 |
+| [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；没有 crate 能带 `build.rs`；许可证只准 MIT、Apache-2.0、BSD-2-Clause、BSD-3-Clause、ISC；漏洞和 yanked 的版本都失败 |
+| [`deny-merge/`](deny-merge/) | 把 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
-复制到 `.github/checks/jscpd.json`，基线 `.github/checks/jscpd-baseline.json` 和它放在同一目录，CODEOWNERS 锁住。基线要 jscpd 5.1.0 及以上（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），版本固定为 5.4.3。接入时生成基线，之后只能变小：
-
-```sh
-jscpd --config .github/checks/jscpd.json --update-baseline .
-```
-
-`ci.yml` 里一步：
-
-```yaml
-- run: cargo install jscpd --version 5.4.3 --locked && jscpd --config .github/checks/jscpd.json .
-```
-
-基线文件不存在时直接失败。`ignorePattern` 算行内豁免。
+repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 用 `name@version` 写死版本；它为空时 cargo-deny 不限制包名。

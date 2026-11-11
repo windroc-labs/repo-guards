@@ -1,20 +1,14 @@
 # Python 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Python 配置。文件里的段落合并进 repo 根目录的 `pyproject.toml`；顺序同主表。
+[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境，项目本身用 `uv sync --locked` 只装 wheel。各节写明它由哪一步跑；顺序同主表。
 
 ## formatter（ruff format）
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.ruff]`、`[tool.ruff.format]` 是格式选项；`[dependency-groups]` 的 `dev` 组固定 ruff 的版本，换成接入时的最新版本号。不固定的话，升级后同样的代码可能突然不过 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.ruff]`、`[tool.ruff.format]` 是格式选项；`[dependency-groups]` 的 `dev` 组固定 ruff 的版本。不固定的话，升级后同样的代码可能突然不过 |
 
-`ci.yml` 里一步（之前用 `uv sync --group dev` 或 `pip install --group dev` 装好 `dev` 组）：
-
-```yaml
-- run: ruff format --check .
-```
-
-只检查不改写，格式不对就失败。`# fmt: off` / `# fmt: on` 和 `# fmt: skip` 算行内豁免。
+`python.yml` 的 Format 步只检查不改写，格式不对就失败。`# fmt: off` / `# fmt: on` 和 `# fmt: skip` 算行内豁免。
 
 ## 注释预算
 
@@ -40,15 +34,7 @@
 
 格式是 TOML，只认这四个顶层键；整数不能为负。
 
-`comment-budget/` 整个目录复制到 `.github/checks/python/comment-budget/`，`comment-budget.toml` 复制到 `.github/checks/python/comment-budget.toml`。配置文件在 `.github/` 下，CODEOWNERS 锁住，改上限要 owner 批准。`ci.yml` 里一步：
-
-```yaml
-- env:
-    BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
-  run: python3 .github/checks/python/comment-budget/comment_budget.py --base "$BASE_REF"
-```
-
-checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-base。超标时用删注释来过，不要靠加代码压低比例。
+`python.yml` 的 Comment budget 步用本目录的检查器和配置，对 PR 的 base 跑。超标时用删注释来过，不要靠加代码压低比例。
 
 ## 类型检查（pyright）
 
@@ -56,44 +42,14 @@ checkout 要拉到 base 的历史（`fetch-depth: 0`），否则找不到 merge-
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.pyright]` 开 `typeCheckingMode = "strict"`，再加 strict 不开的 `reportUnnecessaryTypeIgnoreComment`，对应 [类型检查规则](../README.md#类型检查规则) 的 Python 一列；`[dependency-groups]` 的 `dev` 组同样固定 pyright 的版本 |
 
-`ci.yml` 里一步（之前装好 `dev` 组）：
-
-```yaml
-- run: pyright
-```
-
-`# type: ignore`、`# pyright: ignore` 算行内豁免。
+`python.yml` 的 Type check 步只查 `source-dirs` 输入里的目录（默认 `src`）。`# type: ignore`、`# pyright: ignore` 算行内豁免。
 
 ## 死代码（vulture、deptry）
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 换成发布代码目录，`exclude` 排除测试文件，只有测试调用的函数也会报；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 `pyproject.toml` 读，默认不扫根目录的 `tests`。两者的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件，只有测试调用的函数也会报；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
 
-`ci.yml` 里一步（之前装好 `dev` 组）：
-
-```yaml
-- run: vulture && deptry .
-```
+`python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 
 vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁免。
-
-## 重复代码（jscpd）
-
-| 文件 | 作用 |
-|---|---|
-| [`../.jscpd.json`](../.jscpd.json) | 三种语言共用。`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`baseline` 是重复基线的路径，相对配置文件所在目录；`failOnNewClones` 为 0：不在基线里的重复都失败 |
-
-复制到 `.github/checks/jscpd.json`，基线 `.github/checks/jscpd-baseline.json` 和它放在同一目录，CODEOWNERS 锁住。基线要 jscpd 5.1.0 及以上（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），PyPI 上的 `jscpd` 是同一个二进制，版本固定在 `dev` 组。接入时生成基线，之后只能变小：
-
-```sh
-jscpd --config .github/checks/jscpd.json --update-baseline .
-```
-
-`ci.yml` 里一步（之前装好 `dev` 组）：
-
-```yaml
-- run: jscpd --config .github/checks/jscpd.json .
-```
-
-基线文件不存在时直接失败。`ignorePattern` 算行内豁免。

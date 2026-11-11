@@ -8,7 +8,6 @@ on:
 permissions:
   contents: read
 
-# Replace 0000… with a repo-guards commit sha. Private repos: runs-on: '["self-hosted","linux"]'.
 jobs:
   github-dir-pr:
     uses: windroc-labs/repo-guards/.github/workflows/github-dir-pr.yml@0000000000000000000000000000000000000000

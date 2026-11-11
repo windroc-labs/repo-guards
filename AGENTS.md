@@ -13,3 +13,17 @@ Before you commit, push or comment, check that none of these appear:
 Numeric repository IDs are fine.
 
 If a change needs any of the above, stop and ask the owner.
+
+## If something leaks
+
+Deleting a file or rewriting history does not remove it: PR diffs, forks and caches keep it. Replace the repo instead. Every step marked "owner" needs an org owner.
+
+1. If a secret leaked, revoke and replace it first (owner).
+2. Remove the leaked content on `main` through a normal PR.
+3. Build a one-commit copy of `main`: `git archive main | tar -x -C <new dir>`, then `git init -b main`, commit everything, and check the files against the list above.
+4. Rename this repo to `repo-guards-old` (owner). Org rulesets point to the repo by ID, so the guard keeps working.
+5. Create an empty public `repo-guards` (owner) and push the one-commit copy.
+6. In the old repo, export each repo ruleset and import it into the new repo (owner). In Settings > General > Features, turn off Wikis and Projects.
+7. In the org ruleset `require ci guard`, change the required workflow's repo to the new `repo-guards` (owner). Update `repository_id` in `github-settings/rulesets/org-required-guard.json` through a PR.
+8. Open a test PR in a guarded repo and check that `guard` runs and passes. Close it.
+9. Delete `repo-guards-old` (owner). Its PRs, comments and Actions logs go with it.

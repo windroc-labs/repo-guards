@@ -99,5 +99,5 @@ jobs:
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS")
           fi
           # Packages without License-Expression report trove classifiers; these name the same licenses.
-          allowed+=";MIT License;Apache Software License;BSD License;ISC License (ISCL)"
+          allowed+=";MIT License;Apache Software License;BSD License;ISC License (ISCL);zlib/libpng License;Zero-Clause BSD (0BSD);MIT No Attribution License (MIT-0);Boost Software License 1.0 (BSL-1.0);Blue Oak Model License (BlueOak-1.0.0);Python Software Foundation License"
           pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"

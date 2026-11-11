@@ -37,21 +37,21 @@ jobs:
         working-directory: repo
     steps:
       - name: Check out
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: repo
           fetch-depth: 0
           persist-credentials: false
       # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
       - name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           path: repo-guards
           persist-credentials: false
       - name: Install Node
-        uses: actions/setup-node@v7.1.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "26.13.1"
           package-manager-cache: false
@@ -100,6 +100,6 @@ jobs:
           allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).licenses.allow.join(";"))' "$RG/typescript/comment-budget" "$RG/rust/deny.toml")
           args=(--onlyAllow "$allowed" --excludePrivatePackages)
           if [[ -f "$EXCEPTIONS" ]]; then
-            args+=(--excludePackages "$(grep -v '^[[:space:]]*$' "$EXCEPTIONS" | paste -sd ';' -)")
+            args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
           fi
           license-checker-rseidelsohn "${args[@]}"

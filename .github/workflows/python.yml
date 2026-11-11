@@ -35,21 +35,21 @@ jobs:
         working-directory: repo
     steps:
       - name: Check out
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: repo
           fetch-depth: 0
           persist-credentials: false
       # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
       - name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           path: repo-guards
           persist-credentials: false
       - name: Install uv
-        uses: astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
           enable-cache: false
@@ -94,7 +94,7 @@ jobs:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
           allowed=$(python3 -c 'import sys, tomllib; print(";".join(tomllib.load(open(sys.argv[1], "rb"))["licenses"]["allow"]))' "$RG/rust/deny.toml")
-          ignore=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')")
+          ignore=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb")).get("project", {}).get("name", ""))')")
           if [[ -f "$EXCEPTIONS" ]]; then
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS")
           fi

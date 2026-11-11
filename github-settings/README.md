@@ -63,6 +63,7 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | PR 改了 `ci.yml`，比如削弱它 | 改过的版本从不运行，削弱 `ci.yml` 的 PR 被挡住 |
 | 从不是 PR 的分支贴伪造的 `CI` 成功状态 | 满足了旧的状态检查规则，但必跑的 workflow 仍然挡住合并 |
 | head 提交写 `[skip ci]` | 什么都没跑，PR 一直被挡住 |
+| PR 先对别的目标分支跑过削弱了的 `ci.yml` 并成功，再把目标分支改成 main | 过期的成功满足了旧的状态检查规则；必跑的 workflow 的结果见 [repo-settings 第 3 节](../repo-settings/README.md#3-必跑的-ci-的限制) |
 | `ci.yml` 里写了 `on: pull_request` | 没有多跑一次 |
 | 必跑的 workflow 那次运行的 `event` | `pull_request` |
 

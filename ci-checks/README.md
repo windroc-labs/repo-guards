@@ -33,7 +33,7 @@
 
 ### linter 规则
 
-linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
+所有规则都开在 error 级，warning 也让 CI 失败（Rust 用 `-D warnings`，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则；`disallowed-methods`、`banned-api`、`no-restricted-*` 是禁用列表，括号里是要列进去的 API。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
 
 | 类 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|---|
@@ -42,55 +42,59 @@ linter 配置至少开着这些规则。后三列是各语言的具体规则；`
 | 正确性 | 没有用不到的参数 | 漏用的输入 | `unused_variables` | `ARG` | `@typescript-eslint/no-unused-vars` |
 | 正确性 | 不吞异常：空 catch、丢弃错误 | 错误被静默 | `unused_must_use`、`clippy::let_underscore_must_use` | `S110` | `no-empty` |
 | 正确性 | 不吞异常：裸 except、宽泛 except | 误吞无关异常 | 不适用 | `E722`、`BLE001` | 不适用 |
+| 正确性 | 不丢弃异步结果 | 异步任务没跑或错误丢失 | `unused_must_use`（`Future` 带 must_use）、`clippy::let_underscore_future` | `RUF006` | `@typescript-eslint/no-floating-promises` |
+| 正确性 | 没有无效果的表达式 | 写了却不生效的代码 | `clippy::no_effect` | `B015`、`B018` | `@typescript-eslint/no-unused-expressions` |
 | 正确性 | 不遮蔽变量 | 用错同名变量 | 不适用（惯用同名重新绑定） | `A`（只查内置名）、`PLW2901` | `@typescript-eslint/no-shadow` |
 | 正确性 | 浮点数不做相等比较 | 精度误差 | `clippy::float_cmp` | `RUF069`（preview） | 无现成规则 |
-| 正确性 | 不拿常量跟常量比较 | 恒真恒假的条件 | `clippy::eq_op`（只查两边相同） | `PLR0133` | `no-constant-binary-expression` |
+| 正确性 | 不拿常量跟常量比较 | 恒真恒假的条件 | `clippy::eq_op`（只查两边相同） | `PLR0133` | `no-self-compare`（只查两边相同）、`no-constant-condition`（只查条件里） |
 | 正确性 | 不做会丢数据的强制转换 | 截断、符号错误 | `clippy::cast_possible_truncation`、`clippy::cast_sign_loss` | 不适用 | 不适用 |
 | 正确性 | 不写多余的类型转换和比较 | 掩盖类型错误 | `clippy::unnecessary_cast` | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-unnecessary-type-assertion`、`@typescript-eslint/no-unnecessary-condition` |
 | 可读性 | 函数长度有上限 | 难读的长函数 | `clippy::too_many_lines` | `PLR0915` | `max-lines-per-function` |
 | 可读性 | 参数个数有上限 | 难用的接口 | `clippy::too_many_arguments` | `PLR0913` | `max-params` |
-| 可读性 | 嵌套深度有上限 | 难读的分支 | `clippy::excessive_nesting` | `PLR1702`（preview） | `max-depth` |
-| 可读性 | 圈复杂度或认知复杂度有上限 | 难测的函数 | `clippy::cognitive_complexity` | `C901` | `complexity` |
+| 可读性 | 嵌套深度有上限 | 难读的分支 | `clippy::excessive_nesting`（须在 `clippy.toml` 设 `excessive-nesting-threshold`，默认 0 即关闭） | `PLR1702`（preview） | `max-depth` |
+| 可读性 | 圈复杂度或认知复杂度有上限 | 难测的函数 | 无可靠规则（靠 `excessive_nesting` 加 `too_many_lines`） | `C901` | `complexity` |
 | 可读性 | 文件长度有上限 | 大杂烩文件 | 无现成规则 | 无现成规则 | `max-lines` |
 | 可读性 | 命名风格统一 | 名字难认 | `non_snake_case`、`non_camel_case_types`、`non_upper_case_globals` | `N` | `@typescript-eslint/naming-convention` |
-| 可读性 | 不用布尔位置参数 | 调用处看不懂 | `clippy::fn_params_excessive_bools` | `FBT` | 无现成规则 |
+| 可读性 | 不用布尔位置参数 | 调用处看不懂 | `clippy::fn_params_excessive_bools`（`clippy.toml` 设 `max-fn-params-bools = 0`，默认 3） | `FBT` | 无现成规则 |
 | 可读性 | 没有注释掉的代码 | 死代码藏在注释里 | 无现成规则 | `ERA001` | 无现成规则 |
 | 可读性 | 能简化的写法要简化 | 绕弯的写法 | `clippy::complexity`（组） | `SIM` | `no-else-return`、`no-lonely-if`、`no-unneeded-ternary`、`@typescript-eslint/prefer-optional-chain` |
 | 可读性 | 不用旧版本语法 | 过时写法 | `rust_2018_idioms`（组） | `UP` | `no-var`、`prefer-rest-params`、`prefer-spread`、`object-shorthand` |
 | 可读性 | 不用相对 import | 移动文件就断 | 不适用 | `TID252` | `import/no-relative-parent-imports`（eslint-plugin-import） |
 | 可读性 | 公开函数的参数和返回值写类型 | 接口类型靠推断 | 不适用（见[类型检查规则](#类型检查规则)） | `ANN` | `@typescript-eslint/explicit-module-boundary-types` |
 | 危险写法 | 库代码不用崩溃式捷径 | 崩溃 | `clippy::unwrap_used`、`clippy::expect_used`、`clippy::panic` | `S101` | `@typescript-eslint/no-non-null-assertion` |
-| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `disallowed-methods`（`std::thread::sleep`） | `banned-api`（`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
-| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `disallowed-methods`（`SystemTime::now`、`Instant::now`） | `banned-api`（`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
+| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `disallowed-methods`（`std::thread::sleep`） | `TID251`（`banned-api`：`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
+| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `disallowed-methods`（`SystemTime::now`、`Instant::now`） | `TID251`（`banned-api`：`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
 | 危险写法 | 不残留调试器 | 发布代码停住 | 不适用 | `T100` | `no-debugger` |
 | 危险写法 | 不残留调试输出 | 输出泄露、刷屏 | `clippy::dbg_macro`、`clippy::print_stdout`、`clippy::print_stderr` | `T20` | `no-console` |
 | 危险写法 | 不用已废弃的 API | 用上将删的接口 | 见[类型检查规则](#类型检查规则) | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-deprecated` |
-| escape hatch | 动态 import 在白名单里 | 绕开分层规则 | 不适用 | `banned-api`（`importlib.import_module`） | `no-restricted-syntax`（`ImportExpression`） |
+| escape hatch | 动态 import 在白名单里 | 绕开分层规则 | 不适用 | `TID251`（`banned-api`：`importlib.import_module`） | `no-restricted-syntax`（`ImportExpression`） |
 | escape hatch | eval 和动态执行在白名单里 | 绕开类型检查 | 不适用 | `S307`、`S102` | `no-eval`、`no-implied-eval`、`no-new-func` |
 | escape hatch | 反射访问私有符号在白名单里 | 绕开封装 | 不适用 | `SLF001` | `no-restricted-syntax`（方括号访问私有成员） |
-| escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `banned-api`（`ctypes`） | 不适用 |
-| escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `banned-api`（`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
+| escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `TID251`（`banned-api`：`ctypes`） | 不适用 |
+| escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `TID251`（`banned-api`：`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
 | escape hatch | 不用 any 或类型未知的值 | 绕开类型检查 | 不适用 | `ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` |
 | escape hatch | 屏蔽类型检查的注释写明规则 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） |
 | 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量，普通配置变量照常读；见[测试标记变量](#测试标记变量) | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，见[测试标记变量](#测试标记变量) |
-| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `banned-api`（`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
-| 不检测测试环境 | 测试模块以外不用测试专用编译开关 | 测试环境走特判 | 无现成规则（`cfg(test)`） | 不适用 | 不适用 |
-| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `banned-api`（`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
-| 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `banned-api`（`unittest.mock`） | `no-restricted-imports` |
+| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `TID251`（`banned-api`：`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
+| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `disallowed-methods`（`std::env::current_dir`） | `TID251`（`banned-api`：`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
+| 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `TID251`（`banned-api`：`unittest.mock`） | `no-restricted-imports` |
 | 不新增占位 | 不新增 TODO、FIXME 注释 | 留占位冒充完成 | 无现成规则 | `FIX` | `no-warning-comments` |
 | 不新增占位 | 不新增"未实现"占位 | 留占位冒充完成 | `clippy::todo`、`clippy::unimplemented` | 无现成规则 | 无现成规则 |
 | 测试质量 | 每个测试有断言 | 空测试 | 无现成规则 | 无现成规则 | `vitest/expect-expect`（`@vitest/eslint-plugin`） |
-| 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129`、`PT015` | 无现成规则 |
-| 测试质量 | 没有 focus 的测试 | 只跑部分测试 | 不适用 | 不适用 | `vitest/no-focused-tests` |
-| 测试质量 | 没有禁用的测试 | 只跑部分测试 | 无现成规则 | 无现成规则 | `vitest/no-disabled-tests` |
+| 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129` | 无现成规则 |
 | 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `disallowed-methods`（`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
-| 测试质量 | 测试里没有行内覆盖重试次数、超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `banned-api`（`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
+| 测试质量 | 测试里没有行内覆盖超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `TID251`（`banned-api`：`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
 
 #### 测试标记变量
 
-"发布代码不按名字读 CI 或测试标记变量"一条的细节。标记变量指 `CI`、`GITHUB_*`、`RUNNER_*`、`PYTEST_CURRENT_TEST`、`VITEST`、`NODE_ENV`。变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓。
+"发布代码不按名字读 CI 或测试标记变量"一条的细节。标记变量指 `CI`、`TEST`、`NODE_ENV`、`VITEST`、`VITEST_*`、`GITHUB_*`、`RUNNER_*`、`PYTEST_*`。变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓。
 
-TypeScript 用 `no-restricted-syntax`，如 `MemberExpression[object.property.name="env"][property.name=/^(CI|VITEST|NODE_ENV|(GITHUB|RUNNER)_.*)$/]`，`["CI"]` 写法同理配 `property.value`；另禁 `process.env[非字面量]`，并禁解构 `process.env`：`VariableDeclarator[id.type="ObjectPattern"][init.object.name="process"][init.property.name="env"]`。
+TypeScript 用 `no-restricted-syntax`，配这四个选择器：
+
+- 点号读标记变量：`MemberExpression[object.object.name="process"][object.property.name="env"][computed=false][property.name=/^(CI|TEST|NODE_ENV|VITEST(_.*)?|(GITHUB|RUNNER|PYTEST)_.*)$/]`
+- `["CI"]` 写法读标记变量：`MemberExpression[object.object.name="process"][object.property.name="env"][computed=true][property.value=/^(CI|TEST|NODE_ENV|VITEST(_.*)?|(GITHUB|RUNNER|PYTEST)_.*)$/]`
+- 非字面量下标：`MemberExpression[object.object.name="process"][object.property.name="env"][computed=true][property.type!="Literal"]`
+- 不是直接 `.NAME` 或 `["NAME"]` 成员访问的 `process.env`，如别名 `const e = process.env; e.CI`、解构、整个传出去：`MemberExpression[object.name="process"][property.name="env"]:not(MemberExpression > .object)`
 
 ### 注释预算
 

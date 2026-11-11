@@ -1,0 +1,38 @@
+name: .github changes in their own PR
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+
+permissions:
+  contents: read
+
+jobs:
+  github-dir-pr:
+    name: .github changes in their own PR
+    if: github.event_name != 'push'
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: .github changes in their own PR
+        shell: bash
+        env:
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha }}
+        run: |
+          changed=$(git diff --name-only "$BASE_REF"...HEAD)
+          workflows=$(grep '^\.github/' <<< "$changed" || true)
+          others=$(grep -v '^\.github/' <<< "$changed" || true)
+          if [[ -n "$workflows" && -n "$others" ]]; then
+            echo "::error::A PR that changes .github/ must change nothing else"
+            printf '.github files:\n%s\nOther files:\n%s\n' "$workflows" "$others"
+            exit 1
+          fi

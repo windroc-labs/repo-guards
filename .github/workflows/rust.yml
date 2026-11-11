@@ -1,0 +1,87 @@
+name: Rust checks
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      deny-allowlist:
+        description: The repo's cargo-deny allowlist, merged into the shared deny.toml
+        type: string
+        default: .github/checks/deny-allowlist.toml
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 30
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || github.event.before }}
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        shell: bash
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Install Rust from the shared rust-toolchain.toml
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$RG/rust/rust-toolchain.toml")
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+            echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+            export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          fi
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+      - name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: repo
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Format
+        run: cargo fmt --all --check -- --config-path "$RG/rust/rustfmt.toml"
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Comment budget
+        run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
+      - name: Type check and dead code
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo check --workspace --all-features --locked
+      - name: Install cargo-machete and cargo-deny
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-machete@0.9.2,cargo-deny@0.20.2
+      - name: Unused dependencies
+        run: cargo machete
+      - name: Dependency rules
+        env:
+          ALLOWLIST: ${{ inputs.deny-allowlist }}
+        run: |
+          uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
+          cargo deny --locked check --config "$RUNNER_TEMP/deny.toml"

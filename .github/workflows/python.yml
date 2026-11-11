@@ -1,0 +1,92 @@
+name: Python checks
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      source-dirs:
+        description: Shipped source directories, space-separated, for pyright and vulture
+        type: string
+        default: src
+      license-exceptions:
+        description: The repo's packages exempt from the license check, one name per line; may be absent
+        type: string
+        default: .github/checks/license-exceptions.txt
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: Python
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 20
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || github.event.before }}
+      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      UV_NO_BUILD: "1"
+    defaults:
+      run:
+        shell: bash
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Install the shared dev group
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/tools"
+          uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
+          echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      - name: Install the project from wheels only
+        run: uv sync --locked
+      - name: Format
+        run: ruff format --check --config "$RG/python/pyproject.toml" .
+      - name: Lint
+        run: ruff check --config "$RG/python/pyproject.toml" .
+      - name: Comment budget
+        run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
+      - name: Type check
+        run: pyright --project "$RG/python/pyproject.toml" --pythonpath .venv/bin/python $SOURCE_DIRS
+      - name: Dead code
+        run: vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
+      - name: Unused dependencies
+        run: |
+          deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
+          uv run --locked --with "$deptry" deptry .
+      - name: Vulnerabilities
+        run: |
+          uv export --locked --format requirements-txt --no-emit-workspace -o "$RUNNER_TEMP/requirements.txt"
+          pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --disable-pip --require-hashes
+      - name: Licenses
+        env:
+          EXCEPTIONS: ${{ inputs.license-exceptions }}
+        run: |
+          allowed=$(python3 -c 'import sys, tomllib; print(";".join(tomllib.load(open(sys.argv[1], "rb"))["licenses"]["allow"]))' "$RG/rust/deny.toml")
+          ignore=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')")
+          if [[ -f "$EXCEPTIONS" ]]; then
+            mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS")
+          fi
+          # Packages without License-Expression report trove classifiers; these name the same licenses.
+          allowed+=";MIT License;Apache Software License;BSD License;ISC License (ISCL)"
+          pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"

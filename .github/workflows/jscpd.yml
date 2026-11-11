@@ -1,0 +1,49 @@
+name: Duplication check
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      baseline:
+        description: The repo's duplication baseline
+        type: string
+        default: .github/checks/jscpd-baseline.json
+
+permissions:
+  contents: read
+
+jobs:
+  jscpd:
+    name: Duplication
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    defaults:
+      run:
+        shell: bash
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7.0.1
+        with:
+          path: repo
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Duplication
+        env:
+          BASELINE: ${{ inputs.baseline }}
+        run: uvx --from jscpd==5.4.3 jscpd --config "$GITHUB_WORKSPACE/repo-guards/ci-checks/.jscpd.json" --baseline "$BASELINE" .

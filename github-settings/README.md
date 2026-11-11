@@ -43,7 +43,7 @@ ruleset 管"合并要满足什么条件"，各层的权限设置管"谁能改这
 | Actions：创建和批准 PR | 不允许 | 打开的话，workflow 可以自己批准 PR | 同上：不勾 "Allow GitHub Actions to create and approve pull requests" | ✅ 全部 |
 | 必跑的 workflow | Organization ruleset `require ci guard`（`rulesets/org-required-guard.json`）要求每个选中 repo 进默认分支的 PR 跑 repo-guards 的 `.github/workflows/guard.yml`。repo 用 "Selected repositories" 选；加一个 repo，要在那里加，也要加进 JSON 的 `repository_id.repository_ids` | 检查逻辑放在项目 repo 之外，worker 改不到；只能在 Organization 或 Enterprise 层设，不能在 repo 层设 | Organization > Settings > Repository > Rulesets > require ci guard > Target repositories | ⚠️ Team（2026-11-11 在 Team 套餐的 Organization 界面上确认） |
 | 2FA | 要求所有成员和外部协作者开 2FA | 账号被盗时多一道门槛 | Organization > Settings > Authentication security | ✅ 全部 |
-| token 策略 | 待定：禁止 classic token，fine-grained token 需要 owner 批准 | 管住访问 Organization 资源的 PAT。管不到 `gh auth login` 拿到的 OAuth token：GitHub CLI 是特权 OAuth App，OAuth App 限制也拦不住它 | Organization > Settings > Personal access tokens | ✅ 全部 |
+| token 策略 | 禁止 classic token，fine-grained token 需要 owner 批准 | 管住访问 Organization 资源的 PAT。管不到 `gh auth login` 拿到的 OAuth token：GitHub CLI 是特权 OAuth App，OAuth App 限制也拦不住它 | Organization > Settings > Personal access tokens | ✅ 全部 |
 
 | Ruleset 文件 | 层 | 管什么 |
 |---|---|---|

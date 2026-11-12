@@ -7,6 +7,10 @@ on:
         description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
         type: string
         default: '"ubuntu-latest"'
+      working-directory:
+        description: The project's directory, relative to the repo root
+        type: string
+        default: .
       source-dirs:
         description: Shipped source directories, space-separated, for pyright, vulture and coverage
         type: string
@@ -32,7 +36,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: repo
+        working-directory: repo/${{ inputs.working-directory }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -102,8 +106,8 @@ jobs:
         run: |
           allowed=$(python3 -c 'import sys, tomllib; c = tomllib.load(open(sys.argv[1], "rb")); print(";".join(c["allow"] + [k for k, v in c["python-classifiers"].items() if v in c["allow"]]))' "$RG/licenses.toml")
           ignore=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb")).get("project", {}).get("name", ""))')")
-          if [[ -f "$EXCEPTIONS" ]]; then
-            mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS")
+          if [[ -f "$GITHUB_WORKSPACE/repo/$EXCEPTIONS" ]]; then
+            mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
           pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"
       # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.

@@ -17,13 +17,13 @@
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
-| [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在） |
-| [`python.yml`](../.github/workflows/python.yml) | [Python](python/README.md) 各项和依赖检查 | `source-dirs`（`src`）、`license-exceptions`（`.github/checks/license-exceptions.txt`） |
+| [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `working-directory`（`.`）、`deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在） |
+| [`python.yml`](../.github/workflows/python.yml) | [Python](python/README.md) 各项和依赖检查 | `working-directory`（`.`）、`source-dirs`（`src`）、`license-exceptions`（`.github/checks/license-exceptions.txt`） |
 | [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `knip-entry`、`knip-project`、`license-exceptions`（同上） |
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
 ## 语言级
 

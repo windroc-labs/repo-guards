@@ -69,6 +69,7 @@ def extract(archive: bytes, out: Path, overrides: Path) -> str:
         shutil.rmtree(staging)
         raise Error(f"archive has no commit id (got {commit!r})")
     (staging / "SHA").write_text(commit + "\n")
+    (staging / ".gitignore").write_text("*\n")
     try:
         apply_overrides(staging, overrides)
     except (OSError, Error):
@@ -81,7 +82,7 @@ def extract(archive: bytes, out: Path, overrides: Path) -> str:
 
 def run(argv: list[str], fetch: Callable[[str, str], bytes] = download) -> int:
     parser = argparse.ArgumentParser(
-        description="Download the repo-guards configs the caller CI uses, from main, and apply the caller's overrides."
+        description="Download repo-guards' ci-checks/ (configs, checker sources, scripts) the caller CI uses, from main, and apply the caller's overrides."
     )
     parser.add_argument("--workflow", default=".github/workflows/ci.yml", type=Path)
     parser.add_argument("--out", default=".repo-guards", type=Path)
@@ -91,7 +92,7 @@ def run(argv: list[str], fetch: Callable[[str, str], bytes] = download) -> int:
         repo = caller_repo(args.workflow.read_text())
         commit = extract(fetch(repo, REF), args.out, args.overrides)
     except (OSError, tarfile.TarError, Error) as error:
-        print(f"fetch_configs: {error}", file=sys.stderr)
+        print(f"fetch_ci_checks: {error}", file=sys.stderr)
         return 2
     print(f"{repo}@{REF} ({commit}) {SUBDIR}/ -> {args.out / SUBDIR}")
     return 0

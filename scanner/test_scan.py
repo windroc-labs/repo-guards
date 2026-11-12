@@ -1,5 +1,6 @@
 """Tests for scan.py. Every hit string is built at runtime so this file stays clean (FR-20)."""
 
+import json
 import os
 import re
 import shutil
@@ -529,6 +530,48 @@ class PullRequest(unittest.TestCase):
         repo = Repo(self)
         code, out = repo.scan(*PUBLIC, env={"PR_TITLE": EM, "PR_BODY": EM})
         self.assertEqual(code, 0, out)
+
+    def event_file(self, repo, pull_request):
+        path = repo.outside / "event.json"
+        path.write_text(json.dumps({"action": "opened", "pull_request": pull_request}), encoding="utf-8")
+        return str(path)
+
+    def test_event_file_title_and_body(self):
+        repo = Repo(self)
+        event = self.event_file(repo, {"title": "fix " + NAME, "body": "a\n" + EM, "number": 1})
+        code, out = repo.scan(
+            "--checks", "private-name,em-dash", "--names-file", repo.names_file(NAME), "--pr-event", event,
+            env={"PR_TITLE": "", "PR_BODY": ""},
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("title line 1: private-name", out)
+        self.assertIn("body line 2: em-dash", out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_event_file_null_body_is_empty(self):
+        repo = Repo(self)
+        code, out = repo.scan(*PUBLIC, "--pr-event", self.event_file(repo, {"title": "t", "body": None}))
+        self.assertEqual(code, 0, out)
+
+    def test_event_file_ignores_the_environment(self):
+        repo = Repo(self)
+        event = self.event_file(repo, {"title": "t", "body": "b"})
+        code, out = repo.scan(*PUBLIC, "--pr-event", event, env={"PR_TITLE": EM, "PR_BODY": EM})
+        self.assertEqual(code, 0, out)
+
+    def test_event_file_without_a_pull_request_is_a_usage_error(self):
+        repo = Repo(self)
+        path = repo.outside / "event.json"
+        path.write_text('{"ref": "refs/heads/main"}', encoding="utf-8")
+        code, out = repo.scan(*PUBLIC, "--pr-event", str(path))
+        self.assertEqual(code, 2, out)
+        self.assertIn("--pr-event: no pull_request", out)
+
+    def test_pr_event_and_pr_from_env_exclude_each_other(self):
+        repo = Repo(self)
+        code, out = repo.scan(*PUBLIC, "--pr-from-env", "--pr-event", self.event_file(repo, {"title": "t", "body": ""}))
+        self.assertEqual(code, 2, out)
+        self.assertIn("not allowed with", out)
 
 
 class Links(unittest.TestCase):

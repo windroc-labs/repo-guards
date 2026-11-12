@@ -34,7 +34,7 @@
 
 覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，可在 `--` 后带测试名过滤，如 `"--test=unit -- input::"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
 
-分片的数据用各工具自己的办法合并：Rust 在 Coverage job 里按所有片的测试目标（各片 `--` 前的词，去重）再编译一遍（不跑测试），用 `cargo llvm-cov report` 合并各片的 `.profraw`；Python 用 `coverage combine`；TypeScript 用 vitest 的 blob 报告和 `--merge-reports`，blob 报告里是绝对路径，各片先把检出目录换成占位符。在样例项目上，各片放在不同目录里跑，合并出的报告和不分片的逐文件、逐行、逐分支一致。
+分片的数据用各工具自己的办法合并：Rust 在 Coverage job 里按所有片的测试目标（各片 `--` 前的词，去重）再编译一遍（不跑测试），用 `cargo llvm-cov report` 合并各片的 `.profraw`；Python 用 `coverage combine`；TypeScript 用 vitest 的 blob 报告和 `--merge-reports`，blob 报告里是绝对路径，各片先把检出目录换成占位符。在样例项目上，各片放在不同目录里跑，合并出的报告和不分片的逐文件、逐行、逐分支一致。Rust 和 Python 各片的 artifact 名字由 [`coverage/shard_artifact.py`](coverage/shard_artifact.py) 生成：`<语言>-coverage-<working-directory 的 sha256 前 16 位>-shard`，只含小写字母、数字和 `-`，因为 download-artifact 对名字做 `decodeURIComponent`（`%` 会让下载失败），还把它当 glob 匹配；同一个 caller 用不同 `working-directory` 调用多次，名字也各不相同。测试：在 `coverage/` 跑 `python3 -m unittest shard_artifact_test`。
 
 ## 语言级
 

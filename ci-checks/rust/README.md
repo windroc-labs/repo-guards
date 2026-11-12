@@ -81,7 +81,7 @@ mod tests { /* … */ }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 ```
 
-`rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`，加上 `unit-tests` 选的测试目标），Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。
+`rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`，加上 `unit-tests` 选的测试目标），Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。
 
 覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，只收 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`；别的写法（包括 `--tests` 和会放宽锁住配置的 cargo-llvm-cov 选项）让 Coverage 步失败。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。
 

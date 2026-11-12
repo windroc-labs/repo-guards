@@ -17,13 +17,13 @@
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
-| [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `working-directory`（`.`）、`deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在） |
+| [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `working-directory`（`.`）、`deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在）、`unit-tests`（`--lib --bins`） |
 | [`python.yml`](../.github/workflows/python.yml) | [Python](python/README.md) 各项和依赖检查 | `working-directory`（`.`）、`source-dirs`（`src`）、`license-exceptions`（`.github/checks/license-exceptions.txt`） |
 | [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `knip-entry`、`knip-project`、`license-exceptions`（同上） |
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
 ## 语言级
 
@@ -196,7 +196,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 ### 覆盖率
 
-三种语言各自跑测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
+三种语言各自只跑单元测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
 
 | 项 | 内容 |
 |---|---|
@@ -213,6 +213,9 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | Rust | Python | TypeScript |
 |---|---|---|
 | [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
+| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`；Tests 步另跑全部测试目标，不量覆盖率 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
+
+覆盖率只算单元测试：改动行、总覆盖率和 merge-base 的比较、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。集成测试照样跑，但不进覆盖率；Python 和 TypeScript 的 workflow 只跑配置选中的测试，集成测试由 repo 自己的 job 跑。
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 
@@ -224,7 +227,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 |---|---|
 | 分数 | CRAP = 复杂度² × (1 − 覆盖率)³ + 复杂度 |
 | 复杂度 | [lizard](https://github.com/terryyin/lizard) 算的圈复杂度，三种语言同一个工具。版本连同依赖带 hash 固定在 [`crap/requirements.txt`](crap/requirements.txt)（生成命令同覆盖率）。Rust 的 `match` 按分支数算，但范围模式的分支（`90..=100 =>`）lizard 不算，分数偏低 |
-| 覆盖率 | 第 8 项 Coverage 步对 PR 跑出的同一份 Cobertura 报告，不再跑测试。一个函数的覆盖率 = 它起止行之间 (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，和第 8 项同一算法。声明那一行（`def`、`export const f =`）在模块加载时就算执行过，不计入，没被调用的函数才会是 0%；只有一行的函数例外。只量报告里有的文件，一行都没量到的函数不列 |
+| 覆盖率 | 第 8 项 Coverage 步对 PR 跑出的同一份 Cobertura 报告，只来自单元测试，不再跑测试。一个函数的覆盖率 = 它起止行之间 (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，和第 8 项同一算法。声明那一行（`def`、`export const f =`）在模块加载时就算执行过，不计入，没被调用的函数才会是 0%；只有一行的函数例外。只量报告里有的文件，一行都没量到的函数不列 |
 | 不失败 | 脚本永远退出 0；报告不存在、读不了、lizard 装不上或跑不了时，打印一行 `CRAP report skipped: <原因>`，同一行也写进 job summary。这一步另加 `continue-on-error`，任何意外都不改 job 结果 |
 
 测试：在 `crap/` 跑 `python3 -m unittest crap_report_test`。

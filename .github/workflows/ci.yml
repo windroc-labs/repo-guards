@@ -208,6 +208,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/python/comment-budget
         run: python3 -m unittest comment_budget_test
+      - name: Python pyproject config tests
+        id: pyproject-config
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/pyproject-config
+        run: python3 -m unittest pyproject_config_test
       - name: TypeScript comment budget tests
         id: typescript
         if: ${{ !cancelled() }}
@@ -245,9 +250,10 @@ jobs:
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
+          PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST SHARD_TARGETS; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST SHARD_TARGETS PYPROJECT_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

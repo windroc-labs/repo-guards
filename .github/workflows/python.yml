@@ -117,7 +117,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
-          python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
+          python3 "$RG/python/pyproject-config/pyproject_config.py" pyright-config "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
           python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() }}
@@ -125,7 +125,7 @@ jobs:
       - name: Unused dependencies
         if: ${{ !cancelled() }}
         run: |
-          deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
+          deptry=$(python3 "$RG/python/pyproject-config/pyproject_config.py" pin "$RG/python/pyproject.toml" "deptry==")
           uv run --no-project --python .venv/bin/python --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
@@ -143,7 +143,7 @@ jobs:
           # The project itself is installed only from a pyproject.toml.
           ignore=()
           if [[ -f pyproject.toml ]]; then
-            ignore+=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb")).get("project", {}).get("name", ""))')")
+            ignore+=("$(python3 "$RG/python/pyproject-config/pyproject_config.py" project-name pyproject.toml)")
           fi
           if [[ -f "$GITHUB_WORKSPACE/repo/$EXCEPTIONS" ]]; then
             mapfile -t -O "${#ignore[@]}" ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
@@ -197,7 +197,7 @@ jobs:
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
-          pin() { python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith(sys.argv[2])))' "$RG/python/pyproject.toml" "$1"; }
+          pin() { python3 "$RG/python/pyproject-config/pyproject_config.py" pin "$RG/python/pyproject.toml" "$1"; }
           coverage=$(pin "coverage[toml]==")
           pytest=$(pin "pytest==")
           read -ra dirs <<< "$SOURCE_DIRS"
@@ -213,7 +213,7 @@ jobs:
             uv sync --locked
           else
             uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
-            .venv/bin/python -c 'import pytest' 2> /dev/null || tools+=(--with "$pytest")
+            uv pip show -q --python .venv/bin/python pytest > /dev/null 2>&1 || tools+=(--with "$pytest")
           fi
           cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
           case $MODE in

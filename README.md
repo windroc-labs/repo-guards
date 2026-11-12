@@ -23,7 +23,7 @@
 
 ## `.github/workflows/` 里的文件
 
-GitHub 只认这一层目录（不能分子目录），一个文件什么时候跑只看它开头的 `on:`。
+一个文件什么时候跑只看它开头的 `on:`。
 
 - 本 repo 自己跑的：`ci.yml`（本 repo 的 CI，PR 和 push 到 main），`private-names.yml`（私有名字扫描，`pull_request_target` 和 push）。
 - 只给别的 repo 用 `uses:` 调用的（只有 `on: workflow_call`）：其余各个文件，见 [`ci-checks/` 的 workflow 表](ci-checks/README.md#每个-repo-自己要做的)。

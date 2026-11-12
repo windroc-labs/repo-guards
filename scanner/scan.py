@@ -80,9 +80,12 @@ CHECKS = {
     )
 }
 
-# A home directory, then any name except a complete <placeholder> (FR-10).
+# A home directory, then any name segment except exactly <placeholder> (FR-10). The segment
+# ends at a separator, whitespace, the line end, closing markup around the path, or
+# sentence punctuation followed by whitespace or the line end.
 LOCAL_PATH = re.compile(
-    r"(?:/(?:Users|home)|[A-Za-z]:[\\/]+(?i:users))[\\/]+(?!<[^<>/\\\n]+>(?!\w))(?=[^\s/\\])"
+    r"(?:/(?:Users|home)|[A-Za-z]:[\\/]+(?i:users))[\\/]+"
+    r"(?!<[A-Za-z0-9_-]+>(?:[\\/\s`'\")\]]|[.,;:]?$|[.,;:]\s))(?=[^\s/\\])"
 )
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"

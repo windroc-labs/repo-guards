@@ -170,6 +170,13 @@ class FileContent(unittest.TestCase):
             "/" + "home/<user>bob",
             "/" + "home//bob",
             "C:" + "\\" * 3 + "Users" + "\\" + "bob",
+            "/" + "home/<user>.name",
+            "/" + "home/<my user>",
+            "/" + "home/<user>-bob",
+            "cd /" + "home/<bob && echo a > out",
+            "/" + "home/<your name>/x",
+            "/" + "home/x<user>",
+            "/" + "home/<user>,bob",
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
@@ -182,7 +189,7 @@ class FileContent(unittest.TestCase):
         self.assertIn("file #%d path: local-path" % repo.index("web" + HOME_BOB + ".md"), out)
 
     def test_placeholder_names_never_hit(self):
-        for text in ("src/home/<user>/x", "https://host/Users/<name>", "-I/home/<user>", "`/Users/<user>`", "/home/<your name>/x", "C:" + "\\" + "Users" + "\\" + "<user>"):
+        for text in ("src/home/<user>/x", "https://host/Users/<name>", "-I/home/<user>", "`/Users/<user>`", "(/home/<user_1>)", "under /" + "home/<user>.", "/Users/<name>, /home/<name> or", "/home/<user-name>", "C:" + "\\" + "Users" + "\\" + "<user>"):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
                 self.assertEqual(repo.scan(*PUBLIC)[0], 0)

@@ -1,0 +1,95 @@
+name: Private names
+
+# pull_request_target runs this file as it is on main, the only branch the
+# private-names Environment admits; a PR's own workflows never read the list.
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# A newer PR run rescans the whole PR; a push run covers only its own commits, so it never shares a group.
+concurrency:
+  group: private-names-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  private-names:
+    name: Private names
+    # Fork PRs could probe the list; the push to main scans what they bring in.
+    if: >-
+      github.event_name == 'push' || (
+        github.event.pull_request.head.repo.full_name == github.repository &&
+        github.event.pull_request.base.ref == github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: private-names
+    defaults:
+      run:
+        shell: bash
+    # This job holds the list, so it uses no action and runs nothing from the
+    # scanned commits: only git, tar and python3 on main's scanner.
+    steps:
+      - name: Fetch main's scanner and the commits to scan
+        env:
+          TOKEN: ${{ github.token }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          basic=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+          echo "::add-mask::$basic"
+          export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.extraheader GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $basic"
+          git init -q "$RUNNER_TEMP/repo"
+          cd "$RUNNER_TEMP/repo"
+          git config core.hooksPath /dev/null
+          # The scanned tree's .gitattributes must not filter or re-encode the files the scanner reads.
+          printf '* -text -eol -filter -ident -working-tree-encoding\n' > .git/info/attributes
+          fetch() { git fetch -q --no-tags --no-recurse-submodules "$REPO_URL" "$@"; }
+          fetch "+$SHA:refs/scan/main"
+          if [[ -n $PR_NUMBER ]]; then
+            fetch "+refs/pull/$PR_NUMBER/head:refs/scan/head"
+            # The merge ref is missing while the PR conflicts and stale until GitHub recomputes it.
+            if fetch "+refs/pull/$PR_NUMBER/merge:refs/scan/tree" 2> /dev/null &&
+              [[ $(git rev-parse 'refs/scan/tree^2') == $(git rev-parse refs/scan/head) ]]; then
+              echo "Scanning the PR merge ref"
+            else
+              echo "::notice::No current merge ref for this PR; scanning the PR head instead"
+              git update-ref refs/scan/tree refs/scan/head
+            fi
+            range=refs/scan/main..refs/scan/head
+          else
+            git update-ref refs/scan/tree refs/scan/main
+            if git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
+              range="$BEFORE..$SHA"
+            elif git rev-parse -q --verify "$SHA^" > /dev/null; then
+              range="$SHA^!"
+            else
+              range="$SHA"
+            fi
+          fi
+          git checkout -q --detach refs/scan/tree
+          mkdir "$RUNNER_TEMP/main"
+          git archive refs/scan/main scanner | tar -x -C "$RUNNER_TEMP/main"
+          echo "SCAN_RANGE=$range" >> "$GITHUB_ENV"
+      - name: Private names
+        env:
+          REPO_GUARDS_PRIVATE_NAMES: ${{ secrets.PRIVATE_NAMES }}
+        run: |
+          args=(--repo "$RUNNER_TEMP/repo" --checks private-name --commits "$SCAN_RANGE")
+          if [[ $GITHUB_EVENT_NAME == pull_request_target ]]; then
+            # Read from the event file, not env:, which the log prints, so the title and body stay out of the log.
+            field() {
+              python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["pull_request"][sys.argv[2]] or "", end="")' "$GITHUB_EVENT_PATH" "$1"
+            }
+            PR_TITLE=$(field title)
+            PR_BODY=$(field body)
+            export PR_TITLE PR_BODY
+            args+=(--pr-from-env)
+          fi
+          python3 -I "$RUNNER_TEMP/main/scanner/scan.py" "${args[@]}"

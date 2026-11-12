@@ -57,7 +57,7 @@
 
 ## 依赖检查（npm、license-checker）
 
-`typescript.yml` 的 Dependency rules 步在 `npm ci` 前用 [`allowlist.py`](../allowlist/allowlist.py) 拿 `package-lock.json`（lockfileVersion 2 或 3）对[依赖白名单](../README.md#依赖白名单)的 `[typescript]` 表：git 源只准 `sources.allow-git`，tarball URL 依赖只准 `sources.allow-registry` 里的前缀，`bans.allow` 非空时只准名单里的包。tarball URL 依赖指装的地址不是 registry 的 tarball（路径里有 `/-/`，或 GitHub Packages 的 `/download/`），或某个 `package.json` 直接写了 `https://…` tarball 地址；`overrides` 指过去的也算，因为它按 lockfile 里装的地址判。npm 当成 git 的 `https://github.com/<owner>/<repo>` 这类地址按 git 源查。别的 registry、workspace、file 和 directory 依赖不查。这一步失败时，两个 job 都不装项目。白名单另外这样用：
+`typescript.yml` 的 Dependency rules 步在 `npm ci` 前用 [`allowlist.py`](../allowlist/allowlist.py) 拿 `package-lock.json`（lockfileVersion 2 或 3）对[依赖白名单](../README.md#依赖白名单)的 `[typescript]` 表：git 源只准 `sources.allow-git`，tarball URL 依赖只准 `sources.allow-registry` 里的前缀，`bans.allow` 非空时只准名单里的包。tarball URL 依赖指装的地址不是 registry 的 tarball（路径里有 `/-/`，或 GitHub Packages 的 `/download/`），或某个 `package.json` 直接写了 `https://…` tarball 地址；`overrides` 指过去的也算，因为它按 lockfile 里装的地址判。npm 当成 git 的 `https://github.com/<owner>/<repo>` 这类地址按 git 源查；带 `rev` 的 `allow-git` 条目只放行 lockfile 里记的那个 commit。没有 `resolved` 的包按 registry 的包算，`bans.allow` 照查；`resolved` 是认不出的地址时这一步失败。别的 registry、workspace、file 和 directory 依赖不查。这一步失败时，两个 job 都不装项目。白名单另外这样用：
 
 | 白名单项 | `typescript.yml` 怎么用 |
 |---|---|

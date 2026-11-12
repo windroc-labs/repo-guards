@@ -192,10 +192,10 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
 | 新增或变了的包在依赖白名单里 | 引入改过的包 | ⚠️ 只做了一半：项目白名单 `bans.allow` 非空时只准名单里的包（cargo-deny `[bans]` `allow`），为空时不限制；和 base 比 diff、新包必须进名单的规则未实现 | 同 Rust 列，Dependency rules 查 `uv.lock` 或解析结果，读 `[python]` 表 | 同 Rust 列，Dependency rules 查 `package-lock.json`，读 `[typescript]` 表 |
-| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | git：只装 wheel 挡住（git 依赖都要构建），Dependency rules 在安装前查 `allow-git`（项目白名单）；别的 index、URL、path：无现成规则（uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL） | git 和 tarball URL：[`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`；白名单有条目时设成 `all`（npm 只有 `all`、`none`、`root`），由 Dependency rules 在 `npm ci` 前逐个对 `allow-git`、`allow-registry`（项目白名单）；别的 registry、file、directory：无现成规则（`allow-directory=none` 让 npm workspaces 装不上，npm 11.19 实测报 `EALLOWDIRECTORY`） |
+| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | git：解析不构建，没放行的 git 依赖读不到就解析失败；Dependency rules 在安装前查解析结果对 `allow-git`（项目白名单）；别的 index、URL、path：无现成规则（uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL） | git 和 tarball URL：[`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`；白名单有条目时设成 `all`（npm 只有 `all`、`none`、`root`），由 Dependency rules 在 `npm ci` 前逐个对 `allow-git`、`allow-registry`（项目白名单）；别的 registry、file、directory：无现成规则（`allow-directory=none` 让 npm workspaces 装不上，npm 11.19 实测报 `EALLOWDIRECTORY`） |
 | 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
-| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | 只装 wheel：`uv sync` 用 `UV_NO_BUILD`，`uv pip` 用 `--only-binary :all:`（项目自己的包和 editable 依赖照样构建）；`allow-build-scripts` 里的包从源码构建（项目白名单） | `.npmrc` `ignore-scripts=true`；`allow-build-scripts` 里的包在 `npm ci` 后用 `npm rebuild` 跑安装脚本（项目白名单） |
+| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | 只装 wheel：`uv sync` 用 `UV_NO_BUILD`，`uv pip` 用 `--only-binary :all:`（项目自己的包和 editable 依赖照样构建）；`allow-build-scripts` 里的包和 `allow-git` 放行的 git 源从源码构建（项目白名单） | `.npmrc` `ignore-scripts=true`；`allow-build-scripts` 里的包在 `npm ci` 后用 `npm rebuild` 跑安装脚本（项目白名单） |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
 | 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`）：`uv pip freeze` 列出 `.venv` 装好的包，`name==version` 的交给 `pip-audit -r --no-deps`；git 等别处来的包没有公告可查 | `npm audit` |
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外写进 `licenses.exceptions`（项目白名单） | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外同 Rust 列 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外同 Rust 列 |
@@ -210,32 +210,32 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 allow-build-scripts = ["ring"]            # Rust
 
 [python.sources]
-allow-git = ["https://github.com/<owner>/<repo>"]
-
-[python.bans.build]
-allow-build-scripts = ["somepkg"]         # 上面那个 git 依赖要从源码构建
+allow-git = [
+  "https://github.com/<owner>/<repo>",                         # 任何 commit
+  { url = "https://github.com/<owner>/<other>", rev = "<完整 commit SHA>" },  # 只这个 commit
+]
 
 [[typescript.licenses.exceptions]]
 crate = "somepkg"
 allow = ["MPL-2.0"]
 ```
 
-键的校验和 Python、TypeScript 的比对都在 [`allowlist/allowlist.py`](allowlist/allowlist.py)（只用标准库，要 Python 3.11 及以上；测试：在该目录跑 `python3 -m unittest allowlist_test`）。每条报错都写明该往哪个表、哪个键加哪一条。Dependency rules 在安装前跑，没放行的 git 源和 tarball 不会被装上。Python 没有 `uv.lock` 时，先查 requirements 文件里直接写的 git 依赖，再解析，再查解析结果；放行的 git 依赖自己又依赖的 git 源在解析时就会下载（在 build 名单里的还会构建），解析后才查到。PyPI 上的包不能依赖 git 源。
+键的校验和 Python、TypeScript 的比对都在 [`allowlist/allowlist.py`](allowlist/allowlist.py)（只用标准库，要 Python 3.11 及以上；测试：在该目录跑 `python3 -m unittest allowlist_test`）。每条报错都写明该往哪个表、哪个键加哪一条。Dependency rules 在安装前跑，没放行的 git 源和 tarball 不会被装上。规则只查锁文件或解析结果（`Cargo.lock`、`uv.lock`、uv 的解析输出、`package-lock.json`），不读项目手写的依赖文件；认不出来源的条目让检查失败，不当成放行。Python 没有 `uv.lock` 时，解析不跑构建代码：先把 requirements 文件里 `allow-git` 放行的 git 依赖照项目的写法单独构建一次（uv 按写法缓存它的元数据，没写包名的 git 行也能解析），再解析，再查解析结果。没放行的 git 源在解析时会被下载（clone），但不跑它的代码；要构建才读得到元数据的，解析直接失败，报错提示加哪一条。放行的 git 依赖自己又依赖的 git 源也在解析时下载，解析后才查到；它要构建才读得到元数据时，还要把它的包名写进 `python.bans.build.allow-build-scripts`（被依赖的 git 源一定写了包名）。PyPI 上的包不能依赖 git 源。
 
 | 键 | 放行什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
 | `bans.allow` | 非空时只准名单里的包 | cargo-deny | Dependency rules | Dependency rules |
-| `bans.build.allow-build-scripts` | 安装时跑构建代码的包 | 带 `build.rs` 的 crate（cargo-deny）；基础 crate 已在共用名单 | 从源码构建（sdist、git 依赖）；其余只装 wheel | `npm ci` 后用 `npm rebuild` 跑它的安装脚本；其余不跑 |
-| `sources.allow-git` | git 仓库 | cargo-deny | Dependency rules | Dependency rules；有条目时 npm `allow-git=all` |
+| `bans.build.allow-build-scripts` | 安装时跑构建代码的包 | 带 `build.rs` 的 crate（cargo-deny）；基础 crate 已在共用名单 | 从源码构建（sdist）；`allow-git` 放行的 git 源不用再写（git 源没有 wheel，放行就准构建）；其余只装 wheel | `npm ci` 后用 `npm rebuild` 跑它的安装脚本；其余不跑 |
+| `sources.allow-git` | git 仓库，可限定 commit | cargo-deny 按 URL 比；带 `rev` 的条目由 Dependency rules 里的 `allowlist.py check rust` 对 `Cargo.lock` 查 commit（cargo-deny 的 `allow-git` 不认 commit） | Dependency rules | Dependency rules；有条目时 npm `allow-git=all` |
 | `sources.allow-registry` | 别处的包 | 别的 registry（cargo-deny；默认只有 crates.io） | 不适用：`python.yml` 不挡别的 index，也不挡 URL 依赖 | tarball URL 依赖，按 URL 前缀比；有条目时 npm `allow-remote=all`。别的 registry 不挡 |
 | `licenses.exceptions` | 某个包另外准用的许可证 | cargo-deny | `license-check` | license-checker 对这个包单独跑一遍 |
 
 条目写法：
 
 - 包：`"name"`、`"name@version"` 或 `{ crate = "name@version" }`；`{ name = "...", version = "..." }` 也认。`licenses.exceptions` 每条是 `{ crate = "name", allow = ["MPL-2.0"] }`。
-- git 源写仓库 URL，如 `https://github.com/<owner>/<repo>`；比的时候不看协议、用户名、`.git` 后缀和版本。
+- git 源写仓库 URL，如 `https://github.com/<owner>/<repo>`，放行这个仓库的任何 commit；比的时候不看协议、用户名、`.git` 后缀和版本。只放行一个 commit 时写 `{ url = "...", rev = "<完整 commit SHA>" }`：锁文件和解析结果只记 commit，所以 `rev` 要写 40 位（或 64 位）的 SHA，不认 tag 和分支名；项目里那行没钉 commit（写的是分支、tag 或什么都没写）时解析前不会照它构建，要构建才读得到的就得用不带 `rev` 的写法。没写包名的 git 行（如 `git+https://…`）也按 URL 放行，不用给它补包名。
 - Python 和 TypeScript 的版本按原样比，不认 semver 范围，`*` 表示任何版本。Python 的包名按 PEP 503 规整后比；`allow-build-scripts` 在 Python 里只看名字；没有 `uv.lock` 时 git 和 URL 依赖没有版本，`bans.allow` 只按名字比。
-- 没有白名单项的：path 依赖、Python 的 URL 依赖、npm 的 file 和 directory 依赖，三种语言都不挡。
+- 没有白名单项的：path 依赖、Python 的 URL 依赖、npm 的 file 和 directory 依赖，三种语言都不挡。npm lockfile 里没有 `resolved` 的包（`omit-lockfile-registry-resolved`，或打在上层包 tarball 里的）按 registry 的包算，`bans.allow` 照查。
 
 ### 覆盖率
 

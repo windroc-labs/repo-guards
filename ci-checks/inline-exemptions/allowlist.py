@@ -36,6 +36,7 @@ class Change:
 
 
 def toml_string(text: str) -> str:
+    text = text.encode("utf-8", "backslashreplace").decode("utf-8")
     escaped = (
         f"\\u{ord(c):04X}" if ord(c) < 0x20 or ord(c) == 0x7F else "\\" + c if c in '"\\' else c for c in text
     )

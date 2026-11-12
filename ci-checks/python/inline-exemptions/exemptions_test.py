@@ -293,6 +293,47 @@ class TestMarkers(unittest.TestCase):
         self.assertEqual(found("t.py", text), Counter())
 
 
+class NotExemptions(unittest.TestCase):
+    def test_fr6_references_that_skip_nothing_do_not_count(self):
+        text = (
+            "import pytest\nimport unittest\n\n\ndef f():\n    try:\n        g()\n"
+            "    except unittest.SkipTest:\n        pass\n"
+            "    with pytest.raises(pytest.skip.Exception):\n        h()\n"
+        )
+        self.assertEqual(found("src/m.py", text), Counter())
+
+    def test_fr8_skip_calls_and_raise_count(self):
+        text = (
+            "import pytest\nimport unittest\n\n\ndef f():\n    pytest.xfail('x')\n"
+            "    pytest.importorskip('y')\n    raise unittest.SkipTest\n"
+        )
+        self.assertEqual(
+            found("src/m.py", text),
+            Counter(
+                {
+                    ("pytest", "src/m.py", "xfail", "f"): 1,
+                    ("pytest", "src/m.py", "importorskip", "f"): 1,
+                    ("unittest", "src/m.py", "SkipTest", "f"): 1,
+                }
+            ),
+        )
+
+    def test_fr8_pyright_remark_is_not_a_setting(self):
+        self.assertEqual(found("src/m.py", "x = 1  # pyright: this is a note\n"), Counter())
+        self.assertEqual(
+            found("src/m.py", "# pyright: strict, reportPrivateUsage=false\n"),
+            Counter(
+                {
+                    ("pyright", "src/m.py", "strict", ""): 1,
+                    ("pyright", "src/m.py", "reportPrivateUsage", ""): 1,
+                }
+            ),
+        )
+
+    def test_pyproject_tool_that_is_not_a_table(self):
+        self.assertEqual(found("pyproject.toml", 'tool = "x"\n'), Counter())
+
+
 class Functions(unittest.TestCase):
     def function_of(self, text):
         keys = list(found("src/m.py", text))

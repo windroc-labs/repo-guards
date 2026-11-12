@@ -142,7 +142,7 @@ type region struct {
 	name       string
 }
 
-// funcRegions spans each FuncDecl from the start of the comment-only run directly above it.
+// funcRegions spans each FuncDecl from the start of the comment-only run directly above it to the end of its last line.
 func funcRegions(src []byte, fset *token.FileSet, file *ast.File) []region {
 	tf := fset.File(file.Pos())
 	only := commentOnlyLines(src, tf, file.Comments)
@@ -156,7 +156,12 @@ func funcRegions(src []byte, fset *token.FileSet, file *ast.File) []region {
 		for top > 1 && only[top-1] {
 			top--
 		}
-		regions = append(regions, region{tf.LineStart(top), decl.End(), funcName(decl)})
+		// A comment trailing the closing brace belongs to the function too.
+		end := token.Pos(tf.Base() + tf.Size())
+		if last := tf.Line(decl.End()); last < tf.LineCount() {
+			end = tf.LineStart(last + 1)
+		}
+		regions = append(regions, region{tf.LineStart(top), end, funcName(decl)})
 	}
 	return regions
 }

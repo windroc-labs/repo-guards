@@ -72,6 +72,12 @@ func TestGoForms(t *testing.T) {
 				occ("golangci-lint", "pkg/b.go", "*", ""),
 				occ("golangci-lint", "pkg/b.go", "gosec", "Srv.Stop"),
 			}},
+		{"nolint trailing a function's closing brace", "pkg/a.go",
+			"package a\n\nfunc F() {\n\tx()\n} //nolint:lll\n\nvar v = 1 //nolint:gochecknoglobals\n",
+			[]Occurrence{
+				occ("golangci-lint", "pkg/a.go", "lll", "F"),
+				occ("golangci-lint", "pkg/a.go", "gochecknoglobals", ""),
+			}},
 		{"method on a non-pointer receiver", "pkg/a.go",
 			"package a\n\ntype T struct{}\n\nfunc (T) Run() {\n\tx() //nolint:unused\n}\n",
 			[]Occurrence{occ("golangci-lint", "pkg/a.go", "unused", "T.Run")}},

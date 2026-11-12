@@ -17,6 +17,9 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 5
+    env:
+      # uv runs inside the PR checkout: never read its uv.toml or pyproject.toml [tool.uv].
+      UV_NO_CONFIG: "1"
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

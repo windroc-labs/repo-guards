@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import tomllib
@@ -51,9 +52,9 @@ def check(root: Path, base_ref: str) -> int:
         return 0
     print("::error::A PR that changes .github/ must change nothing else")
     print(".github files:")
-    print("".join(f"  {f}\n" for f in github), end="")
+    print("".join(f"  {json.dumps(f, ensure_ascii=False)}\n" for f in github), end="")
     print("Other files:")
-    print("".join(f"  {f}\n" for f in others), end="")
+    print("".join(f"  {json.dumps(f, ensure_ascii=False)}\n" for f in others), end="")
     print(f'Only the "exemption" list of ["{SECTION}"] in {OVERRIDES} may change beside other files.')
     return 1
 

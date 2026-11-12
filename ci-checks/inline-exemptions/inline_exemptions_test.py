@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import tomllib
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import inline_exemptions as ie
@@ -377,8 +378,20 @@ class EndToEnd(unittest.TestCase):
         argv, cwd, env = ie.command("go", Path("/r"))
         self.assertEqual((argv, env["GOWORK"]), (["go", "run", ".", "/r"], "off"))
         argv, cwd, _ = ie.command("rust", Path("/r"))
-        self.assertEqual(cwd, ie.CI_CHECKS / "rust/inline-exemptions")
         self.assertIn("--locked", argv)
+        self.assertIn(str(ie.CI_CHECKS / "rust/inline-exemptions/Cargo.toml"), argv)
+
+    def test_rust_runs_outside_the_caller_tree_on_the_shared_toolchain(self):
+        channel = tomllib.loads((ie.CI_CHECKS / "rust/rust-toolchain.toml").read_text())["toolchain"]["channel"]
+        with unittest.mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("RUSTUP_TOOLCHAIN", None)
+            _, cwd, env = ie.command("rust", Path("/r"))
+            self.assertEqual(env["RUSTUP_TOOLCHAIN"], channel)
+        with unittest.mock.patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "1.2.3"}):
+            self.assertEqual(ie.command("rust", Path("/r"))[2]["RUSTUP_TOOLCHAIN"], "1.2.3")
+        self.assertEqual(cwd, Path(tempfile.gettempdir()))
+        manifest = tomllib.loads((ie.CI_CHECKS / "rust/inline-exemptions/Cargo.toml").read_text())
+        self.assertIn("workspace", manifest)
 
     def test_missing_toolchain_is_an_error(self):
         def missing(argv, **kwargs):

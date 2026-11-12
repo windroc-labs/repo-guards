@@ -19,6 +19,8 @@ jobs:
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       GOTOOLCHAIN: local
+      # uv runs inside the caller checkout: never read its uv.toml or pyproject.toml [tool.uv].
+      UV_NO_CONFIG: "1"
     defaults:
       run:
         shell: bash

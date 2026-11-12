@@ -68,8 +68,13 @@ class Pr(unittest.TestCase):
         code, out = self.pr({"a.py": "x\n"}, {".github/workflows/ci.yml": "on: push\n", "a.py": "y\n"})
         self.assertEqual(code, 1)
         self.assertIn("::error::A PR that changes .github/ must change nothing else", out)
-        self.assertIn("  .github/workflows/ci.yml", out)
-        self.assertIn("  a.py", out)
+        self.assertIn('  ".github/workflows/ci.yml"', out)
+        self.assertIn('  "a.py"', out)
+
+    def test_file_names_never_start_a_workflow_command(self):
+        code, out = self.pr({"a.py": "x\n"}, {".github/x.yml": "a\n", "b\n::warning::x": "y\n"})
+        self.assertEqual(code, 1)
+        self.assertEqual([l for l in out.splitlines() if l.lstrip().startswith("::")], [out.splitlines()[0]])
 
     def test_allowlist_only_change_with_code_passes(self):
         head = BASE_TOML.replace('count = 1', 'count = 2')

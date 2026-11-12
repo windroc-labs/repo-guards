@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# Its own workspace, so a caller's [workspace] above .repo-guards/ does not claim it.
+[workspace]
+
 [dependencies]
 proc-macro2 = { version = "1", default-features = false, features = ["span-locations"] }
 syn = { version = "3", default-features = false, features = ["full", "visit", "parsing", "printing"] }

@@ -46,18 +46,24 @@ func moduleDir(t *testing.T, files map[string][]byte) string {
 }
 
 type fakeProxy struct {
-	dirs  map[string]string
-	calls []string
+	dirs    map[string]string
+	calls   []string
+	batches int
 }
 
-func (p *fakeProxy) download(path, version string) (string, error) {
-	key := path + "@" + version
-	p.calls = append(p.calls, key)
-	dir, ok := p.dirs[key]
-	if !ok {
-		return "", errors.New("not found: " + key)
+func (p *fakeProxy) download(modules []moduleVersion) (map[moduleVersion]string, error) {
+	p.batches++
+	dirs := map[moduleVersion]string{}
+	for _, m := range modules {
+		key := m.Path + "@" + m.Version
+		p.calls = append(p.calls, key)
+		dir, ok := p.dirs[key]
+		if !ok {
+			return nil, errors.New("not found: " + key)
+		}
+		dirs[m] = dir
 	}
-	return dir, nil
+	return dirs, nil
 }
 
 type fixture struct {
@@ -77,6 +83,11 @@ func writeFile(t *testing.T, name, content string) string {
 }
 
 func (f fixture) run(t *testing.T) (int, string, []string) {
+	code, stderr, proxy := f.runProxy(t)
+	return code, stderr, proxy.calls
+}
+
+func (f fixture) runProxy(t *testing.T) (int, string, *fakeProxy) {
 	t.Helper()
 	config := f.config
 	if config == "" {
@@ -92,7 +103,7 @@ func (f fixture) run(t *testing.T) (int, string, []string) {
 		[]string{writeFile(t, "licenses.toml", config), exceptions},
 		strings.NewReader(f.stream), &stderr, proxy.download,
 	)
-	return code, stderr.String(), proxy.calls
+	return code, stderr.String(), proxy
 }
 
 func lines(s string) []string {
@@ -345,6 +356,26 @@ func TestDuplicateEffectiveModuleReportedOnce(t *testing.T) {
 	}
 }
 
+func TestModulesDownloadInOneBatch(t *testing.T) {
+	mit := moduleDir(t, map[string][]byte{"LICENSE": mitText(t)})
+	code, stderr, proxy := fixture{
+		stream: mainModule + `{"Path": "example.com/a", "Version": "v1.0.0"}
+{"Path": "example.com/b", "Version": "v2.0.0"}
+{"Path": "example.com/c", "Version": "v0.1.0"}`,
+		dirs: map[string]string{"example.com/a@v1.0.0": mit, "example.com/b@v2.0.0": mit, "example.com/c@v0.1.0": mit},
+	}.runProxy(t)
+	if code != 0 || proxy.batches != 1 || len(proxy.calls) != 3 {
+		t.Fatalf("code %d, stderr %q, batches %d, downloads %v", code, stderr, proxy.batches, proxy.calls)
+	}
+}
+
+func TestNothingToCheckDownloadsNothing(t *testing.T) {
+	code, _, proxy := fixture{stream: mainModule}.runProxy(t)
+	if code != 0 || proxy.batches != 0 {
+		t.Fatalf("code %d, batches %d", code, proxy.batches)
+	}
+}
+
 func TestDownloadErrorExits2(t *testing.T) {
 	code, stderr, _ := fixture{
 		stream: `{"Path": "example.com/missing", "Version": "v1.0.0"}`,
@@ -393,27 +424,43 @@ func TestUsageExits2(t *testing.T) {
 	}
 }
 
-func TestDownloadedDir(t *testing.T) {
+func TestDownloadedDirs(t *testing.T) {
 	exitErr := errors.New("exit status 1")
-	cases := []struct {
-		name    string
-		out     string
-		runErr  error
-		wantDir string
-	}{
-		{"dir", `{"Path": "example.com/a", "Version": "v1.0.0", "Dir": "/cache/example.com/a@v1.0.0"}`, nil, "/cache/example.com/a@v1.0.0"},
-		{"error field", `{"Path": "example.com/a", "Version": "v1.0.0", "Error": "checksum mismatch"}`, exitErr, ""},
-		{"error field, zero exit", `{"Path": "example.com/a", "Version": "v1.0.0", "Error": "checksum mismatch"}`, nil, ""},
-		{"non-zero exit", `{"Path": "example.com/a", "Version": "v1.0.0", "Dir": "/cache/a"}`, exitErr, ""},
-		{"no output", ``, exitErr, ""},
-		{"no dir", `{"Path": "example.com/a", "Version": "v1.0.0"}`, nil, ""},
+	a := moduleVersion{"example.com/a", "v1.0.0"}
+	b := moduleVersion{"example.com/b", "v2.0.0"}
+	both := `{"Path": "example.com/a", "Version": "v1.0.0", "Dir": "/cache/a"}
+{"Path": "example.com/b", "Version": "v2.0.0", "Dir": "/cache/b"}`
+	dirs, err := downloadedDirs([]byte(both), nil)
+	if err != nil || dirs[a] != "/cache/a" || dirs[b] != "/cache/b" || len(dirs) != 2 {
+		t.Fatalf("dirs %v, err %v", dirs, err)
 	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			dir, err := downloadedDir([]byte(c.out), c.runErr)
-			if dir != c.wantDir || (err == nil) != (c.wantDir != "") {
-				t.Fatalf("dir %q, err %v", dir, err)
+	failing := map[string]struct {
+		out    string
+		runErr error
+		want   string
+	}{
+		"error field":            {`{"Path": "example.com/a", "Version": "v1.0.0", "Dir": "/cache/a"}` + "\n" + `{"Path": "example.com/b", "Version": "v2.0.0", "Error": "checksum mismatch"}`, exitErr, "example.com/b@v2.0.0: checksum mismatch"},
+		"error field, zero exit": {`{"Path": "example.com/a", "Version": "v1.0.0", "Error": "checksum mismatch"}`, nil, "checksum mismatch"},
+		"non-zero exit":          {both, exitErr, "exit status 1"},
+		"no output":              {``, exitErr, "exit status 1"},
+		"unreadable":             {`{"Path"`, nil, "unreadable output"},
+		"no dir":                 {`{"Path": "example.com/a", "Version": "v1.0.0"}`, nil, "example.com/a@v1.0.0: no Dir"},
+	}
+	for name, c := range failing {
+		t.Run(name, func(t *testing.T) {
+			if _, err := downloadedDirs([]byte(c.out), c.runErr); err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err %v, want %q", err, c.want)
 			}
 		})
+	}
+}
+
+func TestAModuleMissingFromTheDownloadResultExits2(t *testing.T) {
+	var stderr bytes.Buffer
+	none := func([]moduleVersion) (map[moduleVersion]string, error) { return map[moduleVersion]string{}, nil }
+	code := run([]string{writeFile(t, "licenses.toml", `allow = ["MIT"]`), filepath.Join(t.TempDir(), "absent.txt")},
+		strings.NewReader(`{"Path": "example.com/a", "Version": "v1.0.0"}`), &stderr, none)
+	if code != 2 || !strings.Contains(stderr.String(), "no result for example.com/a@v1.0.0") {
+		t.Fatalf("code %d, stderr %q", code, stderr.String())
 	}
 }

@@ -5,9 +5,10 @@ from collections.abc import Iterable
 from pathlib import Path
 
 
-def merge(profiles: Iterable[list[str]], ignore: str) -> tuple[str, dict[str, int]]:
+def merge(profiles: Iterable[list[str]], ignore: str, module: str) -> tuple[str, dict[str, int]]:
     """One block per source range: set mode keeps covered by any, count modes add the hits."""
     pattern = re.compile(ignore)
+    prefix = module + "/"
     mode = ""
     blocks: dict[str, int] = {}
     for lines in profiles:
@@ -21,7 +22,9 @@ def merge(profiles: Iterable[list[str]], ignore: str) -> tuple[str, dict[str, in
                 continue
             block, _, count = line.strip().rpartition(" ")
             hits = int(count)
-            if not block or pattern.search(block.rpartition(":")[0]):
+            name = block.rpartition(":")[0]
+            # The module path is not the project's layout: github.com/acme/examples must not match examples/.
+            if not block or pattern.search(name.removeprefix(prefix)):
                 continue
             old = blocks.get(block, 0)
             blocks[block] = max(old, hits) if mode == "mode: set" else old + hits
@@ -29,13 +32,13 @@ def merge(profiles: Iterable[list[str]], ignore: str) -> tuple[str, dict[str, in
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 3:
-        print("usage: coverage_profile.py COVERAGE_TOML OUT PROFILE...", file=sys.stderr)
+    if len(argv) < 4:
+        print("usage: coverage_profile.py COVERAGE_TOML MODULE OUT PROFILE...", file=sys.stderr)
         return 2
     try:
         ignore = tomllib.loads(Path(argv[0]).read_text())["ignore-filename-regex"]
-        mode, blocks = merge((Path(p).read_text().splitlines() for p in argv[2:]), ignore)
-        Path(argv[1]).write_text("".join([f"{mode}\n", *(f"{b} {n}\n" for b, n in blocks.items())]))
+        mode, blocks = merge((Path(p).read_text().splitlines() for p in argv[3:]), ignore, argv[1])
+        Path(argv[2]).write_text("".join([f"{mode}\n", *(f"{b} {n}\n" for b, n in blocks.items())]))
     except (OSError, ValueError, KeyError, tomllib.TOMLDecodeError) as error:
         print(f"coverage_profile: {error!r}", file=sys.stderr)
         return 2

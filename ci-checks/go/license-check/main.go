@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -22,8 +23,8 @@ import (
 	"github.com/google/licenseclassifier/v2/assets"
 )
 
-// download returns the directory holding the hash-verified source of path@version.
-type download func(path, version string) (string, error)
+// download returns, for each module, the directory holding its hash-verified source.
+type download func(modules []moduleVersion) (map[moduleVersion]string, error)
 
 type moduleVersion struct {
 	Path    string
@@ -76,14 +77,24 @@ func check(configPath, exceptionsPath string, stdin io.Reader, fetch download) (
 	if err != nil {
 		return nil, err
 	}
-	var denied []string
+	var checked []moduleVersion
 	for _, m := range modules {
-		if exceptions[m.Path] {
-			continue
+		if !exceptions[m.Path] {
+			checked = append(checked, m)
 		}
-		dir, err := fetch(m.Path, m.Version)
-		if err != nil {
-			return nil, fmt.Errorf("go mod download %s@%s: %w", m.Path, m.Version, err)
+	}
+	if len(checked) == 0 {
+		return nil, nil
+	}
+	dirs, err := fetch(checked)
+	if err != nil {
+		return nil, fmt.Errorf("go mod download: %w", err)
+	}
+	var denied []string
+	for _, m := range checked {
+		dir, ok := dirs[m]
+		if !ok {
+			return nil, fmt.Errorf("go mod download: no result for %s@%s", m.Path, m.Version)
 		}
 		names, err := licensesIn(dir)
 		if err != nil {
@@ -240,34 +251,44 @@ func permitted(names []string, allowed map[string]bool) bool {
 	return true
 }
 
-func goModDownload(path, version string) (string, error) {
-	cmd := exec.Command("go", "mod", "download", "-json", path+"@"+version)
+// goModDownload fetches every module in one go command, which downloads them concurrently.
+func goModDownload(modules []moduleVersion) (map[moduleVersion]string, error) {
+	args := []string{"mod", "download", "-json"}
+	for _, m := range modules {
+		args = append(args, m.Path+"@"+m.Version)
+	}
+	cmd := exec.Command("go", args...)
 	cmd.Stderr = os.Stderr
 	out, err := cmd.Output()
-	return downloadedDir(out, err)
+	return downloadedDirs(out, err)
 }
 
-// downloadedDir reads the Dir of a `go mod download -json` result; on failure
-// go reports the reason in the Error field, which says more than the exit status.
-func downloadedDir(out []byte, runErr error) (string, error) {
-	var result struct {
-		Dir   string
-		Error string
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		if runErr != nil {
-			return "", runErr
+// downloadedDirs reads the Dir of each `go mod download -json` result; on failure
+// go reports the reason in a result's Error field, which says more than the exit status.
+func downloadedDirs(out []byte, runErr error) (map[moduleVersion]string, error) {
+	dirs := map[moduleVersion]string{}
+	decoder := json.NewDecoder(bytes.NewReader(out))
+	for decoder.More() {
+		var result struct {
+			Path, Version, Dir, Error string
 		}
-		return "", fmt.Errorf("unreadable output: %w", err)
-	}
-	if result.Error != "" {
-		return "", errors.New(result.Error)
+		if err := decoder.Decode(&result); err != nil {
+			if runErr != nil {
+				return nil, runErr
+			}
+			return nil, fmt.Errorf("unreadable output: %w", err)
+		}
+		module := result.Path + "@" + result.Version
+		switch {
+		case result.Error != "":
+			return nil, fmt.Errorf("%s: %s", module, result.Error)
+		case result.Dir == "":
+			return nil, fmt.Errorf("%s: no Dir in output", module)
+		}
+		dirs[moduleVersion{result.Path, result.Version}] = result.Dir
 	}
 	if runErr != nil {
-		return "", runErr
+		return nil, runErr
 	}
-	if result.Dir == "" {
-		return "", errors.New("no Dir in output")
-	}
-	return result.Dir, nil
+	return dirs, nil
 }

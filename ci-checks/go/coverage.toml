@@ -1,1 +1,1 @@
-ignore-filename-regex = '(^|/)(testdata|examples?)/|_test\.go$'
+ignore-filename-regex = '(^|/)(testdata|generated)/|_test\.go$|\.pb(\.gw)?\.go$'

@@ -36,6 +36,7 @@ NON_SPACE = re.compile(r"\S")
 
 
 # go list -m -json prints indented objects one after another, not one per line.
+# diff_filter.py has its own copy: both scripts run standalone, from their own directories.
 def json_stream(text: str) -> Iterator[Any]:
     decoder, at = json.JSONDecoder(), 0
     while start := NON_SPACE.search(text, at):

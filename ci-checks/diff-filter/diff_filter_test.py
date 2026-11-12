@@ -287,6 +287,11 @@ class Parsers(unittest.TestCase):
             with self.subTest(out):
                 self.assertEqual(parse("golangci", out), set())
 
+    def test_go_vet_position_without_a_column(self):
+        # Go drops a zero column, e.g. after a //line directive from goyacc.
+        out = json.dumps({"example.com/m": {"printf": [{"posn": "/repo/parser.y:12", "message": "bad"}]}})
+        self.assertEqual(parse("go-vet", out), {Finding(ROOT / "parser.y", 12, "printf: bad")})
+
     def test_go_vet_reads_the_object_stream(self):
         diagnostic = {"posn": "/repo/a/a.go:5:24", "end": "/repo/a/a.go:5:27", "message": "bad"}
         out = (

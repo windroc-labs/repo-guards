@@ -254,6 +254,7 @@ NON_SPACE = re.compile(r"\S")
 
 
 # go vet -json prints indented JSON objects one after another, not one per line.
+# dependency_allowlist.py has its own copy: both scripts run standalone, from their own directories.
 def json_stream(out: str) -> Iterator[Any]:
     decoder, at = json.JSONDecoder(), 0
     while start := NON_SPACE.search(out, at):
@@ -261,7 +262,7 @@ def json_stream(out: str) -> Iterator[Any]:
         yield value
 
 
-GO_POSITION = re.compile(r"(.+):(\d+):\d+")
+GO_POSITION = re.compile(r"(.+?):(\d+)(?::\d+)?")
 
 
 def parse_go_vet(out: str) -> Iterator[Finding]:

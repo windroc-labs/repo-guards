@@ -2,7 +2,7 @@
 
 [`ci-checks`](../README.md) 语言级各工具的 Go 配置，由 reusable workflow [`go.yml`](../../.github/workflows/go.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
-Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
+Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。`go.mod` 的 `ignore` 指令（Go 1.25 起）让 `./...` 跳过目录，`go.yml` 各步就都不查那里，所以算行内豁免，`go.mod` 进 CODEOWNERS（见 [CODEOWNERS](../README.md#codeowners)）。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
 
 工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译。
 
@@ -98,7 +98,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 | 文件 | 作用 |
 |---|---|
-| [`coverage.toml`](coverage.toml) | `ignore-filename-regex`：排除 `testdata/`、`example/`、`examples/` 和 `*_test.go`（`go.yml` 用它删掉覆盖率数据里匹配的文件） |
+| [`coverage.toml`](coverage.toml) | `ignore-filename-regex`：排除 `*_test.go`、`testdata/`，以及生成文件 `generated/`、`*.pb.go`、`*.pb.gw.go`（同 Python 的 `*_pb2.py`、TypeScript 的 `generated/`）。只拿文件在模块里的路径去比，模块路径本身不算。`go.yml` 用它删掉覆盖率数据里匹配的文件 |
 
 `go.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 `go test -vet=off -coverpkg=./... -coverprofile`，加上 `unit-tests` 选的参数；[`coverage-profile/coverage_profile.py`](coverage-profile/coverage_profile.py)（只用标准库）把各测试程序（分片时各片）的 profile 里同一块代码合并成一条（`set` 模式取有没有执行，计数模式相加），删掉匹配 `ignore-filename-regex` 的文件（测试：在该目录跑 `python3 -m unittest coverage_profile_test`），用 gocover-cobertura 转成 Cobertura 报告。不用 `-test.gocoverdir`：没有测试程序链接到的包（如只有 `main` 的包）不会进它的数据，分母就漏了。`-coverpkg=./...` 让模块里每个包都进分母，没有测试的包算 0%，被别的包的测试执行到的代码也算覆盖；`-vet=off`：vet 的问题由 Type check 步管，不让 Coverage 失败。Coverage gate 判定，门槛同其他语言（80%、90%）；`go test` 不量分支，报告里没有分支，总覆盖率和改动行都只算行。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。
 

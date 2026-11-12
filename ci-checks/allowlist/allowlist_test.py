@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,6 +15,7 @@ from allowlist import (
     main,
     normalize_git,
     pep503,
+    read_package_lock,
     read_requirements,
     read_uv_lock,
     violations,
@@ -407,6 +409,148 @@ class Cli(unittest.TestCase):
             self.assertEqual(
                 self.run_main(["env", "python", "--allowlist", str(Path(tmp, "none.toml"))]),
                 (0, "", ""),
+            )
+
+
+PACKAGE_LOCK = {
+    "name": "app",
+    "lockfileVersion": 3,
+    "packages": {
+        "": {"name": "app", "version": "1.0.0", "workspaces": ["packages/*"]},
+        "node_modules/left-pad": {
+            "version": "1.3.0",
+            "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+        },
+        "node_modules/@scope/private": {
+            "version": "2.0.0",
+            "resolved": "https://npm.example.org/@scope/private/-/private-2.0.0.tgz",
+        },
+        "node_modules/somepkg": {
+            "version": "4.0.0",
+            "resolved": "git+ssh://git@git.example.org/example/somepkg.git#0123",
+        },
+        "node_modules/alias": {
+            "name": "real-name",
+            "version": "1.0.0",
+            "resolved": "https://registry.npmjs.org/real-name/-/real-name-1.0.0.tgz",
+        },
+        "node_modules/left-pad/node_modules/nested": {
+            "version": "0.1.0",
+            "resolved": "https://registry.npmjs.org/nested/-/nested-0.1.0.tgz",
+        },
+        "node_modules/member": {"resolved": "packages/member", "link": True},
+        "packages/member": {"name": "member", "version": "0.1.0"},
+        "node_modules/vendored": {"version": "1.0.0", "resolved": "file:vendor/vendored-1.0.0.tgz"},
+        "node_modules/bundled": {"version": "1.0.0", "inBundle": True},
+    },
+}
+
+
+class Npm(unittest.TestCase):
+    def run_main(self, argv: list[str]) -> tuple[int, str, str]:
+        out, err = StringIO(), StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = main(argv)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_package_lock_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp, "package-lock.json")
+            lock.write_text(json.dumps(PACKAGE_LOCK))
+            locked = read_package_lock(lock)
+        self.assertEqual(
+            locked,
+            [
+                Locked(
+                    "left-pad",
+                    "1.3.0",
+                    "registry",
+                    "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
+                ),
+                Locked(
+                    "@scope/private",
+                    "2.0.0",
+                    "registry",
+                    "https://npm.example.org/@scope/private/-/private-2.0.0.tgz",
+                ),
+                Locked(
+                    "somepkg",
+                    "4.0.0",
+                    "git",
+                    "git+ssh://git@git.example.org/example/somepkg.git#0123",
+                ),
+                Locked(
+                    "real-name",
+                    "1.0.0",
+                    "registry",
+                    "https://registry.npmjs.org/real-name/-/real-name-1.0.0.tgz",
+                ),
+                Locked(
+                    "nested",
+                    "0.1.0",
+                    "registry",
+                    "https://registry.npmjs.org/nested/-/nested-0.1.0.tgz",
+                ),
+                Locked("member", "", "local", ""),
+                Locked("member", "0.1.0", "local", ""),
+                Locked("vendored", "1.0.0", "local", ""),
+                Locked("bundled", "1.0.0", "local", ""),
+            ],
+        )
+
+    def test_lockfile_v1_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp, "package-lock.json")
+            lock.write_text(json.dumps({"lockfileVersion": 1, "dependencies": {}}))
+            code, _, err = self.run_main(
+                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+            )
+        self.assertEqual(code, 2)
+        self.assertIn("lockfileVersion", err)
+
+    def test_check_npm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            lock = Path(tmp, "package-lock.json")
+            lock.write_text(json.dumps(PACKAGE_LOCK))
+            code, _, err = self.run_main(
+                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+            )
+            self.assertEqual(code, 1)
+            self.assertIn("@scope/private@2.0.0: registry https://npm.example.org/", err)
+            self.assertIn("somepkg@4.0.0: git source", err)
+            self.assertIn("add https://git.example.org/example/somepkg to sources.allow-git", err)
+            Path(tmp, "a.toml").write_text(
+                '[sources]\nallow-git = ["https://git.example.org/example/somepkg"]\nallow-registry = ["https://npm.example.org"]\n'
+            )
+            code, _, err = self.run_main(
+                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+            )
+        self.assertEqual((code, err), (0, ""))
+
+    def test_env_npm(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.toml").write_text(
+                '[bans.build]\nallow-build-scripts = ["esbuild", "@scope/native@1.2.3"]\n'
+                '[sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
+            )
+            self.assertEqual(
+                self.run_main(["env", "npm", "--allowlist", str(Path(tmp, "a.toml"))]),
+                (0, "npm_config_allow_git=all\nALLOW_BUILD=esbuild @scope/native@1.2.3\n", ""),
+            )
+            self.assertEqual(
+                self.run_main(["env", "npm", "--allowlist", str(Path(tmp, "none.toml"))]),
+                (0, "", ""),
+            )
+
+    def test_licenses_lists_each_exception(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.toml").write_text(
+                '[[licenses.exceptions]]\ncrate = "pkg"\nallow = ["MPL-2.0", "Unlicense"]\n'
+                '[[licenses.exceptions]]\nname = "@scope/other"\nversion = "1.0.0"\nallow = ["CC0-1.0"]\n'
+            )
+            self.assertEqual(
+                self.run_main(["licenses", "--allowlist", str(Path(tmp, "a.toml"))]),
+                (0, "pkg\tMPL-2.0;Unlicense\n@scope/other@1.0.0\tCC0-1.0\n", ""),
             )
 
 

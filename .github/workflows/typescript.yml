@@ -15,6 +15,10 @@ on:
         description: knip project globs as JSON; a trailing ! marks shipped code, which coverage also measures
         type: string
         default: '["src/**/*.ts!"]'
+      deny-allowlist:
+        description: The repo's dependency allowlist, the same file for every language; may be absent
+        type: string
+        default: .github/checks/deny-allowlist.toml
       license-exceptions:
         description: The repo's packages exempt from the license check, one per line; may be absent
         type: string
@@ -32,6 +36,7 @@ jobs:
     timeout-minutes: 40
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
+      ALLOWLIST: ${{ github.workspace }}/repo/${{ inputs.deny-allowlist }}
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
     defaults: &defaults
       run:
@@ -73,6 +78,10 @@ jobs:
           while IFS='=' read -r key value; do
             [[ -n "$key" ]] && echo "npm_config_${key//-/_}=$value" >> "$GITHUB_ENV"
           done < "$RG/typescript/.npmrc"
+      # Listed git sources open npm's allow-git (Dependency rules checks each URL); listed build entries get their scripts run.
+      - &allowlist
+        name: Apply the dependency allowlist
+        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" env npm --allowlist "$ALLOWLIST" >> "$GITHUB_ENV"
       - name: Install the shared tools
         run: |
           mkdir -p "$RUNNER_TEMP/ts-tools"
@@ -82,7 +91,12 @@ jobs:
           echo "$RUNNER_TEMP/ts-tools/node_modules/.bin" >> "$GITHUB_PATH"
       - &install-project
         name: Install the project
-        run: npm ci --no-audit --no-fund
+        run: |
+          npm ci --no-audit --no-fund
+          if [[ -n ${ALLOW_BUILD:-} ]]; then
+            read -ra allowed <<< "$ALLOW_BUILD"
+            npm_config_ignore_scripts=false npm rebuild "${allowed[@]}"
+          fi
       - name: Format
         if: ${{ !cancelled() }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- prettier --list-different --config "$RG/typescript/.prettierrc.json" .
@@ -102,6 +116,9 @@ jobs:
         run: |
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format knip -- knip --production --config "$RUNNER_TEMP/knip.json" --reporter json
+      - name: Dependency rules
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check npm --allowlist "$ALLOWLIST" --lock package-lock.json
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit
@@ -111,11 +128,24 @@ jobs:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
           allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).allow.join(";"))' "$RG/typescript/comment-budget" "$RG/licenses.toml")
-          args=(--onlyAllow "$allowed" --excludePrivatePackages)
+          excluded=()
           if [[ -f "$EXCEPTIONS" ]]; then
-            args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
+            mapfile -t excluded < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true)
           fi
-          license-checker-rseidelsohn "${args[@]}"
+          # Each licenses.exceptions entry: its package is checked alone, against the shared list plus its own licenses.
+          exceptions=$(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" licenses --allowlist "$ALLOWLIST")
+          failed=0
+          while IFS=$'\t' read -r spec extra; do
+            [[ -n $spec ]] || continue
+            excluded+=("$spec")
+            license-checker-rseidelsohn --includePackages "$spec" --onlyAllow "$allowed;$extra" --excludePrivatePackages || failed=1
+          done <<< "$exceptions"
+          args=(--onlyAllow "$allowed" --excludePrivatePackages)
+          if (( ${#excluded[@]} )); then
+            args+=(--excludePackages "$(IFS=';'; echo "${excluded[*]}")")
+          fi
+          license-checker-rseidelsohn "${args[@]}" || failed=1
+          exit "$failed"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -124,6 +154,7 @@ jobs:
     timeout-minutes: 40
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
+      ALLOWLIST: ${{ github.workspace }}/repo/${{ inputs.deny-allowlist }}
       BASE_REF: *base-ref
     defaults: *defaults
     steps:
@@ -132,6 +163,7 @@ jobs:
       - *install-uv
       - *install-node
       - *npmrc
+      - *allowlist
       - name: Install diff-cover
         working-directory: ${{ runner.temp }}
         run: |

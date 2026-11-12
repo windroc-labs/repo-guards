@@ -1,4 +1,5 @@
 import argparse
+import json
 import re
 import sys
 import tomllib
@@ -197,6 +198,7 @@ def violations(
 
 
 PYPI = "https://pypi.org/simple"
+NPM = "https://registry.npmjs.org"
 REQUIREMENT = re.compile(
     r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([^\s;\\]+)|@\s*(\S+))"
 )
@@ -243,6 +245,28 @@ def read_requirements(path: Path) -> list[Locked]:
     return locked
 
 
+def read_package_lock(path: Path) -> list[Locked]:
+    packages = json.loads(path.read_text()).get("packages")
+    if not isinstance(packages, dict):
+        raise Error(f"{path}: no packages map; npm 7 or later writes it (lockfileVersion 2 or 3)")
+    locked: list[Locked] = []
+    for key, entry in packages.items():
+        if not key:
+            continue
+        name = entry.get("name") or key.rpartition("node_modules/")[2]
+        resolved: str = (
+            "" if entry.get("link") or "node_modules/" not in key else entry.get("resolved", "")
+        )
+        if resolved.startswith(("git+", "git:", "github:")):
+            kind = "git"
+        elif resolved.startswith(("https:", "http:")):
+            kind = "registry"
+        else:
+            kind, resolved = "local", ""
+        locked.append(Locked(name, entry.get("version", ""), kind, resolved))
+    return locked
+
+
 def report(found: list[str]) -> int:
     for line in found:
         print(line, file=sys.stderr)
@@ -262,6 +286,25 @@ def check_python(args: argparse.Namespace) -> int:
         pins = (f"{p.name}=={p.version}\n" for p in locked if p.kind == "registry" and p.version)
         args.pinned_out.write_text("".join(pins))
     return report(violations(locked, allowlist, PYPI, pep503))
+
+
+def check_npm(args: argparse.Namespace) -> int:
+    return report(violations(read_package_lock(args.lock), load(args.allowlist), NPM))
+
+
+def env_npm(args: argparse.Namespace) -> int:
+    allowlist = load(args.allowlist)
+    if allowlist.git:
+        print("npm_config_allow_git=all")
+    if allowlist.build:
+        print(f"ALLOW_BUILD={' '.join(dict.fromkeys(str(spec) for spec in allowlist.build))}")
+    return 0
+
+
+def licenses(args: argparse.Namespace) -> int:
+    for exception in load(args.allowlist).licenses:
+        print(f"{exception.spec}\t{';'.join(exception.allow)}")
+    return 0
 
 
 def env_python(args: argparse.Namespace) -> int:
@@ -290,12 +333,24 @@ def parser() -> argparse.ArgumentParser:
         "--pinned-out", type=Path, help="write the registry packages as name==version lines"
     )
     python.set_defaults(run=check_python)
+    npm = check.add_parser("npm")
+    npm.add_argument("--allowlist", type=Path, required=True)
+    npm.add_argument("--lock", type=Path, required=True, help="package-lock.json")
+    npm.set_defaults(run=check_npm)
     env = commands.add_parser("env", help="print KEY=VALUE lines for $GITHUB_ENV").add_subparsers(
         required=True
     )
     env_py = env.add_parser("python")
     env_py.add_argument("--allowlist", type=Path, required=True)
     env_py.set_defaults(run=env_python)
+    env_js = env.add_parser("npm")
+    env_js.add_argument("--allowlist", type=Path, required=True)
+    env_js.set_defaults(run=env_npm)
+    license_lines = commands.add_parser(
+        "licenses", help="print each licenses.exceptions entry as SPEC<TAB>LICENSE;..."
+    )
+    license_lines.add_argument("--allowlist", type=Path, required=True)
+    license_lines.set_defaults(run=licenses)
     return root
 
 
@@ -305,8 +360,7 @@ def main(argv: list[str]) -> int:
         return args.run(args)
     except (
         OSError,
-        UnicodeDecodeError,
-        tomllib.TOMLDecodeError,
+        ValueError,
         KeyError,
         TypeError,
         AttributeError,

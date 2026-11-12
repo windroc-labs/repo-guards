@@ -16,6 +16,9 @@ allow = [
     "PSF-2.0",
 ]
 
+# Packages the Python, TypeScript and Go license checks skip, as the lockfile names them; Go module paths match exactly.
+exceptions = []
+
 [python-classifiers]
 "MIT License" = "MIT"
 "MIT No Attribution License (MIT-0)" = "MIT-0"

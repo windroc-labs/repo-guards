@@ -78,12 +78,16 @@ def main(argv: list[str]) -> int:
         return 2
     read = READERS[argv[0]]
     allowlist, base, head = (Path(a) for a in argv[1:])
-    config = tomllib.loads(allowlist.read_text()) if allowlist.exists() else {}
-    allowed = {entry(item) for item in config.get("bans", {}).get("allow", [])}
+    try:
+        config = tomllib.loads(allowlist.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        print(f"dependency_allowlist: {allowlist}: {error}", file=sys.stderr)
+        return 2
+    allowed = {entry(item) for item in config.get("allow", [])}
     new = read(head.read_text()) - (read(base.read_text()) if base.exists() else set())
     denied = sorted(p for p in new if (p[0], None) not in allowed and p not in allowed)
     for package in denied:
-        print(f'{spec(package)}: not in bans.allow of {allowlist}; add "{spec(package)}"')
+        print(f'{spec(package)}: not in allow of {allowlist}; add "{spec(package)}"')
     return 1 if denied else 0
 
 

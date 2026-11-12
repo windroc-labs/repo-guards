@@ -42,13 +42,13 @@
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.pyright]` 开 `typeCheckingMode = "strict"`，再加 strict 不开的 `reportUnnecessaryTypeIgnoreComment`，对应 [类型检查规则](../README.md#类型检查规则) 的 Python 一列；`[dependency-groups]` 的 `dev` 组同样固定 pyright 的版本 |
 
-`python.yml` 的 Type check 步只查 `source-dirs` 输入里的目录（默认 `src`）。`# type: ignore`、`# pyright: ignore` 算行内豁免。
+`python.yml` 的 Type check 步只查 `source-dirs`（覆盖文件里 `[project."<working-directory>"]` 节的 `source-dirs`，默认 `["src"]`，见[覆盖默认配置](../README.md#覆盖默认配置)） 里的目录。`# type: ignore`、`# pyright: ignore` 算行内豁免。
 
 ## 死代码（vulture、deptry）
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，没有就读 `requirements.txt`，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs`代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，没有就读 `requirements.txt`，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
 
 `python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 
@@ -66,7 +66,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 | 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
 | 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
 
-`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己（有 `pyproject.toml` 时）和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
+`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己（有 `pyproject.toml` 时）和[`licenses.toml`](../licenses.toml) 的 `exceptions`（默认空，项目在覆盖文件的 `["ci-checks/licenses.toml"]` 节写，见[覆盖默认配置](../README.md#覆盖默认配置)）里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
 
 ## 依赖白名单和漏洞（pylock.toml）
 
@@ -76,7 +76,7 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs`代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
 `python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile 或 `requirements.txt`，没装 pytest 的 `requirements.txt` 项目用共用 `dev` 组固定的版本；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
 

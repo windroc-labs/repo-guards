@@ -1,12 +1,8 @@
 import { readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { createRequire } from "node:module";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const USAGE = `usage: workflow-config.ts tsc-flags TSCONFIG
-       workflow-config.ts knip-config KNIP_JSON ENTRY_JSON PROJECT_JSON OUTPUT
-       workflow-config.ts license-allow RESOLVE_DIR LICENSES_TOML
-       workflow-config.ts coverage-include PROJECT_JSON
+       workflow-config.ts coverage-include KNIP_JSON
        workflow-config.ts coverage-exclude COVERAGE_JSON
        workflow-config.ts replace FILE FROM TO`;
 
@@ -23,27 +19,10 @@ const COMMANDS: Record<string, [number, (args: string[], out: Out) => void]> = {
       for (const [key, value] of Object.entries(readJson(tsconfig!).compilerOptions)) out(`--${key}\n${value}`);
     },
   ],
-  "knip-config": [
-    4,
-    ([src, entry, project, output]) => {
-      const config = readJson(src!);
-      config.entry = JSON.parse(entry!);
-      config.project = JSON.parse(project!);
-      writeFileSync(output!, JSON.stringify(config));
-    },
-  ],
-  // smol-toml is installed with the comment-budget checker, so it is loaded from there.
-  "license-allow": [
-    2,
-    ([resolveDir, licenses], out) => {
-      const { parse } = createRequire(path.join(path.resolve(resolveDir!), "noop.js"))("smol-toml");
-      out(parse(readFileSync(licenses!, "utf8")).allow.join(";"));
-    },
-  ],
   "coverage-include": [
     1,
-    ([project], out) => {
-      for (const glob of JSON.parse(project!)) if (glob.endsWith("!")) out(glob.slice(0, -1));
+    ([knip], out) => {
+      for (const glob of readJson(knip!).project) if (glob.endsWith("!")) out(glob.slice(0, -1));
     },
   ],
   "coverage-exclude": [

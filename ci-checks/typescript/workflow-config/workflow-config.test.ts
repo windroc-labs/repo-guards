@@ -43,43 +43,19 @@ describe("tsc-flags", () => {
   });
 });
 
-describe("knip-config", () => {
-  it("writes the shared config with entry and project replaced", (t) => {
-    const dir = tempDir(t);
-    const src = write(dir, "knip.json", '{"$schema": "s", "entry": ["a!"], "project": ["b!"], "ignore": ["x"]}');
-    const out = path.join(dir, "out.json");
-    assert.deepEqual(lines(["knip-config", src, '["src/main.ts!"]', '["src/**/*.ts!", "lib/*.ts"]', out]), []);
-    assert.equal(
-      readFileSync(out, "utf8"),
-      '{"$schema":"s","entry":["src/main.ts!"],"project":["src/**/*.ts!","lib/*.ts"],"ignore":["x"]}',
-    );
-  });
-});
-
-describe("license-allow", () => {
-  it("joins licenses.toml's allow list with semicolons, parsed by the smol-toml found from a directory", (t) => {
-    const dir = tempDir(t);
-    write(dir, "tools/node_modules/smol-toml/package.json", '{"name": "smol-toml", "main": "index.js"}');
-    write(
-      dir,
-      "tools/node_modules/smol-toml/index.js",
-      'exports.parse = (text) => ({ allow: text.trim().split("\\n") });',
-    );
-    const toml = write(dir, "licenses.toml", "MIT\nApache-2.0\nISC\n");
-    assert.deepEqual(lines(["license-allow", path.join(dir, "tools"), toml]), ["MIT;Apache-2.0;ISC"]);
-  });
-});
-
 describe("coverage-include", () => {
-  it("prints the globs marked with a trailing ! without the mark", () => {
-    assert.deepEqual(lines(["coverage-include", '["src/**/*.ts!", "scripts/*.ts", "lib/**!"]']), [
-      "src/**/*.ts",
-      "lib/**",
-    ]);
+  it("prints the knip.json project globs marked with a trailing ! without the mark", (t) => {
+    const file = write(tempDir(t), "knip.json", '{"entry": ["x!"], "project": ["src/**/*.ts!", "scripts/*.ts", "lib/**!"]}');
+    assert.deepEqual(lines(["coverage-include", file]), ["src/**/*.ts", "lib/**"]);
   });
 
-  it("prints nothing when no glob is marked", () => {
-    assert.deepEqual(lines(["coverage-include", '["src/**/*.ts"]']), []);
+  it("prints nothing when no glob is marked", (t) => {
+    const file = write(tempDir(t), "knip.json", '{"project": ["src/**/*.ts"]}');
+    assert.deepEqual(lines(["coverage-include", file]), []);
+  });
+
+  it("reads the shared knip.json", () => {
+    assert.deepEqual(lines(["coverage-include", path.join(SHARED, "knip.json")]), ["src/**/*.ts"]);
   });
 });
 
@@ -111,13 +87,13 @@ describe("replace", () => {
 describe("command line", () => {
   const cli = (...args: string[]) => spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8" });
 
-  it("prints results on stdout and exits 0", () => {
-    const result = cli("coverage-include", '["a!", "b!"]');
+  it("prints results on stdout and exits 0", (t) => {
+    const result = cli("coverage-include", write(tempDir(t), "knip.json", '{"project": ["a!", "b!"]}'));
     assert.deepEqual([result.status, result.stdout, result.stderr], [0, "a\nb\n", ""]);
   });
 
   it("rejects an unknown command or a wrong argument count with exit code 2", () => {
-    for (const args of [[], ["nope"], ["tsc-flags"], ["replace", "f", "a"]]) {
+    for (const args of [[], ["nope"], ["tsc-flags"], ["replace", "f", "a"], ["license-allow", "d", "f"], ["knip-config", "a", "b", "c", "d"]]) {
       const result = cli(...args);
       assert.equal(result.status, 2, args.join(" "));
       assert.match(result.stderr, /usage:/);

@@ -6,6 +6,7 @@ yanked = "deny"
 
 [licenses]
 private = { ignore = true }
+exceptions = []
 
 [bans.build]
 allow-build-scripts = [

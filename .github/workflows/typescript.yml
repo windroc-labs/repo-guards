@@ -19,6 +19,10 @@ on:
         description: The repo's packages exempt from the license check, one per line; may be absent
         type: string
         default: .github/checks/license-exceptions.txt
+      deny-allowlist:
+        description: The repo's dependency allowlist (shared by rust.yml, python.yml and typescript.yml); may be absent
+        type: string
+        default: .github/checks/deny-allowlist.toml
       coverage-shards:
         description: Coverage shards as a JSON list, each one parallel job's vitest file filters, space-separated; [] measures in one job
         type: string
@@ -109,6 +113,15 @@ jobs:
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit
+      - name: Dependency allowlist
+        if: ${{ !cancelled() }}
+        env:
+          ALLOWLIST: ${{ inputs.deny-allowlist }}
+        run: |
+          base=$(git merge-base "$BASE_REF" HEAD)
+          # No lock at the merge-base (a new project) leaves the base file absent: every package counts as new.
+          if git cat-file -e "$base:package-lock.json" 2>/dev/null; then git show "$base:package-lock.json" > "$RUNNER_TEMP/base-package-lock.json"; fi
+          uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" npm "$ALLOWLIST" "$RUNNER_TEMP/base-package-lock.json" package-lock.json
       - name: Licenses
         if: ${{ !cancelled() }}
         env:

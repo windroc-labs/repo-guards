@@ -33,6 +33,9 @@ def merge(shared: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
             raise Error(f"{name}: not an allowlist key; allowed: {', '.join(sorted('.'.join(k) for k in ALLOWLIST_KEYS))}")
         if not isinstance(value, list):
             raise Error(f"{name}: must be an array")
+        # cargo-deny bans every crate a non-empty bans.allow leaves out; dependency_allowlist.py checks PR changes instead.
+        if path == ("bans", "allow"):
+            continue
         node = shared
         for key in path[:-1]:
             node = node.setdefault(key, {})

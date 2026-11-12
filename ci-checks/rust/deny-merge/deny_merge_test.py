@@ -33,11 +33,11 @@ class Merging(unittest.TestCase):
             code = main([str(SHARED), str(LICENSES), str(project_path), str(out)])
             return code, tomllib.loads(out.read_text()) if out.exists() else None
 
-    def test_allowlists_are_appended_and_shared_rules_kept(self):
+    def test_allowlists_are_appended_bans_allow_left_out_and_shared_rules_kept(self):
         code, merged = self.run_main(PROJECT)
         self.assertEqual(code, 0)
         shared = tomllib.loads(SHARED.read_text())
-        self.assertEqual(merged["bans"]["allow"], ["serde@1.0.228", {"name": "libc"}])
+        self.assertNotIn("allow", merged["bans"])
         self.assertEqual(
             merged["bans"]["build"]["allow-build-scripts"], shared["bans"]["build"]["allow-build-scripts"] + ["libc"]
         )

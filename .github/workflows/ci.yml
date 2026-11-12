@@ -107,7 +107,7 @@ jobs:
           for scan in files commits messages; do
             case $scan in
               files) target=(dir "$GITHUB_WORKSPACE/tree") ;;
-              commits) target=(git "$GITHUB_WORKSPACE/tree/repo/.git" --log-opts "$RANGE") ;;
+              commits) target=(git "$GITHUB_WORKSPACE/tree/repo/.git" --log-opts "--diff-merges=first-parent $RANGE") ;;
               messages) target=(dir "$messages") ;;
             esac
             code=0

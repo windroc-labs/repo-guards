@@ -91,7 +91,7 @@ jobs:
               (cd "$1" && uv export -q --frozen --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
               cp "$1/uv.lock" "$2/dependencies.toml"
             elif [[ -f $1/requirements.txt ]]; then
-              (cd "$1" && uv pip compile -q requirements.txt --python "$python" --format pylock.toml -o "$2/pylock.toml")
+              (cd "$1" && uv pip compile -q requirements.txt --universal --python "$python" --format pylock.toml -o "$2/pylock.toml")
               cp "$2/pylock.toml" "$2/dependencies.toml"
             fi
           }

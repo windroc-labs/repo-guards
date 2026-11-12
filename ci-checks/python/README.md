@@ -70,7 +70,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 
 ## 依赖白名单和漏洞（pylock.toml）
 
-Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.toml`：有 `uv.lock` 用 `uv export --frozen --format pylock.toml --no-emit-workspace`（默认的 extra 和依赖组，不含项目自己）；没有就用 `uv pip compile requirements.txt --format pylock.toml`，按 `.venv` 的 Python 解析。merge-base 的副本照样导出。Vulnerabilities 步用 `pip-audit --locked` 查 PR 这份。Dependency allowlist 步比的是 `uv.lock` 本身（全部 extra 和依赖组都在里面，`editable`、`virtual` 来源的项目自己不算），没有 `uv.lock` 就比 `pylock.toml`，规则见[依赖白名单](../README.md#依赖白名单)。`requirements.txt` 里没写死的版本按当时的 index 解析，两份同时解析，所以多出来的包只来自 PR 的改动。
+Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.toml`：有 `uv.lock` 用 `uv export --frozen --format pylock.toml --no-emit-workspace`（默认的 extra 和依赖组，不含项目自己）；没有就用 `uv pip compile requirements.txt --universal --format pylock.toml`，按所有平台解析（`.venv` 的 Python 是最低版本），带平台条件的依赖（如 `foo; sys_platform == "win32"`）也在里面。merge-base 的副本照样导出。Vulnerabilities 步用 `pip-audit --locked` 查 PR 这份。Dependency allowlist 步比的是 `uv.lock` 本身（全部 extra 和依赖组都在里面，`editable`、`virtual` 来源的项目自己不算），没有 `uv.lock` 就比 `pylock.toml`，规则见[依赖白名单](../README.md#依赖白名单)。`requirements.txt` 里没写死的版本按当时的 index 解析，两份同时解析，所以多出来的包只来自 PR 的改动。
 
 ## 覆盖率（coverage.py）
 

@@ -73,7 +73,6 @@ repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的
 |---|---|
 | `tsc-flags TSCONFIG` | 每个 `compilerOptions` 打印两行：`--<键>` 和值；Type check 步用它 |
 | `knip-config KNIP_JSON ENTRY_JSON PROJECT_JSON OUTPUT` | 把 `knip.json` 的 `entry`、`project` 换成两个 JSON 数组后写到 `OUTPUT`；Dead code and unused dependencies 步用它 |
-| `license-allow RESOLVE_DIR LICENSES_TOML` | 打印 `allow`，`;` 分开；TOML 用 `RESOLVE_DIR` 里装好的 smol-toml 解析（Licenses 步给 `comment-budget/`） |
 | `coverage-include PROJECT_JSON`、`coverage-exclude COVERAGE_JSON` | 每行打印一个 glob：前者是结尾带 `!` 的（去掉 `!`），后者是 `exclude`；Coverage 步用它们 |
 | `replace FILE FROM TO` | 把文件里所有 `FROM` 换成 `TO`；Coverage 步用它换 blob 报告里的检出根目录 |
 | 退出码 | 0 成功；2 出错（参数不对、文件缺失、JSON 不对） |

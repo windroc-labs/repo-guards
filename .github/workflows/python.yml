@@ -15,10 +15,6 @@ on:
         description: Shipped source directories, space-separated, for pyright, vulture and coverage
         type: string
         default: src
-      license-exceptions:
-        description: The repo's packages exempt from the license check, one name per line; may be absent
-        type: string
-        default: .github/checks/license-exceptions.txt
       coverage-shards:
         description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; [] measures in one job
         type: string
@@ -134,17 +130,14 @@ jobs:
         run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" python "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/pylock-base/dependencies.toml" "$RUNNER_TEMP/pylock-head/dependencies.toml"
       - name: Licenses
         if: ${{ !cancelled() }}
-        env:
-          EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
           # The project itself is installed only from a pyproject.toml.
           ignore=()
           if [[ -f pyproject.toml ]]; then
             ignore+=("$(python3 "$RG/python/pyproject-config/pyproject_config.py" project-name pyproject.toml)")
           fi
-          if [[ -f "$GITHUB_WORKSPACE/repo/$EXCEPTIONS" ]]; then
-            mapfile -t -O "${#ignore[@]}" ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
-          fi
+          python3 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions > "$RUNNER_TEMP/license-exceptions.txt"
+          mapfile -t -O "${#ignore[@]}" ignore < "$RUNNER_TEMP/license-exceptions.txt"
           args=(--python .venv/bin/python --from all --format json)
           if (( ${#ignore[@]} )); then args+=(--ignore-packages "${ignore[@]}"); fi
           pip-licenses "${args[@]}" > "$RUNNER_TEMP/licenses.json"

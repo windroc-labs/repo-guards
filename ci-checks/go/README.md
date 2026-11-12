@@ -87,12 +87,12 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 |---|---|
 | 输入 | stdin：`go list -mod=readonly -m -json all` 的输出。主模块不算；`replace` 成别的模块的，按替换后的路径和版本算；`replace` 成本地目录的算项目自己的，不查 |
 | 判定 | 每个模块用 `go mod download -json` 取模块缓存里校验过 hash 的源码，只看模块根目录下文件名以 `LICENSE`、`LICENCE`、`COPYING` 开头的文件（不分大小写；`NOTICE` 不看），用 licenseclassifier 认许可证。至少认出一个，且认出的每个都在 `allow` 里（不分大小写，空白归一）才过 |
-| 例外 | `license-exceptions` 每行一个模块路径，按替换后的路径完全相同才跳过：路径只是以例外开头的模块照样查，例外写被 `replace` 掉的旧路径也不跳过 |
-| 参数 | `license-check LICENSES_TOML EXCEPTIONS_FILE`；例外文件可以不存在 |
+| 例外 | [`licenses.toml`](../licenses.toml) 的 `exceptions`（默认空，项目在覆盖文件的 `["ci-checks/licenses.toml"]` 节写，见[覆盖默认配置](../README.md#覆盖默认配置)），每条一个模块路径，按替换后的路径完全相同才跳过：路径只是以例外开头的模块照样查，例外写被 `replace` 掉的旧路径也不跳过 |
+| 参数 | `license-check LICENSES_TOML EXCEPTIONS_FILE`；例外文件每行一个模块路径，可以不存在。`go.yml` 用 `config_overrides.py get` 把 `exceptions` 写成这个文件 |
 | 输出 | 不过的模块逐个列出（`<路径>@<版本>: <认出的许可证或 no license found>`），最后给个数。退出码：0 通过，1 有模块不过，2 出错（输入读不懂、下载失败、配置不对） |
 | 测试 | 在该目录跑 `go test ./...` |
 
-`go.yml` 的 Licenses 步把 build list 交给本程序。查的是 build list，不是某个平台的 import 图，所以只在某个平台或 build tag 下用到的依赖也查；不读 `vendor/` 里的许可证文件。没有行内豁免，例外只写在 `license-exceptions` 里。
+`go.yml` 的 Licenses 步把 build list 交给本程序。查的是 build list，不是某个平台的 import 图，所以只在某个平台或 build tag 下用到的依赖也查；不读 `vendor/` 里的许可证文件。没有行内豁免，例外只写在 `licenses.toml` 的 `exceptions` 里。
 
 ## 覆盖率（go test）
 

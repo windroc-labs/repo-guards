@@ -66,7 +66,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 | 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
 | 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
 
-`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己（有 `pyproject.toml` 时）和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
+`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己（有 `pyproject.toml` 时）和[`licenses.toml`](../licenses.toml) 的 `exceptions`（默认空，项目在覆盖文件的 `["ci-checks/licenses.toml"]` 节写，见[覆盖默认配置](../README.md#覆盖默认配置)）里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
 
 ## 依赖白名单和漏洞（pylock.toml）
 

@@ -56,20 +56,6 @@ describe("knip-config", () => {
   });
 });
 
-describe("license-allow", () => {
-  it("joins licenses.toml's allow list with semicolons, parsed by the smol-toml found from a directory", (t) => {
-    const dir = tempDir(t);
-    write(dir, "tools/node_modules/smol-toml/package.json", '{"name": "smol-toml", "main": "index.js"}');
-    write(
-      dir,
-      "tools/node_modules/smol-toml/index.js",
-      'exports.parse = (text) => ({ allow: text.trim().split("\\n") });',
-    );
-    const toml = write(dir, "licenses.toml", "MIT\nApache-2.0\nISC\n");
-    assert.deepEqual(lines(["license-allow", path.join(dir, "tools"), toml]), ["MIT;Apache-2.0;ISC"]);
-  });
-});
-
 describe("coverage-include", () => {
   it("prints the globs marked with a trailing ! without the mark", () => {
     assert.deepEqual(lines(["coverage-include", '["src/**/*.ts!", "scripts/*.ts", "lib/**!"]']), [
@@ -117,7 +103,7 @@ describe("command line", () => {
   });
 
   it("rejects an unknown command or a wrong argument count with exit code 2", () => {
-    for (const args of [[], ["nope"], ["tsc-flags"], ["replace", "f", "a"]]) {
+    for (const args of [[], ["nope"], ["tsc-flags"], ["replace", "f", "a"], ["license-allow", "d", "f"]]) {
       const result = cli(...args);
       assert.equal(result.status, 2, args.join(" "));
       assert.match(result.stderr, /usage:/);

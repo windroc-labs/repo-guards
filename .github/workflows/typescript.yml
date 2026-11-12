@@ -15,10 +15,6 @@ on:
         description: knip project globs as JSON; a trailing ! marks shipped code, which coverage also measures
         type: string
         default: '["src/**/*.ts!"]'
-      license-exceptions:
-        description: The repo's packages exempt from the license check, one per line; may be absent
-        type: string
-        default: .github/checks/license-exceptions.txt
       coverage-shards:
         description: Coverage shards as a JSON list, each one parallel job's vitest file filters, space-separated; [] measures in one job
         type: string
@@ -121,14 +117,11 @@ jobs:
           uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" npm "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/base-package-lock.json" package-lock.json
       - name: Licenses
         if: ${{ !cancelled() }}
-        env:
-          EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
-          allowed=$(node "$RG/typescript/workflow-config/workflow-config.ts" license-allow "$RG/typescript/comment-budget" "$RG/licenses.toml")
+          allowed=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" allow | paste -sd ';' -)
+          exceptions=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions | paste -sd ';' -)
           args=(--onlyAllow "$allowed" --excludePrivatePackages)
-          if [[ -f "$EXCEPTIONS" ]]; then
-            args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
-          fi
+          if [[ -n $exceptions ]]; then args+=(--excludePackages "$exceptions"); fi
           license-checker-rseidelsohn "${args[@]}"
 
   # The coverage steps run the PR's tests, so they get a job of their own.

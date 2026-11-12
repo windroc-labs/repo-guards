@@ -11,10 +11,6 @@ on:
         description: The module's directory (where go.mod is), relative to the repo root
         type: string
         default: .
-      license-exceptions:
-        description: The repo's modules exempt from the license check, one module path per line; may be absent
-        type: string
-        default: .github/checks/license-exceptions.txt
       unit-tests:
         description: The go test arguments coverage measures, space-separated and passed as-is, package patterns and optionally -run=<regex>
         type: string
@@ -156,11 +152,10 @@ jobs:
           uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" go "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/go-modules-base.json" "$RUNNER_TEMP/go-modules-head.json"
       - name: Licenses
         if: ${{ !cancelled() }}
-        env:
-          EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
           set -o pipefail
-          go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$EXCEPTIONS"
+          uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions > "$RUNNER_TEMP/license-exceptions.txt"
+          go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$RUNNER_TEMP/license-exceptions.txt"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:

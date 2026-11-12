@@ -1,6 +1,6 @@
 # Rust 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。
+[`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（rustfmt）
 
@@ -83,4 +83,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 
 覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，只收 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`；别的写法（包括 `--tests` 和会放宽锁住配置的 cargo-llvm-cov 选项）让 Coverage 步失败。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。
 
-集成测试由 Coverage 之前的 Tests 步跑：`cargo test --workspace --all-features --locked --tests`，用 [`rust-toolchain.toml`](rust-toolchain.toml) 的工具链跑全部测试目标（单元测试和 `tests/` 下的目标），不量覆盖率，有测试失败这一步就失败。doctest 和 example 不跑，和改动前的 Coverage 步一样。
+单元测试只在 Coverage 步里跑一遍，有测试失败这一步就失败；`rust.yml` 不另跑测试。集成测试（没写进 `unit-tests` 的测试目标）、doctest 和 example 由 repo 自己的 job 跑。

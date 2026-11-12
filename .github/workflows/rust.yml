@@ -179,8 +179,8 @@ jobs:
             for profile in "$profiles"/*.profraw; do cp "$profile" "$RUNNER_TEMP/shard/$SHARD-${profile##*/}"; done
             # Artifact names are unique per run, and a caller may call this workflow once per working-directory;
             # / is not allowed in a name, so it is escaped the way URLs escape it.
-            project=${PROJECT//%/%25}
-            echo "artifact=rust-coverage-${project//\//%2F}.shard" >> "$GITHUB_OUTPUT"
+            project=${PROJECT//\%/%25}
+            echo "artifact=rust-coverage-${project//\//%2F}%.shard" >> "$GITHUB_OUTPUT"
             exit
           fi
           # --list builds every shard's test binaries and runs no test.

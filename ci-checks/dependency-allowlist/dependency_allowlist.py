@@ -1,7 +1,8 @@
 import json
+import re
 import sys
 import tomllib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +32,28 @@ def npm(text: str) -> set[Package]:
     }
 
 
-READERS: dict[str, Callable[[str], set[Package]]] = {"cargo": cargo, "python": python, "npm": npm}
+NON_SPACE = re.compile(r"\S")
+
+
+# go list -m -json prints indented objects one after another, not one per line.
+def json_stream(text: str) -> Iterator[Any]:
+    decoder, at = json.JSONDecoder(), 0
+    while start := NON_SPACE.search(text, at):
+        value, at = decoder.raw_decode(text, start.start())
+        yield value
+
+
+def go(text: str) -> set[Package]:
+    # The build list of go list -m -json all; a Replace without a Version is a local directory, the project's own.
+    modules: set[Package] = set()
+    for module in json_stream(text):
+        target = module.get("Replace", module)
+        if not module.get("Main") and ("Replace" not in module or "Version" in target):
+            modules.add((target["Path"], target["Version"]))
+    return modules
+
+
+READERS: dict[str, Callable[[str], set[Package]]] = {"cargo": cargo, "python": python, "npm": npm, "go": go}
 
 
 def entry(item: str | dict[str, str]) -> tuple[str, str | None]:

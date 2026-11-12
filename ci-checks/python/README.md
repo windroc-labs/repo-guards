@@ -1,6 +1,6 @@
 # Python 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境，项目本身用 `uv sync --locked` 只装 wheel。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境。项目有 `uv.lock` 就用 `uv sync --locked` 装；没有就用 `uv venv` 建 `.venv`，再 `uv pip install -r requirements.txt`，不要求项目有 `pyproject.toml`。之后各步都用这个 `.venv`。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（ruff format）
 
@@ -48,7 +48,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，没有就读 `requirements.txt`，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
 
 `python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 
@@ -66,7 +66,11 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 | 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
 | 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
 
-`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
+`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己（有 `pyproject.toml` 时）和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
+
+## 依赖白名单和漏洞（pylock.toml）
+
+Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.toml`：有 `uv.lock` 用 `uv export --frozen --format pylock.toml --no-emit-workspace`（默认的 extra 和依赖组，不含项目自己）；没有就用 `uv pip compile requirements.txt --universal --format pylock.toml`，按所有平台解析（`.venv` 的 Python 是最低版本），带平台条件的依赖（如 `foo; sys_platform == "win32"`）也在里面。merge-base 的副本照样导出。Vulnerabilities 步用 `pip-audit --locked` 查 PR 这份。Dependency allowlist 步比的是 `uv.lock` 本身（全部 extra 和依赖组都在里面，`editable`、`virtual` 来源的项目自己不算），没有 `uv.lock` 就比 `pylock.toml`，规则见[依赖白名单](../README.md#依赖白名单)。`requirements.txt` 里没写死的版本按当时的 index 解析，两份同时解析，所以多出来的包只来自 PR 的改动。
 
 ## 覆盖率（coverage.py）
 
@@ -74,4 +78,4 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
-`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
+`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile 或 `requirements.txt`，没装 pytest 的 `requirements.txt` 项目用共用 `dev` 组固定的版本；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。

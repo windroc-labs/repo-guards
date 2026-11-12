@@ -7,9 +7,6 @@ yanked = "deny"
 [licenses]
 private = { ignore = true }
 
-[bans]
-allow = []
-
 [bans.build]
 allow-build-scripts = [
     "ahash",

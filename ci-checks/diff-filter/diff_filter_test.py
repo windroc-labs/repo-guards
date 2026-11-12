@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from diff_filter import FORMATS, Finding, main, parse_diff, split
 
@@ -22,13 +23,9 @@ def git(cwd: Path, *args: str) -> None:
     )
 
 
-def parse(name: str, out: str, cwd: Path = ROOT) -> set[Finding]:
-    old = Path.cwd
-    Path.cwd = staticmethod(lambda: cwd)  # type: ignore[method-assign]
-    try:
+def parse(name: str, out: str) -> set[Finding]:
+    with mock.patch.object(Path, "cwd", return_value=ROOT):
         return set(FORMATS[name].parse(out))
-    finally:
-        Path.cwd = old  # type: ignore[method-assign]
 
 
 class Diff(unittest.TestCase):
@@ -46,6 +43,10 @@ class Diff(unittest.TestCase):
     def test_deletion_only_file_has_no_lines(self):
         diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -3 +2,0 @@\n-x\n"
         self.assertEqual(parse_diff(diff, ROOT), {ROOT / "a.py": frozenset()})
+
+    def test_pure_rename_counts_as_changed_file(self):
+        diff = "diff --git a/old.py b/new.py\nsimilarity index 100%\nrename from old.py\nrename to new.py\n"
+        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "new.py": frozenset()})
 
     def test_quoted_and_spaced_names(self):
         diff = (
@@ -174,6 +175,13 @@ class Parsers(unittest.TestCase):
             {Finding(ROOT / "src/m.py", 4, "unused function 'old' (60% confidence)")},
         )
 
+    def test_vulture_path_splits_at_the_last_line_number(self):
+        out = "pkg/x:1: y.py:7: unused import 'os' (90% confidence)\n"
+        self.assertEqual(
+            parse("vulture", out),
+            {Finding(ROOT / "pkg/x:1: y.py", 7, "unused import 'os' (90% confidence)")},
+        )
+
     def test_tsc_continuations_and_global_errors(self):
         out = (
             "src/index.ts(2,7): error TS2322: Type 'string' is not assignable to type 'number'.\n"
@@ -219,7 +227,7 @@ class Parsers(unittest.TestCase):
             parse("knip", out),
             {
                 Finding(ROOT / "src/orphan.ts", None, "files: src/orphan.ts"),
-                Finding(ROOT / "package.json", 6, "dependencies: left-pad"),
+                Finding(ROOT / "package.json", 6, "dependencies: left-pad", anywhere=True),
                 Finding(ROOT / "src/lib.ts", 2, "exports: oldUnused"),
                 Finding(ROOT / "src/lib.ts", 1, "duplicates: a"),
                 Finding(ROOT / "src/lib.ts", 1, "duplicates: b"),
@@ -263,8 +271,10 @@ class Split(unittest.TestCase):
             {new_line, old_line, touched_file, deletion_only_file, untouched, project, anywhere},
             changes,
         )
-        self.assertEqual(set(failing), {new_line, touched_file, project, anywhere})
-        self.assertEqual(set(rest), {old_line, deletion_only_file, untouched})
+        self.assertEqual(
+            set(failing), {new_line, touched_file, deletion_only_file, project, anywhere}
+        )
+        self.assertEqual(set(rest), {old_line, untouched})
 
 
 class Main(unittest.TestCase):
@@ -283,6 +293,12 @@ class Main(unittest.TestCase):
         old_cwd = os.getcwd()
         os.chdir(self.repo / "src")
         self.addCleanup(os.chdir, old_cwd)
+
+    def commit(self, files: dict[str, bytes]) -> None:
+        for name, content in files.items():
+            (self.repo / name).write_bytes(content)
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-qm", "more")
 
     def run_main(
         self, stdout: str, code: int = 0, fmt: str = "vulture", base: str = "main"
@@ -312,6 +328,61 @@ class Main(unittest.TestCase):
 
     def test_file_level_finding_in_changed_file_fails(self):
         self.assertEqual(self.run_main("m.py\n", 1, "paths")[0], 1)
+
+    def test_file_changed_only_by_deleting_lines_fails_file_level(self):
+        git(self.repo, "checkout", "-q", "main")
+        git(self.repo, "checkout", "-qb", "deletion")
+        self.commit({"src/m.py": b"old = 1\n"})
+        self.assertEqual(self.run_main("m.py\n", 1, "paths")[0], 1)
+
+    def test_findings_listed_once(self):
+        row = "m.py:3: unused variable 'new' (60% confidence)\n"
+        _, out = self.run_main(row + row, 3)
+        self.assertEqual(out.count("src/m.py:3: unused variable 'new'"), 1)
+
+    def test_binary_attribute_does_not_hide_changed_lines(self):
+        self.commit(
+            {
+                ".gitattributes": b"*.py -diff\n",
+                "src/m.py": b"old = 1\nkeep = 2\nnew = 3\nmore = 4\n",
+            }
+        )
+        self.assertEqual(
+            self.run_main("m.py:4: unused variable 'more' (60% confidence)\n", 3)[0], 1
+        )
+
+    def test_non_utf8_change_is_read(self):
+        self.commit({"src/data.txt": b"caf\xe9\n"})
+        self.assertEqual(self.run_main("")[0], 0)
+        self.assertEqual(self.run_main("data.txt\n", 1, "paths")[0], 1)
+
+    def test_cargo_error_in_untouched_line_fails(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "error",
+                "message": "mismatched types",
+                "code": {"code": "E0308"},
+                "spans": [{"file_name": "m.py", "line_start": 1, "is_primary": True}],
+            },
+        }
+        self.assertEqual(self.run_main(json.dumps(message) + "\n", 101, "cargo")[0], 1)
+
+    def test_cargo_failure_without_an_error_is_a_tool_failure(self):
+        message = {
+            "reason": "compiler-message",
+            "message": {
+                "level": "warning",
+                "message": "unused variable",
+                "code": {"code": "unused_variables"},
+                "spans": [{"file_name": "m.py", "line_start": 1, "is_primary": True}],
+            },
+        }
+        finished = {"reason": "build-finished", "success": False}
+        out = json.dumps(message) + "\n" + json.dumps(finished) + "\n"
+        code, text = self.run_main(out, 101, "cargo")
+        self.assertEqual(code, 2)
+        self.assertIn("reported no error", text)
 
     def test_project_level_finding_fails(self):
         self.assertEqual(self.run_main("error TS5023: Unknown compiler option.\n", 1, "tsc")[0], 1)

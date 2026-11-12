@@ -114,6 +114,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
           coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
           read -ra dirs <<< "$SOURCE_DIRS"
@@ -126,7 +127,7 @@ jobs:
           # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
           git worktree prune
           git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
-          measure "$RUNNER_TEMP/base" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
+          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
           measure . "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}

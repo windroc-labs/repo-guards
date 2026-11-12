@@ -1,5 +1,5 @@
 {
-  "format": ["rust", "python", "typescript", "tsx", "javascript", "jsx"],
+  "format": ["rust", "python", "typescript", "tsx", "javascript", "jsx", "go"],
   "minTokens": 50,
   "minLines": 5,
   "ignore": [
@@ -8,6 +8,7 @@
     "**/test_*.py",
     "**/*_test.py",
     "**/*_test.rs",
+    "**/*_test.go",
     "**/*.test.*",
     "**/*.spec.*"
   ],

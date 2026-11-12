@@ -1,0 +1,163 @@
+version: "2"
+
+run:
+  relative-path-mode: wd
+
+linters:
+  default: none
+  enable:
+    - depguard
+    - errcheck
+    - forbidigo
+    - forcetypeassert
+    - funlen
+    - gocritic
+    - gocyclo
+    - godox
+    - gosec
+    - modernize
+    - nilerr
+    - predeclared
+    - revive
+    - staticcheck
+    - testifylint
+    - unconvert
+
+  settings:
+    depguard:
+      rules:
+        unsafe:
+          files:
+            - $all
+          deny:
+            - pkg: unsafe
+              desc: unsafe and cgo need an allowlist entry
+        user:
+          files:
+            - $all
+          deny:
+            - pkg: os/user
+              desc: do not branch on the current user
+        mock:
+          files:
+            - "!$test"
+          deny:
+            - pkg: github.com/stretchr/testify/mock
+              desc: mock libraries belong in tests
+            - pkg: github.com/golang/mock
+              desc: mock libraries belong in tests
+            - pkg: go.uber.org/mock
+              desc: mock libraries belong in tests
+
+    errcheck:
+      check-blank: true
+
+    forbidigo:
+      analyze-types: true
+      forbid:
+        - pattern: ^time\.Sleep$
+          pkg: ^time$
+          msg: "tests: do not sleep"
+        - pattern: ^time\.(Now|Since|Until)$
+          pkg: ^time$
+          msg: "tests: do not read the real time"
+        - pattern: ^recover$
+          msg: "tests: do not recover from panics"
+        - pattern: ^rand\.Seed$
+          pkg: ^math/rand$
+          msg: "tests: do not set a random seed inline"
+        - pattern: ^quick\.Config$
+          pkg: ^testing/quick$
+          msg: "tests: do not override sample counts or seeds inline"
+        - pattern: ^panic$
+          msg: "release code: do not panic"
+        - pattern: ^fmt\.Print(f|ln)?$
+          pkg: ^fmt$
+          msg: "release code: no debug output"
+        - pattern: ^print(ln)?$
+          msg: "release code: no debug output"
+        - pattern: ^testing\.Testing$
+          pkg: ^testing$
+          msg: "release code: do not detect the test framework"
+        - pattern: ^runtime\.Breakpoint$
+          pkg: ^runtime$
+          msg: do not leave a debugger breakpoint
+        - pattern: ^plugin\.Open$
+          pkg: ^plugin$
+          msg: dynamic loading needs an allowlist entry
+        - pattern: ^os\.(Hostname|Getwd)$
+          pkg: ^os$
+          msg: do not branch on the host or working directory
+
+    funlen:
+      lines: 100
+      statements: 50
+
+    gocritic:
+      disable-all: true
+      enabled-checks:
+        - commentedOutCode
+
+    gocyclo:
+      min-complexity: 20
+
+    godox:
+      keywords:
+        - TODO
+        - FIXME
+        - XXX
+
+    gosec:
+      includes:
+        - G115
+      config:
+        global:
+          nosec: true
+
+    revive:
+      severity: error
+      rules:
+        - name: unused-parameter
+        - name: argument-limit
+          arguments: [5]
+        - name: max-control-nesting
+          arguments: [5]
+        - name: file-length-limit
+          arguments:
+            - max: 300
+        - name: var-naming
+        - name: flag-parameter
+
+    staticcheck:
+      checks:
+        - SA*
+        - S1*
+
+    testifylint:
+      disable-all: true
+      enable:
+        - float-compare
+        - useless-assert
+
+  exclusions:
+    generated: strict
+    rules:
+      - path-except: _test\.go$
+        linters:
+          - forbidigo
+        text: "tests: "
+      - path: _test\.go$
+        linters:
+          - forbidigo
+        text: "release code: "
+      - path: _test\.go$
+        linters:
+          - forcetypeassert
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  uniq-by-line: false
+
+output:
+  show-stats: false

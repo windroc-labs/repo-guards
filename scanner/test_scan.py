@@ -163,6 +163,13 @@ class FileContent(unittest.TestCase):
             "a${X=" + HOME_BOB + "}",
             "x${X:-C:" + "\\" + "Users" + "\\" + "bob}",
             "xC:" + "\\" + "Users" + "\\" + "bob",
+            "cd /" + 'home/"bob"/proj',
+            "/" + "home/'bob'",
+            "/" + "home/`bob`",
+            "/" + "home/<bob/x",
+            "/" + "home/<user>bob",
+            "/" + "home//bob",
+            "C:" + "\\" * 3 + "Users" + "\\" + "bob",
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
@@ -175,7 +182,7 @@ class FileContent(unittest.TestCase):
         self.assertIn("file #%d path: local-path" % repo.index("web" + HOME_BOB + ".md"), out)
 
     def test_placeholder_names_never_hit(self):
-        for text in ("src/home/<user>/x", "https://host/Users/<name>", "-I/home/<user>", "C:" + "\\" + "Users" + "\\" + "<user>"):
+        for text in ("src/home/<user>/x", "https://host/Users/<name>", "-I/home/<user>", "`/Users/<user>`", "/home/<your name>/x", "C:" + "\\" + "Users" + "\\" + "<user>"):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
                 self.assertEqual(repo.scan(*PUBLIC)[0], 0)

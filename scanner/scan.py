@@ -80,8 +80,9 @@ CHECKS = {
     )
 }
 
+# A home directory, then any name except a complete <placeholder> (FR-10).
 LOCAL_PATH = re.compile(
-    r"(?:/(?:Users|home)/|[A-Za-z]:(?:\\{1,2}|/)(?i:users)(?:\\{1,2}|/))(?=[^\s<>/\\\"'`)\]])"
+    r"(?:/(?:Users|home)|[A-Za-z]:[\\/]+(?i:users))[\\/]+(?!<[^<>/\\\n]+>(?!\w))(?=[^\s/\\])"
 )
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"

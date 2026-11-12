@@ -78,17 +78,52 @@ def row(
 
 
 class Report(unittest.TestCase):
-    def run_main(self, rows: list[dict[str, str]], config: Path | None = None) -> tuple[int, str]:
+    def run_main(
+        self, rows: list[dict[str, str]], config: Path | None = None, allowlist: str | None = None
+    ) -> tuple[int, str]:
         with tempfile.TemporaryDirectory() as tmp:
             if config is None:
                 config = Path(tmp, "licenses.toml")
                 config.write_text(CONFIG)
             report = Path(tmp, "licenses.json")
             report.write_text(json.dumps(rows))
+            args = [str(config), str(report)]
+            if allowlist is not None:
+                Path(tmp, "allowlist.toml").write_text(allowlist)
+                args.append(str(Path(tmp, "allowlist.toml")))
             err = StringIO()
             with redirect_stderr(err):
-                code = main([str(config), str(report)])
+                code = main(args)
             return code, err.getvalue()
+
+    def test_allowlist_exception_adds_licenses_for_its_package_only(self):
+        allowlist = '[[licenses.exceptions]]\ncrate = "Some_Pkg"\nallow = ["MPL-2.0"]\n'
+        rows = [row("some-pkg", expression="MPL-2.0"), row("other", expression="MPL-2.0")]
+        code, err = self.run_main(rows, allowlist=allowlist)
+        self.assertEqual(code, 1)
+        self.assertNotIn("some-pkg", err)
+        self.assertIn("other 1.0: MPL-2.0", err)
+
+    def test_allowlist_exception_with_a_version_matches_that_version_only(self):
+        rows = [row("pkg", expression="MPL-2.0")]
+        self.assertEqual(
+            self.run_main(rows, allowlist='[[licenses.exceptions]]\ncrate = "pkg@1.0"\nallow = ["MPL-2.0"]\n'),
+            (0, ""),
+        )
+        self.assertEqual(
+            self.run_main(rows, allowlist='[[licenses.exceptions]]\ncrate = "pkg@2.0"\nallow = ["MPL-2.0"]\n')[0], 1
+        )
+
+    def test_absent_allowlist_file_adds_nothing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp, "licenses.json")
+            report.write_text(json.dumps([row("x", expression="MIT")]))
+            self.assertEqual(main([str(LICENSES), str(report), str(Path(tmp, "missing.toml"))]), 0)
+
+    def test_bad_allowlist_is_an_error(self):
+        code, err = self.run_main([row("x", expression="MIT")], allowlist="[bans]\nallow = 1\n")
+        self.assertEqual(code, 2)
+        self.assertIn("bans.allow", err)
 
     def test_live_or_expression_passes_the_shared_allowlist(self):
         packaging = row(

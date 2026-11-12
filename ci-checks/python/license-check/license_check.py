@@ -5,6 +5,9 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "allowlist"))
+from allowlist import Allowlist, Error, load, pep503
+
 UNKNOWN = "UNKNOWN"
 
 
@@ -80,28 +83,41 @@ def alternatives(row: dict[str, str]) -> list[str]:
     return [row["License-Metadata"]]
 
 
+def exceptions(allowlist: Allowlist, row: dict[str, str]) -> set[str]:
+    """Licenses the project allowlist's licenses.exceptions add for this package."""
+    return {
+        name
+        for exception in allowlist.licenses
+        if exception.spec.matches(row["Name"], row["Version"], pep503)
+        for name in exception.allow
+    }
+
+
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: license_check.py LICENSES_TOML PIP_LICENSES_JSON", file=sys.stderr)
+    if len(argv) not in (2, 3):
+        print("usage: license_check.py LICENSES_TOML PIP_LICENSES_JSON [ALLOWLIST_TOML]", file=sys.stderr)
         return 2
     try:
         config = tomllib.loads(Path(argv[0]).read_text())
         allowed: set[str] = set(config["allow"])
         classifiers: dict[str, str] = config["python-classifiers"]
         rows: list[dict[str, str]] = json.loads(Path(argv[1]).read_text())
+        allowlist = load(Path(argv[2])) if len(argv) == 3 else Allowlist()
         denied: list[str] = []
         for row in rows:
             licenses = alternatives(row)
-            if not any(satisfied(classifiers.get(alt, alt), allowed) for alt in licenses):
+            permitted = allowed | exceptions(allowlist, row)
+            if not any(satisfied(classifiers.get(alt, alt), permitted) for alt in licenses):
                 denied.append(f"{row['Name']} {row['Version']}: {'; '.join(licenses)}")
-    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, Error) as error:
         print(f"license_check: {error!r}", file=sys.stderr)
         return 2
     for line in denied:
         print(line, file=sys.stderr)
     if denied:
         print(
-            f"{len(denied)} package(s) under a license that licenses.toml's allow does not satisfy",
+            f"{len(denied)} package(s) under a license that licenses.toml's allow does not satisfy;"
+            " a licenses.exceptions entry in the project allowlist admits one",
             file=sys.stderr,
         )
         return 1

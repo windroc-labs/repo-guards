@@ -1,4 +1,6 @@
+import argparse
 import re
+import sys
 import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterable, Iterator
@@ -175,7 +177,7 @@ def violations(
     for package in locked:
         if package.kind == "local":
             continue
-        label = f"{package.name}@{package.version}"
+        label = f"{package.name}@{package.version}" if package.version else package.name
         if package.kind == "registry" and not under(
             package.url, [default_registry, *allowlist.registries]
         ):
@@ -192,3 +194,127 @@ def violations(
         ):
             found.append(f'{label}: not in bans.allow; add "{label}"')
     return found
+
+
+PYPI = "https://pypi.org/simple"
+REQUIREMENT = re.compile(
+    r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([^\s;\\]+)|@\s*(\S+))"
+)
+
+
+def read_uv_lock(path: Path) -> list[Locked]:
+    locked: list[Locked] = []
+    for package in tomllib.loads(path.read_text()).get("package", []):
+        source: dict[str, str] = package.get("source", {})
+        kind = next((k for k in ("registry", "git", "url") if k in source), "local")
+        locked.append(
+            Locked(package["name"], package.get("version", ""), kind, source.get(kind, ""))
+        )
+    return locked
+
+
+def read_requirements(path: Path) -> list[Locked]:
+    """uv pip compile output with --emit-index-annotation: each registry package's index is its `# from` line."""
+    locked: list[Locked] = []
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if line.startswith("#"):
+            index = re.fullmatch(r"#\s*from\s+(\S+)", line)
+            if index and locked and locked[-1].kind == "registry" and not locked[-1].url:
+                locked[-1] = locked[-1]._replace(url=index.group(1))
+        elif line.startswith(("-e ", "--editable ")):
+            locked.append(Locked(Path(line.split(maxsplit=1)[1]).name, "", "local", ""))
+        elif line and not raw[0].isspace() and not line.startswith("-"):
+            match = REQUIREMENT.match(line)
+            if not match:
+                raise Error(f"{path}: cannot read requirement {line!r}")
+            name, version, url = match.groups()
+            if version:
+                locked.append(Locked(name, version, "registry", ""))
+            else:
+                kind = (
+                    "git"
+                    if url.startswith("git+")
+                    else "local"
+                    if url.startswith("file:")
+                    else "url"
+                )
+                locked.append(Locked(name, "", kind, "" if kind == "local" else url))
+    return locked
+
+
+def report(found: list[str]) -> int:
+    for line in found:
+        print(line, file=sys.stderr)
+    if found:
+        print(
+            f"{len(found)} problem(s); each line names the allowlist entry that admits the package",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def check_python(args: argparse.Namespace) -> int:
+    allowlist = load(args.allowlist)
+    locked = read_uv_lock(args.uv_lock) if args.uv_lock else read_requirements(args.requirements)
+    if args.pinned_out:
+        pins = (f"{p.name}=={p.version}\n" for p in locked if p.kind == "registry" and p.version)
+        args.pinned_out.write_text("".join(pins))
+    return report(violations(locked, allowlist, PYPI, pep503))
+
+
+def env_python(args: argparse.Namespace) -> int:
+    names = dict.fromkeys(spec.name for spec in load(args.allowlist).build)
+    if names:
+        print(f"UV_NO_BINARY_PACKAGE={' '.join(names)}")
+    return 0
+
+
+def parser() -> argparse.ArgumentParser:
+    root = argparse.ArgumentParser(
+        prog="allowlist.py", description="Apply the project dependency allowlist."
+    )
+    commands = root.add_subparsers(required=True)
+    check = commands.add_parser(
+        "check", help="check locked packages against the dependency rules"
+    ).add_subparsers(required=True)
+    python = check.add_parser("python")
+    python.add_argument("--allowlist", type=Path, required=True)
+    lock = python.add_mutually_exclusive_group(required=True)
+    lock.add_argument("--uv-lock", type=Path)
+    lock.add_argument(
+        "--requirements", type=Path, help="uv pip compile output with --emit-index-annotation"
+    )
+    python.add_argument(
+        "--pinned-out", type=Path, help="write the registry packages as name==version lines"
+    )
+    python.set_defaults(run=check_python)
+    env = commands.add_parser("env", help="print KEY=VALUE lines for $GITHUB_ENV").add_subparsers(
+        required=True
+    )
+    env_py = env.add_parser("python")
+    env_py.add_argument("--allowlist", type=Path, required=True)
+    env_py.set_defaults(run=env_python)
+    return root
+
+
+def main(argv: list[str]) -> int:
+    args = parser().parse_args(argv)
+    try:
+        return args.run(args)
+    except (
+        OSError,
+        UnicodeDecodeError,
+        tomllib.TOMLDecodeError,
+        KeyError,
+        TypeError,
+        AttributeError,
+        Error,
+    ) as error:
+        print(f"allowlist: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

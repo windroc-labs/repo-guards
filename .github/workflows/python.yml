@@ -15,6 +15,10 @@ on:
         description: Shipped source directories, space-separated, for pyright, vulture and coverage
         type: string
         default: src
+      deny-allowlist:
+        description: The repo's dependency allowlist, the same file for every language; may be absent
+        type: string
+        default: .github/checks/deny-allowlist.toml
       license-exceptions:
         description: The repo's packages exempt from the license check, one name per line; may be absent
         type: string
@@ -34,6 +38,7 @@ jobs:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       SOURCE_DIRS: ${{ inputs.source-dirs }}
+      ALLOWLIST: ${{ github.workspace }}/repo/${{ inputs.deny-allowlist }}
       UV_NO_BUILD: "1"
     defaults: &defaults
       run:
@@ -62,6 +67,10 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      # The allowlist's build entries are the only packages uv may build from source.
+      - &allowlist
+        name: Apply the dependency allowlist
+        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" env python --allowlist "$ALLOWLIST" >> "$GITHUB_ENV"
       - name: Install the shared dev group
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
@@ -92,11 +101,13 @@ jobs:
         run: |
           deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
           uv run --locked --with "$deptry" deptry $SOURCE_DIRS
+      - name: Dependency rules
+        if: ${{ !cancelled() }}
+        run: python3 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST" --uv-lock uv.lock --pinned-out "$RUNNER_TEMP/pinned.txt"
+      # Only registry packages have advisories; Dependency rules lists them pinned.
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
-        run: |
-          uv export --locked --format requirements-txt --no-emit-workspace -o "$RUNNER_TEMP/requirements.txt"
-          pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --disable-pip --require-hashes
+        run: pip-audit --requirement "$RUNNER_TEMP/pinned.txt" --disable-pip --no-deps
       - name: Licenses
         if: ${{ !cancelled() }}
         env:
@@ -107,7 +118,7 @@ jobs:
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
           pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
-          python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
+          python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json" "$ALLOWLIST"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -118,12 +129,14 @@ jobs:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: *base-ref
       SOURCE_DIRS: ${{ inputs.source-dirs }}
+      ALLOWLIST: ${{ github.workspace }}/repo/${{ inputs.deny-allowlist }}
       UV_NO_BUILD: "1"
     defaults: *defaults
     steps:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *allowlist
       # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
       - name: Install Python 3.12
         run: |

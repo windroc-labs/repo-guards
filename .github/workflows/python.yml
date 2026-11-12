@@ -20,7 +20,7 @@ on:
         type: string
         default: .github/checks/license-exceptions.txt
       deny-allowlist:
-        description: The repo's dependency allowlist (shared by rust.yml, python.yml and typescript.yml); may be absent
+        description: The repo's dependency allowlist (shared by rust.yml, python.yml, typescript.yml and go.yml); may be absent
         type: string
         default: .github/checks/deny-allowlist.toml
       coverage-shards:

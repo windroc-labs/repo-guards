@@ -12,7 +12,7 @@ on:
         type: string
         default: .
       deny-allowlist:
-        description: The repo's dependency allowlist (shared by rust.yml, python.yml and typescript.yml), merged into the shared deny.toml
+        description: The repo's dependency allowlist (shared by rust.yml, python.yml, typescript.yml and go.yml), merged into the shared deny.toml
         type: string
         default: .github/checks/deny-allowlist.toml
       unit-tests:

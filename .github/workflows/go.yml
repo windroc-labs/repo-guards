@@ -1,0 +1,308 @@
+name: Go checks
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+      working-directory:
+        description: The module's directory (where go.mod is), relative to the repo root
+        type: string
+        default: .
+      deny-allowlist:
+        description: The repo's dependency allowlist (shared by rust.yml, python.yml, typescript.yml and go.yml); may be absent
+        type: string
+        default: .github/checks/deny-allowlist.toml
+      license-exceptions:
+        description: The repo's modules exempt from the license check, one module path per line; may be absent
+        type: string
+        default: .github/checks/license-exceptions.txt
+      unit-tests:
+        description: The go test arguments coverage measures, space-separated and passed as-is, package patterns and optionally -run=<regex>
+        type: string
+        default: ./...
+      coverage-shards:
+        description: Coverage shards as a JSON list, each one parallel job's unit-tests value, e.g. "./internal/... -run=^TestParse"; [] measures in one job
+        type: string
+        default: "[]"
+
+permissions:
+  contents: read
+
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
+# Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
+jobs:
+  checks:
+    name: Checks
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
+      # The pinned Go only, never the PR's go.work or a runner's user go env.
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      GOENV: "off"
+    defaults: &defaults
+      run:
+        shell: bash
+        working-directory: repo/${{ inputs.working-directory }}
+    steps:
+      - &checkout
+        name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - &install-uv
+        name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - &install-go
+        name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: repo-guards/ci-checks/go/.go-version
+          cache: false
+      # Fresh caches, so no module, build or lint result left on a self-hosted runner is trusted;
+      # job env cannot name the runner's temp directory.
+      - &go-caches
+        name: Use fresh Go caches
+        run: |
+          for cache in GOMODCACHE GOCACHE GOLANGCI_LINT_CACHE; do
+            echo "$cache=$RUNNER_TEMP/${cache,,}" >> "$GITHUB_ENV"
+          done
+      - name: Install Go tools
+        working-directory: ${{ runner.temp }}
+        run: |
+          export GOBIN=$RUNNER_TEMP/go-tools
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+          go install golang.org/x/tools/cmd/deadcode@v0.52.0
+          go build -C "$RG/go/comment-budget" -o "$GOBIN/comment-budget" .
+          go build -C "$RG/go/license-check" -o "$GOBIN/license-check" .
+          echo "$GOBIN" >> "$GITHUB_PATH"
+      - name: Format
+        if: ${{ !cancelled() }}
+        run: |
+          # The files go fmt ./... formats: every Go file of each package, all build tags and tests; go list skips vendor/ and testdata/.
+          template=
+          for list in GoFiles CgoFiles TestGoFiles XTestGoFiles IgnoredGoFiles InvalidGoFiles; do
+            template+="{{range .$list}}{{\$.Dir}}/{{.}}{{println}}{{end}}"
+          done
+          listed=$(go list -e -find -f "$template" ./...)
+          # gofmt without files would read stdin.
+          if [[ -z $listed ]]; then
+            echo "No Go files."
+            exit 0
+          fi
+          mapfile -t files <<< "$listed"
+          uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- gofmt -l "${files[@]}"
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- golangci-lint run --config "$RG/go/golangci.yml" --output.json.path stdout ./...
+      - name: Comment budget
+        if: ${{ !cancelled() }}
+        run: comment-budget --base "$BASE_REF" --config "$RG/go/comment-budget.toml"
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format go-vet -- go vet -json ./...
+      - name: Dead code
+        if: ${{ !cancelled() }}
+        run: |
+          # Without test files, so code only tests call counts as unused.
+          failed=0
+          uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- \
+            golangci-lint run --config "$RG/go/golangci.yml" --default=none --enable-only unused --tests=false --output.json.path stdout ./... || failed=1
+          # deadcode starts from main packages: a library-only module gets the unused check alone.
+          mains=$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...)
+          if [[ -n $mains ]]; then
+            uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format deadcode -- deadcode ./... || failed=1
+          fi
+          exit "$failed"
+      - name: Unused dependencies
+        if: ${{ !cancelled() }}
+        run: go mod tidy -diff
+      - name: Vulnerabilities
+        if: ${{ !cancelled() }}
+        run: govulncheck ./...
+      - name: Dependency allowlist
+        if: ${{ !cancelled() }}
+        env:
+          ALLOWLIST: ${{ inputs.deny-allowlist }}
+          PROJECT_DIR: ${{ inputs.working-directory }}
+        run: |
+          # The build list Go resolves from the module cache: complete below go 1.17 too, and never read from vendor/.
+          modules() { go list -mod=readonly -m -json all; }
+          modules > "$RUNNER_TEMP/go-modules-head.json"
+          git worktree prune
+          git worktree add -q --detach "$RUNNER_TEMP/allowlist-base" "$(git merge-base "$BASE_REF" HEAD)"
+          # No go.mod at the merge-base (a new module) leaves the base file absent: every module counts as new.
+          if [[ -f $RUNNER_TEMP/allowlist-base/$PROJECT_DIR/go.mod ]]; then
+            (cd "$RUNNER_TEMP/allowlist-base/$PROJECT_DIR" && modules) > "$RUNNER_TEMP/go-modules-base.json"
+          fi
+          uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" go "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/go-modules-base.json" "$RUNNER_TEMP/go-modules-head.json"
+      - name: Licenses
+        if: ${{ !cancelled() }}
+        env:
+          EXCEPTIONS: ${{ inputs.license-exceptions }}
+        run: |
+          set -o pipefail
+          go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$EXCEPTIONS"
+
+  # The coverage steps run the PR's tests, so they get a job of their own.
+  coverage:
+    name: Coverage
+    needs: coverage-shard
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      GOENV: "off"
+      MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
+      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
+      UNIT_TESTS: ${{ inputs.unit-tests }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-go
+      - *go-caches
+      - name: Install gocover-cobertura
+        working-directory: ${{ runner.temp }}
+        run: |
+          GOBIN=$RUNNER_TEMP/go-tools go install github.com/boumenot/gocover-cobertura@v1.5.0
+          echo "$RUNNER_TEMP/go-tools" >> "$GITHUB_PATH"
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
+      - name: Download shard data
+        if: ${{ needs.coverage-shard.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ needs.coverage-shard.outputs.artifact }}-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - &coverage
+        name: Coverage
+        id: coverage
+        if: ${{ !cancelled() }}
+        run: |
+          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
+            echo "::error::a coverage shard failed ($SHARDS_RESULT)"
+            exit 1
+          fi
+          # -coverpkg=./... counts every shipped package, also one only another package's tests run; vet is Type check's.
+          # A -coverprofile holds every such package, at 0 when no test binary links it (-test.gocoverdir data leaves those out).
+          if [[ $MODE == merge ]]; then
+            profiles=("$RUNNER_TEMP"/shards/*.out)
+          else
+            profiles=("$RUNNER_TEMP/coverage.out")
+            if [[ $MODE == shard ]]; then
+              mkdir -p "$RUNNER_TEMP/shard"
+              profiles=("$RUNNER_TEMP/shard/$SHARD.out")
+            fi
+            # -d '' reads past newlines, so a multi-line value is read whole; read then returns 1 at its end.
+            read -ra args -d '' <<< "$UNIT_TESTS" || true
+            go test -vet=off -coverpkg=./... -coverprofile="${profiles[0]}" "${args[@]}"
+          fi
+          if [[ $MODE == shard ]]; then
+            # Artifact names are unique per run, and a caller may call this workflow once per working-directory;
+            # / is not allowed in a name, so it is escaped the way URLs escape it.
+            project=${PROJECT//\%/%25}
+            echo "artifact=go-coverage-${project//\//%2F}%.shard" >> "$GITHUB_OUTPUT"
+            exit
+          fi
+          # Whole and merged profiles take one path: each test binary's blocks, of one run or of every shard, are merged
+          # (set mode: covered by any; count modes: summed) and the files coverage.toml ignores dropped.
+          uv run --no-project --python 3.12 python -I -c '
+          import re, sys, tomllib
+          ignore = re.compile(tomllib.load(open(sys.argv[1], "rb"))["ignore-filename-regex"])
+          mode, blocks = "", {}
+          for name in sys.argv[3:]:
+              for line in open(name):
+                  if line.startswith("mode:"):
+                      mode = line
+                      continue
+                  block, _, count = line.strip().rpartition(" ")
+                  if block and not ignore.search(block.rpartition(":")[0]):
+                      old = blocks.get(block, 0)
+                      blocks[block] = max(old, int(count)) if mode.strip() == "mode: set" else old + int(count)
+          with open(sys.argv[2], "w") as out:
+              out.write(mode)
+              out.writelines(f"{block} {count}\n" for block, count in blocks.items())' \
+            "$RG/go/coverage.toml" "$RUNNER_TEMP/coverage-merged.out" "${profiles[@]}"
+          gocover-cobertura < "$RUNNER_TEMP/coverage-merged.out" > "$RUNNER_TEMP/coverage-head.xml"
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        run: |
+          PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
+            --head "$RUNNER_TEMP/coverage-head.xml" --compare-branch "$BASE_REF"
+      # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
+      - name: CRAP report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          if uv venv -q --no-config --clear --python 3.12 "$RUNNER_TEMP/crap-venv" \
+            && uv pip install -q --no-config --python "$RUNNER_TEMP/crap-venv/bin/python" --require-hashes -r "$RG/crap/requirements.txt"; then
+            "$RUNNER_TEMP/crap-venv/bin/python" "$RG/crap/crap_report.py" --coverage "$RUNNER_TEMP/coverage-head.xml"
+          else
+            echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
+  # One job per coverage-shards item, running only its unit-tests arguments; Coverage merges their data.
+  coverage-shard:
+    name: Coverage shard ${{ matrix.unit-tests }}
+    if: ${{ inputs.coverage-shards != '[]' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    outputs:
+      artifact: ${{ steps.coverage.outputs.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        unit-tests: ${{ fromJSON(inputs.coverage-shards) }}
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      GOTOOLCHAIN: local
+      GOWORK: "off"
+      GOENV: "off"
+      MODE: shard
+      SHARD: ${{ strategy.job-index }}
+      UNIT_TESTS: ${{ matrix.unit-tests }}
+      PROJECT: ${{ inputs.working-directory }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-go
+      - *go-caches
+      - *coverage
+      - name: Upload shard data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.coverage.outputs.artifact }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard
+          if-no-files-found: error
+          retention-days: 1

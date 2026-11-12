@@ -180,6 +180,8 @@ jobs:
     name: Checker tests
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    env:
+      GOTOOLCHAIN: local
     defaults:
       run:
         working-directory: repo
@@ -199,6 +201,11 @@ jobs:
           channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' ci-checks/rust/rust-toolchain.toml)
           rustup toolchain install "$channel" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+      - name: Install Go from the shared .go-version
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: repo/ci-checks/go/.go-version
+          cache: false
       - name: Scanner tests
         id: scanner
         if: ${{ !cancelled() }}
@@ -230,6 +237,16 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/comment-budget
         run: cargo test --locked
+      - name: Go comment budget tests
+        id: go-comment-budget
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/go/comment-budget
+        run: go test ./...
+      - name: Go license check tests
+        id: go-license-check
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/go/license-check
+        run: go test ./...
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -239,9 +256,11 @@ jobs:
           RUST: ${{ steps.rust.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
+          GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
+          GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

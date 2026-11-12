@@ -19,11 +19,15 @@ on:
         description: The unit-test targets coverage measures, space-separated --lib, --bins, --bin=<name> or --test=<name>
         type: string
         default: --lib --bins
+      coverage-shards:
+        description: Coverage shards, one per line of space-separated test-name filters; one more shard runs the tests no line matches. Empty measures in one job
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
-# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel (or shards, with coverage-shards).
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -108,34 +112,76 @@ jobs:
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
 
-  # The coverage steps run the PR's tests, so they get a job of their own.
-  coverage:
-    name: Coverage
+  # Only with coverage-shards: checks the filters and lists the shards, the last one running every test no filter matches.
+  coverage-plan:
+    name: Coverage plan
+    if: ${{ inputs.coverage-shards != '' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+      artifact: ${{ steps.plan.outputs.artifact }}
+    steps:
+      - name: Plan
+        id: plan
+        shell: bash
+        env:
+          SHARDS: ${{ inputs.coverage-shards }}
+        run: |
+          # Filters are libtest name substrings: a shard runs the tests matching any of its filters, the rest shard skips them all.
+          shards=() rest=()
+          while read -ra filters; do
+            (( ${#filters[@]} )) || continue
+            for filter in "${filters[@]}"; do
+              if [[ ! $filter =~ ^[A-Za-z0-9_:]+$ ]]; then
+                echo "::error::coverage-shards: $filter is not a test-name filter (letters, digits, _ and :)"
+                exit 1
+              fi
+              rest+=(--skip "$filter")
+            done
+            shards+=("{\"name\":\"$(( ${#shards[@]} + 1 ))\",\"filters\":\"${filters[*]}\"}")
+          done <<< "$SHARDS"
+          if (( ${#shards[@]} == 0 )); then
+            echo "::error::coverage-shards names no filter"
+            exit 1
+          fi
+          shards+=("{\"name\":\"rest\",\"filters\":\"${rest[*]}\"}")
+          (IFS=,; echo "shards=[${shards[*]}]") >> "$GITHUB_OUTPUT"
+          echo "artifact=coverage-$GITHUB_RUN_ID-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+  # The coverage steps run the PR's tests, so they get jobs of their own.
+  coverage-shard:
+    name: Coverage shard ${{ matrix.shard.name }}
+    needs: coverage-plan
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.coverage-plan.outputs.shards) }}
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
       COMPONENTS: llvm-tools-preview
+      MODE: shard
+      SHARD: ${{ matrix.shard.name }}
+      FILTERS: ${{ matrix.shard.filters }}
     defaults: *defaults
     steps:
       - *checkout
       - *checkout-repo-guards
-      - *install-uv
       - *install-rust
       - *cache
-      - name: Install cargo-llvm-cov
+      - &install-llvm-cov
+        name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov@0.9.1
-      - name: Install diff-cover
-        working-directory: ${{ runner.temp }}
-        run: |
-          uv venv --python 3.12 coverage-venv
-          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
-      - name: Coverage
+      # MODE: whole measures and reports here; shard runs only its FILTERS and keeps the raw profiles;
+      # merge rebuilds the same test binaries and reports on every shard's profiles.
+      - &coverage
+        name: Coverage
         id: coverage
         if: ${{ !cancelled() }}
         env:
@@ -155,7 +201,74 @@ jobs:
             exit 1
           fi
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
-          cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
+          llvm_cov=(cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}")
+          if [[ $MODE == whole ]]; then
+            "${llvm_cov[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
+            exit
+          fi
+          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
+            echo "::error::coverage shards did not all succeed ($SHARDS_RESULT)"
+            exit 1
+          fi
+          profiles=$(cargo metadata --format-version 1 --no-deps | sed -E 's/.*"target_directory":"([^"]*)".*/\1/')/llvm-cov-target
+          # --no-report keeps earlier runs' profiles, which a self-hosted runner's target directory may hold.
+          rm -f "$profiles"/*.profraw
+          if [[ $MODE == shard ]]; then
+            read -ra filters <<< "$FILTERS"
+            "${llvm_cov[@]}" --no-report -- "${filters[@]}"
+            mkdir -p "$RUNNER_TEMP/shard"
+            # Shards share profile file names, so each prefixes its own.
+            for profile in "$profiles"/*.profraw; do cp "$profile" "$RUNNER_TEMP/shard/$SHARD-${profile##*/}"; done
+            exit
+          fi
+          # --list builds the binaries and runs no test; its profiles add no coverage.
+          "${llvm_cov[@]}" --no-report -- --list > /dev/null
+          cp "$RUNNER_TEMP"/shards/*.profraw "$profiles/"
+          cargo llvm-cov report --branch --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
+      - name: Upload shard profiles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ needs.coverage-plan.outputs.artifact }}-${{ matrix.shard.name }}
+          path: ${{ runner.temp }}/shard
+          if-no-files-found: error
+          retention-days: 1
+
+  # Without shards, measures in one job; with them, merges the shards' profiles. Fails when a shard did.
+  coverage:
+    name: Coverage
+    needs: [coverage-plan, coverage-shard]
+    if: ${{ !cancelled() }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      CARGO_TERM_COLOR: always
+      TOOLCHAIN: coverage.toml
+      COMPONENTS: llvm-tools-preview
+      MODE: ${{ inputs.coverage-shards != '' && 'merge' || 'whole' }}
+      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-rust
+      - *cache
+      - *install-llvm-cov
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
+      - name: Download shard profiles
+        if: ${{ needs.coverage-shard.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ needs.coverage-plan.outputs.artifact }}-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - *coverage
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |

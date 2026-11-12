@@ -16,11 +16,11 @@ on:
         type: string
         default: .github/checks/deny-allowlist.toml
       unit-tests:
-        description: The unit-test targets coverage measures, space-separated --lib, --bins, --bin=<name> or --test=<name>
+        description: The unit-test targets coverage measures, space-separated --lib, --bins, --bin=<name> or --test=<name>, then optionally -- and test-name filters
         type: string
         default: --lib --bins
       coverage-shards:
-        description: Coverage shards as a JSON list, each one parallel job's unit-tests value; [] measures in one job
+        description: Coverage shards as a JSON list, each one parallel job's unit-tests value, e.g. "--test=unit -- input::"; [] measures in one job
         type: string
         default: "[]"
 
@@ -136,7 +136,8 @@ jobs:
       COMPONENTS: llvm-tools-preview
       MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
       SHARDS_RESULT: ${{ needs.coverage-shard.result }}
-      UNIT_TESTS: ${{ inputs.coverage-shards != '[]' && join(fromJSON(inputs.coverage-shards), ' ') || inputs.unit-tests }}
+      SHARDS: ${{ inputs.coverage-shards }}
+      UNIT_TESTS: ${{ inputs.unit-tests }}
     defaults: *defaults
     steps:
       - *checkout
@@ -170,19 +171,30 @@ jobs:
             echo "::error::a coverage shard failed ($SHARDS_RESULT)"
             exit 1
           fi
+          if [[ $MODE == merge ]]; then
+            # Each shard's targets are its words before --; cargo-llvm-cov rejects a flag such as --lib given twice.
+            UNIT_TESTS=$(uv run --no-project --python 3.12 python -I -c '
+          import json, os
+          targets = []
+          for shard in json.loads(os.environ["SHARDS"]):
+              words = shard.split()
+              targets += words[: words.index("--")] if "--" in words else words
+          print(*dict.fromkeys(targets))')
+          fi
           # -d '' reads past newlines, so a multi-line value is read whole; read then returns 1 at its end.
           read -ra targets -d '' <<< "$UNIT_TESTS" || true
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
-          llvm_cov=(cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}")
+          llvm_cov=(cargo llvm-cov --workspace --all-features --locked --branch)
+          # The targets go last, so the test-name filters after their -- reach the test binaries.
           if [[ $MODE == whole ]]; then
-            "${llvm_cov[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
+            "${llvm_cov[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml" "${targets[@]}"
             exit
           fi
           profiles=$(cargo metadata --format-version 1 --no-deps | sed -E 's/.*"target_directory":"([^"]*)".*/\1/')/llvm-cov-target
           # --no-report keeps earlier runs' profiles, which a self-hosted runner's target directory may hold.
           rm -f "$profiles"/*.profraw
           if [[ $MODE == shard ]]; then
-            "${llvm_cov[@]}" --no-report
+            "${llvm_cov[@]}" --no-report "${targets[@]}"
             mkdir -p "$RUNNER_TEMP/shard"
             # Shards share profile file names, so each prefixes its own.
             for profile in "$profiles"/*.profraw; do cp "$profile" "$RUNNER_TEMP/shard/$SHARD-${profile##*/}"; done
@@ -193,7 +205,7 @@ jobs:
             exit
           fi
           # --list builds every shard's test binaries and runs no test.
-          "${llvm_cov[@]}" --no-report -- --list > /dev/null
+          "${llvm_cov[@]}" --no-report "${targets[@]}" -- --list > /dev/null
           cp "$RUNNER_TEMP"/shards/*.profraw "$profiles/"
           cargo llvm-cov report --workspace --branch --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate

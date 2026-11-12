@@ -38,7 +38,9 @@ class Merging(unittest.TestCase):
         self.assertEqual(code, 0)
         shared = tomllib.loads(SHARED.read_text())
         self.assertEqual(merged["bans"]["allow"], ["serde@1.0.228", {"name": "libc"}])
-        self.assertEqual(merged["bans"]["build"]["allow-build-scripts"], ["libc"])
+        self.assertEqual(
+            merged["bans"]["build"]["allow-build-scripts"], shared["bans"]["build"]["allow-build-scripts"] + ["libc"]
+        )
         self.assertEqual(merged["sources"]["allow-git"], ["https://github.com/example/repo"])
         self.assertEqual(merged["licenses"]["exceptions"], [{"crate": "ring", "allow": ["OpenSSL"]}])
         self.assertEqual(merged["licenses"]["allow"], tomllib.loads(LICENSES.read_text())["allow"])
@@ -47,6 +49,11 @@ class Merging(unittest.TestCase):
         self.assertEqual(merged["sources"]["allow-registry"], shared["sources"]["allow-registry"])
         self.assertEqual(merged["advisories"], shared["advisories"])
         self.assertEqual(merged["graph"], shared["graph"])
+
+    def test_shared_config_allows_foundational_build_scripts(self):
+        baseline = tomllib.loads(SHARED.read_text())["bans"]["build"]["allow-build-scripts"]
+        for crate in ("libc", "serde", "proc-macro2", "quote", "getrandom"):
+            self.assertIn(crate, baseline)
 
     def test_empty_allowlist_reproduces_shared_config_with_license_allow(self):
         code, merged = self.run_main("")

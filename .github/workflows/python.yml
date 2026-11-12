@@ -23,6 +23,10 @@ on:
         description: The repo's dependency allowlist (shared by rust.yml, python.yml and typescript.yml); may be absent
         type: string
         default: .github/checks/deny-allowlist.toml
+      coverage-shards:
+        description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; [] measures in one job
+        type: string
+        default: "[]"
 
 permissions:
   contents: read
@@ -152,6 +156,8 @@ jobs:
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
     name: Coverage
+    needs: coverage-shard
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -159,13 +165,16 @@ jobs:
       BASE_REF: *base-ref
       SOURCE_DIRS: ${{ inputs.source-dirs }}
       UV_NO_BUILD: "1"
+      MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
+      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
     defaults: *defaults
     steps:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
       # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
-      - name: Install Python 3.12
+      - &install-python
+        name: Install Python 3.12
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
@@ -174,7 +183,15 @@ jobs:
         run: |
           uv venv --python 3.12 coverage-venv
           uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
-      - name: Coverage
+      - name: Download shard data
+        if: ${{ needs.coverage-shard.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: ${{ needs.coverage-shard.outputs.artifact }}-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      - &coverage
+        name: Coverage
         id: coverage
         if: ${{ !cancelled() }}
         env:
@@ -185,6 +202,11 @@ jobs:
           pytest=$(pin "pytest==")
           read -ra dirs <<< "$SOURCE_DIRS"
           sources=$(IFS=,; echo "${dirs[*]}")
+          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
+            echo "::error::a coverage shard failed ($SHARDS_RESULT)"
+            exit 1
+          fi
+          # Every mode uses the project's environment: its Python version decides which lines and branches count.
           # A uv project's pytest comes from its lock; a requirements.txt project without one gets the shared dev group's.
           tools=(--with "$coverage")
           if [[ -f uv.lock ]]; then
@@ -194,7 +216,21 @@ jobs:
             .venv/bin/python -c 'import pytest' 2> /dev/null || tools+=(--with "$pytest")
           fi
           cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
-          cov run --source "$sources" -m pytest
+          case $MODE in
+            whole)
+              cov run --source "$sources" -m pytest ;;
+            shard)
+              read -ra tests <<< "$TESTS"
+              mkdir -p "$RUNNER_TEMP/shard"
+              cov run --source "$sources" --data-file "$RUNNER_TEMP/shard/$SHARD.coverage" -m pytest "${tests[@]}"
+              # Artifact names are unique per run, and a caller may call this workflow once per working-directory;
+              # / is not allowed in a name, so it is escaped the way URLs escape it.
+              project=${PROJECT//\%/%25}
+              echo "artifact=python-coverage-${project//\//%2F}%.shard" >> "$GITHUB_OUTPUT"
+              exit ;;
+            merge)
+              cov combine "$RUNNER_TEMP"/shards/*.coverage ;;
+          esac
           cov xml -o "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
@@ -212,3 +248,38 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+  # One job per coverage-shards item, running only its test paths; Coverage combines their data.
+  coverage-shard:
+    name: Coverage shard ${{ matrix.tests }}
+    if: ${{ inputs.coverage-shards != '[]' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    outputs:
+      artifact: ${{ steps.coverage.outputs.artifact }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tests: ${{ fromJSON(inputs.coverage-shards) }}
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      UV_NO_BUILD: "1"
+      MODE: shard
+      SHARD: ${{ strategy.job-index }}
+      TESTS: ${{ matrix.tests }}
+      PROJECT: ${{ inputs.working-directory }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-python
+      - *coverage
+      - name: Upload shard data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.coverage.outputs.artifact }}-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard
+          if-no-files-found: error
+          retention-days: 1

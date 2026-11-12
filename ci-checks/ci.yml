@@ -26,5 +26,10 @@ jobs:
     uses: windroc-labs/repo-guards/.github/workflows/typescript.yml@main
     with:
       knip-entry: '["src/index.ts!"]'
+  go:
+    uses: windroc-labs/repo-guards/.github/workflows/go.yml@main
+    with:
+      working-directory: .
+      unit-tests: ./...
   jscpd:
     uses: windroc-labs/repo-guards/.github/workflows/jscpd.yml@main

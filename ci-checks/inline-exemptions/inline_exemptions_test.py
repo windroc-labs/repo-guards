@@ -388,5 +388,31 @@ class EndToEnd(unittest.TestCase):
             ie.run_scanner("go", Path("/r"), ["a.go"], runner=missing)
 
 
+class Workflow(unittest.TestCase):
+    REPO = ie.CI_CHECKS.parent
+    TEXT = (REPO / ".github/workflows/inline-exemptions.yml").read_text()
+
+    def test_s35_only_contents_read(self):
+        self.assertIn("\npermissions:\n  contents: read\n\njobs:", self.TEXT)
+        self.assertEqual(self.TEXT.count("permissions:"), 1)
+
+    def test_s1_template_calls_it_and_the_check_is_named(self):
+        template = (ie.CI_CHECKS / "ci.yml").read_text()
+        self.assertIn("uses: windroc-labs/repo-guards/.github/workflows/inline-exemptions.yml@main", template)
+        self.assertIn("    name: Inline exemptions\n", self.TEXT)
+
+    def test_s4_fr1_called_only_with_runs_on_and_no_event_filter(self):
+        on = self.TEXT.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
+        self.assertTrue(on.startswith("  workflow_call:\n    inputs:\n      runs-on:\n"))
+        self.assertEqual(on.count("type:"), 1)
+        self.assertNotIn("github.event_name", self.TEXT)
+        self.assertNotIn("fetch-depth", self.TEXT)
+
+    def test_fr5_overrides_apply_before_the_check(self):
+        apply = self.TEXT.index("name: Apply caller overrides")
+        self.assertLess(apply, self.TEXT.index("name: Find languages"))
+        self.assertLess(apply, self.TEXT.index("name: Inline exemptions\n        run:"))
+
+
 if __name__ == "__main__":
     unittest.main()

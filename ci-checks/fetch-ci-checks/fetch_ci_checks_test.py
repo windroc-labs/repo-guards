@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from fetch_configs import Error, caller_repo, run
+from fetch_ci_checks import Error, caller_repo, run
 
 SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -75,7 +75,12 @@ class Run(unittest.TestCase):
         self.assertEqual(calls, [("example-org/repo-guards", "main")])
         self.assertEqual((self.out / "ci-checks/rust/deny.toml").read_text(), "[bans]\n")
         self.assertEqual((self.out / "SHA").read_text(), SHA + "\n")
-        self.assertEqual(sorted(p.name for p in self.out.iterdir()), ["SHA", "ci-checks"])
+        self.assertEqual(sorted(p.name for p in self.out.iterdir()), [".gitignore", "SHA", "ci-checks"])
+
+    def test_writes_gitignore_that_ignores_the_whole_output_dir(self):
+        code, _ = self.run_fetch(caller("main"), archive({"ci-checks/a.toml": "1\n"}))
+        self.assertEqual(code, 0)
+        self.assertEqual((self.out / ".gitignore").read_text(), "*\n")
 
     def test_refetch_replaces_old_files(self):
         self.run_fetch(caller("main"), archive({"ci-checks/old.toml": "1\n"}))

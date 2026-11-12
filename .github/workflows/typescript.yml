@@ -82,32 +82,39 @@ jobs:
       - &install-project
         name: Install the project
         run: npm ci --no-audit --no-fund
+      - name: Inline exemptions
+        id: inline-exemptions
+        # The whole repo from its root, whatever working-directory is; UV_NO_CONFIG keeps the caller's uv config out.
+        working-directory: repo
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" typescript
       - name: Format
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- prettier --list-different --config "$RG/typescript/.prettierrc.json" .
       - name: Comment budget
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: node "$RG/typescript/comment-budget/comment-budget.ts" --base "$BASE_REF" --config "$RG/typescript/comment-budget.toml"
       - name: Type check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           mapfile -t flags < <(node "$RG/typescript/workflow-config/workflow-config.ts" tsc-flags "$RG/typescript/tsconfig.json")
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format tsc -- tsc --project tsconfig.json --noEmit --pretty false "${flags[@]}"
       - name: Dead code and unused dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format knip -- knip --production --config "$RG/typescript/knip.json" --reporter json
       - name: Vulnerabilities
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: npm audit
       - name: Dependency allowlist
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           base=$(git merge-base "$BASE_REF" HEAD)
           # No lock at the merge-base (a new project) leaves the base file absent: every package counts as new.
           if git cat-file -e "$base:./package-lock.json" 2>/dev/null; then git show "$base:./package-lock.json" > "$RUNNER_TEMP/base-package-lock.json"; fi
           uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" npm "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/base-package-lock.json" package-lock.json
       - name: Licenses
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           allowed=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" allow | paste -sd ';' -)
           exceptions=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions | paste -sd ';' -)

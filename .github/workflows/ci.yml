@@ -218,6 +218,16 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/fetch-ci-checks
         run: python3 -m unittest fetch_ci_checks_test
+      - name: inline-exemptions tests
+        id: inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/inline-exemptions
+        run: python3 -m unittest inline_exemptions_test
+      - name: github-dir-pr tests
+        id: github-dir-pr
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/github-dir-pr
+        run: python3 -m unittest github_dir_pr_test
       - name: deny-merge tests
         id: deny-merge
         if: ${{ !cancelled() }}
@@ -253,6 +263,26 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/go/license-check
         run: go test ./...
+      - name: Python inline exemptions tests
+        id: python-inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/inline-exemptions
+        run: python3 -m unittest exemptions_test
+      - name: Go inline exemptions tests
+        id: go-inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/go/inline-exemptions
+        run: go test ./...
+      - name: TypeScript inline exemptions tests
+        id: typescript-inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/inline-exemptions
+        run: npm ci --no-audit --no-fund --ignore-scripts && npm test
+      - name: Rust inline exemptions tests
+        id: rust-inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/inline-exemptions
+        run: cargo test --locked
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -262,6 +292,8 @@ jobs:
           RUST: ${{ steps.rust.outcome }}
           CONFIG_OVERRIDES: ${{ steps.config-overrides.outcome }}
           FETCH_CI_CHECKS: ${{ steps.fetch-ci-checks.outcome }}
+          INLINE_EXEMPTIONS: ${{ steps.inline-exemptions.outcome }}
+          GITHUB_DIR_PR: ${{ steps.github-dir-pr.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
@@ -271,9 +303,13 @@ jobs:
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
+          PYTHON_INLINE_EXEMPTIONS: ${{ steps.python-inline-exemptions.outcome }}
+          GO_INLINE_EXEMPTIONS: ${{ steps.go-inline-exemptions.outcome }}
+          TYPESCRIPT_INLINE_EXEMPTIONS: ${{ steps.typescript-inline-exemptions.outcome }}
+          RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

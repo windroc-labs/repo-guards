@@ -15,9 +15,12 @@ jobs:
   jscpd:
     name: Duplication
     runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
+      GOTOOLCHAIN: local
+      # uv runs inside the caller checkout: never read its uv.toml or pyproject.toml [tool.uv].
+      UV_NO_CONFIG: "1"
     defaults:
       run:
         shell: bash
@@ -43,6 +46,35 @@ jobs:
           enable-cache: false
       - name: Apply caller overrides
         run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+      # jscpd:ignore-start is a comment in any of the four languages: each language's scanner finds its own.
+      - name: Find languages
+        id: languages
+        run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" languages >> "$GITHUB_OUTPUT"
+      - name: Install Rust
+        if: steps.languages.outputs.rust == 'true'
+        run: |
+          toolchain=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/rust/rust-toolchain.toml" toolchain channel)
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
+            echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+            export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          fi
+          rustup toolchain install "$toolchain" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+      - name: Install Go
+        if: steps.languages.outputs.go == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: repo-guards/ci-checks/go/.go-version
+          cache: false
+      - name: Install Node
+        if: steps.languages.outputs.typescript == 'true'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Inline exemptions
+        run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" jscpd
       - name: Install jscpd
         working-directory: ${{ runner.temp }}
         run: |

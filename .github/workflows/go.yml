@@ -109,7 +109,7 @@ jobs:
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- gofmt -l "${files[@]}"
       - name: Lint
         if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- golangci-lint run --config "$RG/go/golangci.yml" --output.json.path stdout ./...
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- golangci-lint run --config "$RG/go/golangci.toml" --output.json.path stdout ./...
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: comment-budget --base "$BASE_REF" --config "$RG/go/comment-budget.toml"
@@ -122,7 +122,7 @@ jobs:
           # Without test files, so code only tests call counts as unused.
           failed=0
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- \
-            golangci-lint run --config "$RG/go/golangci.yml" --default=none --enable-only unused --tests=false --output.json.path stdout ./... || failed=1
+            golangci-lint run --config "$RG/go/golangci.toml" --default=none --enable-only unused --tests=false --output.json.path stdout ./... || failed=1
           # deadcode starts from main packages: a library-only module gets the unused check alone.
           mains=$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...)
           if [[ -n $mains ]]; then

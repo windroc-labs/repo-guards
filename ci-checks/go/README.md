@@ -18,7 +18,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 | 文件 | 作用 |
 |---|---|
-| [`golangci.yml`](golangci.yml) | `linters.default: none`，只开列出的 linter，对应 [linter 规则](../README.md#linter-规则)的 Go 一列；`unused` 不在这里开（由 Dead code 步开，见下文），`govet` 也不开（Type check 步跑 `go vet`） |
+| [`golangci.toml`](golangci.toml) | `linters.default = "none"`，只开列出的 linter，对应 [linter 规则](../README.md#linter-规则)的 Go 一列；`unused` 不在这里开（由 Dead code 步开，见下文），`govet` 也不开（Type check 步跑 `go vet`） |
 
 - 门槛：其他语言用各工具的默认值；Go 的 `funlen`（100 行、50 条语句）、`revive` 的 `argument-limit`（5）和 `max-control-nesting`（5）、`gocyclo`（20）、`file-length-limit`（300 行）取计法相同的那个工具的默认值，没有就取中位数。
 - 只管测试的规则（不 sleep、不读真实时间、不 `recover`、不设随机种子和样例数）只查 `_test.go`；只管发布代码的（不 `panic`、不留调试输出、不查 `testing.Testing`、`forcetypeassert`、不 import mock 库）不查 `_test.go`。

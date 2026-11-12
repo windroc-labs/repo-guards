@@ -55,7 +55,7 @@ class Forms(unittest.TestCase):
                 self.assert_one("src/m.py", method(line), tool, rule, "C.run")
 
     def test_s9_a_decorator_belongs_to_its_function_and_module_level_is_empty(self):
-        text = "# ruff: noqa\nimport pytest\n\n\n@pytest.mark.skip\ndef test_y():\n    pass\n"
+        text = "# ruff: noqa\nimport pytest\n\n\n" "@pytest.mark.skip\ndef test_y():\n    pass\n"
         self.assertEqual(
             found("tests/test_x.py", text),
             Counter(
@@ -78,7 +78,7 @@ class Forms(unittest.TestCase):
             ("import pytest\n\npytestmark = pytest.mark.skip\n", "pytest"),
             (method('self.skipTest("flaky")'), "unittest"),
             ('import unittest\n\nraise unittest.SkipTest("x")\n', "unittest"),
-            ("from pytest import mark\n\n\n@mark.skip\ndef test_a():\n    pass\n", "pytest"),
+            ("from pytest import mark\n\n\n" "@mark.skip\ndef test_a():\n    pass\n", "pytest"),
             ("# flake8: noqa\nx = 1\n", "ruff"),
             ("# yapf: disable\nx = 1\n", "ruff-format"),
         ):
@@ -107,7 +107,7 @@ class Forms(unittest.TestCase):
             "x = 1  # type: ignored\n",
             "x = 1  # noqanything\n",
             "x = 1  # Pragma: No Cover\n",
-            "import pytest\n\n\n@pytest.mark.parametrize('a', [1])\ndef test_a(a):\n    pass\n",
+            "import pytest\n\n\n" "@pytest.mark.parametrize('a', [1])\ndef test_a(a):\n    pass\n",
         ):
             with self.subTest(text=text):
                 self.assertEqual(found("src/m.py", text), Counter())
@@ -130,7 +130,7 @@ class Forms(unittest.TestCase):
     def test_s47_class_decorators_and_class_body_statements_are_outside_functions(self):
         for text, tool, rule in (
             (
-                'import unittest\n\n\n@unittest.skip("x")\nclass C:\n    pass\n',
+                'import unittest\n\n\n' '@unittest.skip("x")\nclass C:\n    pass\n',
                 "unittest",
                 "skip",
             ),
@@ -319,7 +319,7 @@ class Functions(unittest.TestCase):
 
     def test_a_comment_run_directly_above_a_function_belongs_to_it(self):
         for text, function in (
-            ("# noqa\n# more\n@decorator\ndef f():\n    pass\n", "f"),
+            ("# noqa\n# more\n" "@decorator\ndef f():\n    pass\n", "f"),
             ("class C:\n    # type: ignore\n    def m(self):\n        pass\n", "C.m"),
             ("def f():\n    # noqa\n    def g():\n        pass\n", "g"),
             ("# noqa\n\ndef f():\n    pass\n", ""),

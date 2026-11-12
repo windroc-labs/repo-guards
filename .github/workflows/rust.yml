@@ -7,6 +7,10 @@ on:
         description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
         type: string
         default: '"ubuntu-latest"'
+      working-directory:
+        description: The project's directory, relative to the repo root
+        type: string
+        default: .
       deny-allowlist:
         description: The repo's cargo-deny allowlist, merged into the shared deny.toml
         type: string
@@ -27,7 +31,7 @@ jobs:
     defaults:
       run:
         shell: bash
-        working-directory: repo
+        working-directory: repo/${{ inputs.working-directory }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -61,7 +65,7 @@ jobs:
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: repo
+          workspaces: repo/${{ inputs.working-directory }}
           save-if: ${{ github.event_name == 'push' }}
       - name: Install cargo-machete and cargo-deny
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
@@ -89,5 +93,5 @@ jobs:
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
-          uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
+          uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check

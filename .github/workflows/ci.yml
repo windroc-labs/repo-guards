@@ -153,3 +153,64 @@ jobs:
             echo 'Leak-class hits are already public: follow "If something leaks" in AGENTS.md.'
           fi
           [[ $GITLEAKS_HITS == 0 && $ACTIONLINT_HITS == 0 ]]
+
+  tests:
+    name: Checker tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          persist-credentials: false
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Install Rust from the shared rust-toolchain.toml
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' ci-checks/rust/rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+      - name: Scanner tests
+        id: scanner
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s scanner -p 'test_*.py'
+      - name: Python comment budget tests
+        id: python
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/comment-budget
+        run: python3 -m unittest comment_budget_test
+      - name: TypeScript comment budget tests
+        id: typescript
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/comment-budget
+        run: |
+          npm ci --no-audit --no-fund --ignore-scripts
+          npm test
+      - name: Rust comment budget tests
+        id: rust
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/comment-budget
+        run: cargo test --locked
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          SCANNER: ${{ steps.scanner.outcome }}
+          PYTHON: ${{ steps.python.outcome }}
+          TYPESCRIPT: ${{ steps.typescript.outcome }}
+          RUST: ${{ steps.rust.outcome }}
+        run: |
+          failed=0
+          for suite in SCANNER PYTHON TYPESCRIPT RUST; do
+            printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
+            [[ ${!suite} == success ]] || failed=$((failed + 1))
+          done
+          echo "summary:"
+          printf '  %-13s  %-7s  %s\n' checker-tests hygiene "$failed"
+          (( failed == 0 ))

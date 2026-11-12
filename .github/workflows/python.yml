@@ -12,7 +12,7 @@ on:
         type: string
         default: .
       source-dirs:
-        description: Shipped source directories, space-separated, for pyright and vulture
+        description: Shipped source directories, space-separated, for pyright, vulture and coverage
         type: string
         default: src
       license-exceptions:
@@ -27,7 +27,7 @@ jobs:
   python:
     name: Python
     runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
@@ -62,6 +62,11 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Install the project from wheels only
         run: uv sync --locked
       - name: Format
@@ -103,3 +108,29 @@ jobs:
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
           pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"
+      # The coverage steps run the PR's tests, so they come after every static check.
+      - name: Coverage
+        id: coverage
+        if: ${{ !cancelled() }}
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+          PROJECT_DIR: ${{ inputs.working-directory }}
+        run: |
+          coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
+          read -ra dirs <<< "$SOURCE_DIRS"
+          sources=$(IFS=,; echo "${dirs[*]}")
+          measure() {
+            (cd "$1" && uv sync --locked \
+              && uv run --locked --with "$coverage" coverage run --rcfile "$RG/python/pyproject.toml" --source "$sources" -m pytest \
+              && uv run --locked --with "$coverage" coverage xml --rcfile "$RG/python/pyproject.toml" -o "$2")
+          }
+          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
+          git worktree prune
+          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
+          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
+          measure . "$RUNNER_TEMP/coverage-head.xml"
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        run: |
+          PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
+            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"

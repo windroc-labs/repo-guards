@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # PR runs check out the merge ref: HEAD^1 is the base, HEAD^2 the PR head.
+  RANGE: ${{ github.event_name == 'pull_request' && 'HEAD^1..HEAD^2' || format('{0}..HEAD', github.event.before) }}
+
+jobs:
+  scan:
+    name: Public rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out the default branch's scanner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: default
+          persist-credentials: false
+      - name: Scan
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          scanner=default/scanner/scan.py
+          # The PR that adds this workflow lands before the default branch has a scanner.
+          [[ -f $scanner ]] || scanner=repo/scanner/scan.py
+          args=()
+          if [[ $EVENT == pull_request ]]; then
+            args+=(--pr-from-env)
+          elif ! git -C repo cat-file -e "${RANGE%..HEAD}^{commit}" 2>/dev/null; then
+            # A new branch (all-zero before) or an unknown before: scan the pushed head.
+            RANGE='HEAD^!'
+          fi
+          python3 "$scanner" --repo repo --checks local-path,email,em-dash,link --commits "$RANGE" "${args[@]}"

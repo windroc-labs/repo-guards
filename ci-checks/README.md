@@ -19,26 +19,28 @@
 | [`rust.yml`](../.github/workflows/rust.yml) | [Rust](rust/README.md) 各项和依赖检查 | `working-directory`（`.`）、`deny-allowlist`（`.github/checks/deny-allowlist.toml`，必须存在）、`unit-tests`（`--lib --bins`） |
 | [`python.yml`](../.github/workflows/python.yml) | [Python](python/README.md) 各项和依赖检查 | `working-directory`（`.`）、`source-dirs`（`src`）、`license-exceptions`（`.github/checks/license-exceptions.txt`）、`deny-allowlist`（同 Rust，可以不存在） |
 | [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `knip-entry`、`knip-project`、`license-exceptions`、`deny-allowlist`（同 Python） |
+| [`go.yml`](../.github/workflows/go.yml) | [Go](go/README.md) 各项和依赖检查 | `working-directory`（`.`）、`license-exceptions`、`deny-allowlist`（同 Python）、`unit-tests`（`./...`） |
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml` 或 `requirements.txt` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`deny-allowlist` 是项目的依赖白名单，三种语言共用一份，见[依赖白名单](#依赖白名单)。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml`、`requirements.txt` 或 `go.mod` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名（Go 是模块路径，要完全相同），不受许可证检查；文件可以不存在。`deny-allowlist` 是项目的依赖白名单，四种语言共用一份，见[依赖白名单](#依赖白名单)。`unit-tests` 选覆盖率要量的单元测试：Rust 是测试目标，Go 是 `go test` 的参数（包模式），见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，四种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
-三个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
+四个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
 
 | workflow | job（里面的步） |
 |---|---|
 | `rust.yml` | Checks（Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report） |
 | `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
 | `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+| `go.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
 
-覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，可在 `--` 后带测试名过滤，如 `"--test=unit -- input::"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
+覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，可在 `--` 后带测试名过滤，如 `"--test=unit -- input::"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，Go 是这片的 `go test` 参数（包模式，如 `"./a/..."`，可带 `-run=<正则>` 按测试名拆，分片时代替 `unit-tests`），都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
 
-分片的数据用各工具自己的办法合并：Rust 在 Coverage job 里按所有片的测试目标（各片 `--` 前的词，去重）再编译一遍（不跑测试），用 `cargo llvm-cov report` 合并各片的 `.profraw`；Python 用 `coverage combine`；TypeScript 用 vitest 的 blob 报告和 `--merge-reports`，blob 报告里是绝对路径，各片先把检出目录换成占位符。在样例项目上，各片放在不同目录里跑，合并出的报告和不分片的逐文件、逐行、逐分支一致。Rust 和 Python 各片的 artifact 名字由 [`coverage/shard_artifact.py`](coverage/shard_artifact.py) 生成：`<语言>-coverage-<working-directory 的 sha256 前 16 位>-shard`，只含小写字母、数字和 `-`，因为 download-artifact 对名字做 `decodeURIComponent`（`%` 会让下载失败），还把它当 glob 匹配；同一个 caller 用不同 `working-directory` 调用多次，名字也各不相同。测试：在 `coverage/` 跑 `python3 -m unittest shard_artifact_test`。
+分片的数据用各工具自己的办法合并：Rust 在 Coverage job 里按所有片的测试目标（各片 `--` 前的词，去重）再编译一遍（不跑测试），用 `cargo llvm-cov report` 合并各片的 `.profraw`；Python 用 `coverage combine`；TypeScript 用 vitest 的 blob 报告和 `--merge-reports`，blob 报告里是绝对路径，各片先把检出目录换成占位符；Go 各片各写一份 `-coverprofile`，Coverage job 把所有片的同一块代码合并成一条。在样例项目上，各片放在不同目录里跑，合并出的报告和不分片的逐文件、逐行、逐分支一致。Rust、Python 和 Go 各片的 artifact 名字由 [`coverage/shard_artifact.py`](coverage/shard_artifact.py) 生成：`<语言>-coverage-<working-directory 的 sha256 前 16 位>-shard`，只含小写字母、数字和 `-`，因为 download-artifact 对名字做 `decodeURIComponent`（`%` 会让下载失败），还把它当 glob 匹配；同一个 caller 用不同 `working-directory` 调用多次，名字也各不相同。测试：在 `coverage/` 跑 `python3 -m unittest shard_artifact_test`。
 
 ## 语言级
 
-现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置和跑它的步见各语言 README。"模板"一列：✅ 三种语言的模板和 workflow 都有了，⚠️ 只做了一部分，空着是还没开始。
+现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript、Go 默认选用的工具；每种语言的模板配置和跑它的步见各语言 README。"模板"一列：✅ 四种语言的模板和 workflow 都有了，⚠️ 只做了一部分，空着是还没开始。
 
 | # | 项 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 模板 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -49,7 +51,7 @@
 | 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码；只有 PR 改动行上的问题失败（见[只查改动行](#只查改动行)） | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | ✅ |
 | 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | ✅ |
 | 7 | [依赖检查](#依赖检查规则) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | ⚠️ |
-| 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，PR 改动的行 ≥ 90%，都是固定门槛。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | ✅ |
+| 8 | [覆盖率](#覆盖率) | 行和分支都算（Go 没有分支覆盖率，只算行）。总覆盖率 ≥ 80%，PR 改动的行 ≥ 90%，都是固定门槛。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | ✅ |
 | 9 | [CRAP 分数](#crap-分数) | 只报告，不强制：每个函数的 CRAP 分数（圈复杂度和覆盖率合算），最高的 20 个写进 job summary；这一步永远不失败 | 无 | 复杂的函数不测（只提示，不拦） | 每个 PR | ⚠️ |
 | 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |  |
 | 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |  |
@@ -62,78 +64,78 @@
 - 改动行：`git diff --text <base>...HEAD` 里新增或改过的行，删掉的行不算；`--text` 让 `.gitattributes` 标成二进制的文件也照样比。`<base>`：PR 是 base 分支（比的是 merge-base），merge queue 是 base sha，push 是推送前的 commit（只看推上来的那段），新分支是默认分支。
 - 有行号的问题（lint、类型检查、死代码）：落在改动行上才失败。
 - 按文件算的问题（formatter、没用的文件）：PR 改过这个文件就失败，只删了行或只改了名也算。
-- 在哪都失败：Rust 编译错误、tsc 的配置错误，以及 knip 报的依赖问题（第 7 项，查的是 `package.json`，不按行）。clippy 加 `--cap-lints=warn`，deny 级 lint 也降成警告，旧代码里的不会中止编译；`cargo check` 不加 `-D warnings`，警告由脚本判。
+- 在哪都失败：Rust 和 Go 的编译错误（Go 的由 golangci-lint 报成 `typecheck`，`go vet` 遇到编译错误非零退出，按工具出错算）、tsc 的配置错误，以及 knip 报的依赖问题（第 7 项，查的是 `package.json`，不按行）。clippy 加 `--cap-lints=warn`，deny 级 lint 也降成警告，旧代码里的不会中止编译；`cargo check` 不加 `-D warnings`，警告由脚本判。
 - 其余问题打印成汇总（每个文件几个），不让 CI 失败。
 - 工具出错算失败：退出码不在该工具的正常范围、输出读不懂，或退出码说有问题却一个也没读出来（cargo 退出 101 却没有 error 级消息也算）。
-- 局限：Python、TypeScript 的类型错误落在没改的行上就不挡，比如 PR 改了函数签名，旧调用处报的错。Rust 的编译错误照样挡。
+- 局限：Python、TypeScript 的类型错误落在没改的行上就不挡，比如 PR 改了函数签名，旧调用处报的错。Rust、Go 的编译错误照样挡。
 
 | 项 | 内容 |
 |---|---|
 | 用法 | `diff_filter.py --base <ref> --format <格式> -- <命令…>`：在当前目录跑命令，stderr 原样输出，解析 stdout |
-| 格式 | `cargo`（`--message-format=json`）、`ruff`、`ruff-format`（`--output-format json`）、`pyright`（`--outputjson`，只算 error）、`vulture`、`tsc`（`--pretty false`）、`knip`（`--reporter json`）、`paths`（每行一个文件：`prettier --list-different`、`cargo fmt --message-format short`） |
+| 格式 | `cargo`（`--message-format=json`）、`ruff`、`ruff-format`（`--output-format json`）、`pyright`（`--outputjson`，只算 error）、`vulture`、`tsc`（`--pretty false`）、`knip`（`--reporter json`）、`golangci`（`--output.json.path stdout`）、`go-vet`（`go vet -json`）、`deadcode`、`paths`（每行一个文件：`prettier --list-different`、`cargo fmt --message-format short`、`gofmt -l`） |
 | 退出码 | 0 通过，1 改动行上有问题，2 出错 |
 | 测试 | 在该目录跑 `python3 -m unittest diff_filter_test` |
 
 ### formatter
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| [rustfmt](rust/README.md#formatterrustfmt) | [ruff format](python/README.md#formatterruff-format) | [prettier](typescript/README.md#formatterprettier) |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| [rustfmt](rust/README.md#formatterrustfmt) | [ruff format](python/README.md#formatterruff-format) | [prettier](typescript/README.md#formatterprettier) | [gofmt](go/README.md#formattergofmt) |
 
 ### linter 规则
 
-所有规则都开在 error 级，改动行上的 warning 也让 CI 失败（Rust 由[只查改动行](#只查改动行)的脚本判，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
+所有规则都开在 error 级，改动行上的 warning 也让 CI 失败（Rust 由[只查改动行](#只查改动行)的脚本判，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别，golangci-lint 报的都算）。linter 配置至少开着这些规则。后四列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`、Go `forbidigo`（禁用的函数）和 `depguard`（禁用的包）；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint），Go 用 [golangci-lint](go/README.md#lintergolangci-lint)。
 
-| 类 | 规则 | 防什么 | Rust | Python | TypeScript |
-|---|---|---|---|---|---|
-| 正确性 | 没有用不到的变量 | 漏用的值 | `unused_variables` | `F841` | `@typescript-eslint/no-unused-vars` |
-| 正确性 | 没有用不到的 import | 残留依赖 | `unused_imports` | `F401` | `@typescript-eslint/no-unused-vars` |
-| 正确性 | 没有用不到的参数 | 漏用的输入 | `unused_variables` | `ARG` | `@typescript-eslint/no-unused-vars` |
-| 正确性 | 不吞异常：空 catch、丢弃错误 | 错误被静默 | `unused_must_use`、`clippy::let_underscore_must_use` | `S110` | `no-empty` |
-| 正确性 | 不吞异常：裸 except、宽泛 except | 误吞无关异常 | 不适用 | `E722`、`BLE001` | 不适用 |
-| 正确性 | 不丢弃异步结果 | 异步任务没跑或错误丢失 | `unused_must_use`（`Future` 带 must_use）、`clippy::let_underscore_future` | `RUF006` | `@typescript-eslint/no-floating-promises` |
-| 正确性 | 没有无效果的表达式 | 写了却不生效的代码 | `clippy::no_effect` | `B015`、`B018` | `@typescript-eslint/no-unused-expressions` |
-| 正确性 | 不遮蔽变量 | 用错同名变量 | 不适用（惯用同名重新绑定） | `A`（只查内置名）、`PLW2901` | `@typescript-eslint/no-shadow` |
-| 正确性 | 浮点数不做相等比较 | 精度误差 | `clippy::float_cmp` | `RUF069`（preview） | 无现成规则 |
-| 正确性 | 不拿常量跟常量比较 | 恒真恒假的条件 | `clippy::eq_op`（只查两边相同） | `PLR0133` | `no-self-compare`（只查两边相同）、`no-constant-condition`（只查条件里） |
-| 正确性 | 不做会丢数据的强制转换 | 截断、符号错误 | `clippy::cast_possible_truncation`、`clippy::cast_sign_loss` | 不适用 | 不适用 |
-| 正确性 | 不写多余的类型转换和比较 | 掩盖类型错误 | `clippy::unnecessary_cast` | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-unnecessary-type-assertion`、`@typescript-eslint/no-unnecessary-condition` |
-| 可读性 | 函数长度有上限 | 难读的长函数 | `clippy::too_many_lines` | `PLR0915` | `max-lines-per-function` |
-| 可读性 | 参数个数有上限 | 难用的接口 | `clippy::too_many_arguments` | `PLR0913` | `max-params` |
-| 可读性 | 嵌套深度有上限 | 难读的分支 | `clippy::excessive_nesting`（须在 `clippy.toml` 设 `excessive-nesting-threshold`，默认 0 即关闭） | `PLR1702`（preview） | `max-depth` |
-| 可读性 | 圈复杂度或认知复杂度有上限 | 难测的函数 | 无可靠规则（靠 `excessive_nesting` 加 `too_many_lines`） | `C901` | `complexity` |
-| 可读性 | 文件长度有上限 | 大杂烩文件 | 无现成规则 | 无现成规则 | `max-lines` |
-| 可读性 | 命名风格统一 | 名字难认 | `non_snake_case`、`non_camel_case_types`、`non_upper_case_globals` | `N` | `@typescript-eslint/naming-convention` |
-| 可读性 | 不用布尔位置参数 | 调用处看不懂 | `clippy::fn_params_excessive_bools`（`clippy.toml` 设 `max-fn-params-bools = 0`，默认 3） | `FBT` | 无现成规则 |
-| 可读性 | 没有注释掉的代码 | 死代码藏在注释里 | 无现成规则 | `ERA001` | 无现成规则 |
-| 可读性 | 能简化的写法要简化 | 绕弯的写法 | `clippy::complexity`（组） | `SIM` | `no-else-return`、`no-lonely-if`、`no-unneeded-ternary`、`@typescript-eslint/prefer-optional-chain` |
-| 可读性 | 不用旧版本语法 | 过时写法 | `rust_2018_idioms`（组） | `UP` | `no-var`、`prefer-rest-params`、`prefer-spread`、`object-shorthand` |
-| 可读性 | 不用相对 import | 移动文件就断 | 不适用 | `TID252` | `import/no-relative-parent-imports`（eslint-plugin-import） |
-| 可读性 | 公开函数的参数和返回值写类型 | 接口类型靠推断 | 不适用（见[类型检查规则](#类型检查规则)） | `ANN` | `@typescript-eslint/explicit-module-boundary-types` |
-| 危险写法 | 库代码不用崩溃式捷径 | 崩溃 | `clippy::unwrap_used`、`clippy::expect_used`、`clippy::panic` | `S101` | `@typescript-eslint/no-non-null-assertion` |
-| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`std::thread::sleep`） | `TID251`（`banned-api`：`time.sleep`） | `no-restricted-syntax`（`setTimeout`） |
-| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`SystemTime::now`、`Instant::now`） | `TID251`（`banned-api`：`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） |
-| 危险写法 | 不残留调试器 | 发布代码停住 | 不适用 | `T100` | `no-debugger` |
-| 危险写法 | 不残留调试输出 | 输出泄露、刷屏 | `clippy::dbg_macro`、`clippy::print_stdout`、`clippy::print_stderr` | `T20` | `no-console` |
-| 危险写法 | 不用已废弃的 API | 用上将删的接口 | 见[类型检查规则](#类型检查规则) | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-deprecated` |
-| escape hatch | 动态 import 在白名单里 | 绕开分层规则 | 不适用 | `TID251`（`banned-api`：`importlib.import_module`） | `no-restricted-syntax`（`ImportExpression`） |
-| escape hatch | eval 和动态执行在白名单里 | 绕开类型检查 | 不适用 | `S307`、`S102` | `no-eval`、`no-implied-eval`、`no-new-func` |
-| escape hatch | 反射访问私有符号在白名单里 | 绕开封装 | 不适用 | `SLF001` | `no-restricted-syntax`（方括号访问私有成员） |
-| escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `TID251`（`banned-api`：`ctypes`） | 不适用 |
-| escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `TID251`（`banned-api`：`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` |
-| escape hatch | 不用 any 或类型未知的值 | 绕开类型检查 | 不适用 | `ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` |
-| escape hatch | 屏蔽类型检查的注释写明规则 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） |
-| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量，普通配置变量照常读；见[测试标记变量](#测试标记变量) | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，见[测试标记变量](#测试标记变量) |
-| 不检测测试环境 | 测试模块以外不用测试专用编译开关（`cfg(test)`） | 测试环境走特判 | 无现成规则（自己写的检查） | 不适用 | 不适用 |
-| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `TID251`（`banned-api`：`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） |
-| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `clippy::disallowed_methods`（`disallowed-methods`：`std::env::current_dir`） | `TID251`（`banned-api`：`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） |
-| 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `TID251`（`banned-api`：`unittest.mock`） | `no-restricted-imports` |
-| 不新增占位 | 不新增 TODO、FIXME 注释 | 留占位冒充完成 | 无现成规则 | `FIX` | `no-warning-comments` |
-| 不新增占位 | 不新增"未实现"占位 | 留占位冒充完成 | `clippy::todo`、`clippy::unimplemented` | 无现成规则 | 无现成规则 |
-| 测试质量 | 每个测试有断言 | 空测试 | 无现成规则 | 无现成规则 | `vitest/expect-expect`（`@vitest/eslint-plugin`） |
-| 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129` | 无现成规则 |
-| 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `clippy::disallowed_methods`（`disallowed-methods`：`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） |
-| 测试质量 | 测试里没有行内覆盖超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `TID251`（`banned-api`：`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` |
+| 类 | 规则 | 防什么 | Rust | Python | TypeScript | Go |
+|---|---|---|---|---|---|---|
+| 正确性 | 没有用不到的变量 | 漏用的值 | `unused_variables` | `F841` | `@typescript-eslint/no-unused-vars` | 编译器强制、`staticcheck`（`SA4006`，赋了值没读） |
+| 正确性 | 没有用不到的 import | 残留依赖 | `unused_imports` | `F401` | `@typescript-eslint/no-unused-vars` | 编译器强制 |
+| 正确性 | 没有用不到的参数 | 漏用的输入 | `unused_variables` | `ARG` | `@typescript-eslint/no-unused-vars` | `revive`（`unused-parameter`） |
+| 正确性 | 不吞异常：空 catch、丢弃错误 | 错误被静默 | `unused_must_use`、`clippy::let_underscore_must_use` | `S110` | `no-empty` | `errcheck`（`check-blank`）、`nilerr` |
+| 正确性 | 不吞异常：裸 except、宽泛 except | 误吞无关异常 | 不适用 | `E722`、`BLE001` | 不适用 | 不适用 |
+| 正确性 | 不丢弃异步结果 | 异步任务没跑或错误丢失 | `unused_must_use`（`Future` 带 must_use）、`clippy::let_underscore_future` | `RUF006` | `@typescript-eslint/no-floating-promises` | `errcheck`（`go` 语句里丢弃的错误） |
+| 正确性 | 没有无效果的表达式 | 写了却不生效的代码 | `clippy::no_effect` | `B015`、`B018` | `@typescript-eslint/no-unused-expressions` | 编译器强制（表达式语句）、`staticcheck`（`SA4017`） |
+| 正确性 | 不遮蔽变量 | 用错同名变量 | 不适用（惯用同名重新绑定） | `A`（只查内置名）、`PLW2901` | `@typescript-eslint/no-shadow` | `predeclared`（只查内置名） |
+| 正确性 | 浮点数不做相等比较 | 精度误差 | `clippy::float_cmp` | `RUF069`（preview） | 无现成规则 | `testifylint`（`float-compare`，只查 testify 断言） |
+| 正确性 | 不拿常量跟常量比较 | 恒真恒假的条件 | `clippy::eq_op`（只查两边相同） | `PLR0133` | `no-self-compare`（只查两边相同）、`no-constant-condition`（只查条件里） | `staticcheck`（`SA4000`，只查两边相同） |
+| 正确性 | 不做会丢数据的强制转换 | 截断、符号错误 | `clippy::cast_possible_truncation`、`clippy::cast_sign_loss` | 不适用 | 不适用 | `gosec`（`G115`） |
+| 正确性 | 不写多余的类型转换和比较 | 掩盖类型错误 | `clippy::unnecessary_cast` | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-unnecessary-type-assertion`、`@typescript-eslint/no-unnecessary-condition` | `unconvert`、`staticcheck`（`S1002`） |
+| 可读性 | 函数长度有上限 | 难读的长函数 | `clippy::too_many_lines` | `PLR0915` | `max-lines-per-function` | `funlen` |
+| 可读性 | 参数个数有上限 | 难用的接口 | `clippy::too_many_arguments` | `PLR0913` | `max-params` | `revive`（`argument-limit`） |
+| 可读性 | 嵌套深度有上限 | 难读的分支 | `clippy::excessive_nesting`（须在 `clippy.toml` 设 `excessive-nesting-threshold`，默认 0 即关闭） | `PLR1702`（preview） | `max-depth` | `revive`（`max-control-nesting`） |
+| 可读性 | 圈复杂度或认知复杂度有上限 | 难测的函数 | 无可靠规则（靠 `excessive_nesting` 加 `too_many_lines`） | `C901` | `complexity` | `gocyclo` |
+| 可读性 | 文件长度有上限 | 大杂烩文件 | 无现成规则 | 无现成规则 | `max-lines` | `revive`（`file-length-limit`） |
+| 可读性 | 命名风格统一 | 名字难认 | `non_snake_case`、`non_camel_case_types`、`non_upper_case_globals` | `N` | `@typescript-eslint/naming-convention` | `revive`（`var-naming`） |
+| 可读性 | 不用布尔位置参数 | 调用处看不懂 | `clippy::fn_params_excessive_bools`（`clippy.toml` 设 `max-fn-params-bools = 0`，默认 3） | `FBT` | 无现成规则 | `revive`（`flag-parameter`，只查用作控制开关的布尔参数） |
+| 可读性 | 没有注释掉的代码 | 死代码藏在注释里 | 无现成规则 | `ERA001` | 无现成规则 | `gocritic`（`commentedOutCode`） |
+| 可读性 | 能简化的写法要简化 | 绕弯的写法 | `clippy::complexity`（组） | `SIM` | `no-else-return`、`no-lonely-if`、`no-unneeded-ternary`、`@typescript-eslint/prefer-optional-chain` | `staticcheck`（`S1*`） |
+| 可读性 | 不用旧版本语法 | 过时写法 | `rust_2018_idioms`（组） | `UP` | `no-var`、`prefer-rest-params`、`prefer-spread`、`object-shorthand` | `modernize` |
+| 可读性 | 不用相对 import | 移动文件就断 | 不适用 | `TID252` | `import/no-relative-parent-imports`（eslint-plugin-import） | 编译器强制（模块模式下相对 import 编译不过） |
+| 可读性 | 公开函数的参数和返回值写类型 | 接口类型靠推断 | 不适用（见[类型检查规则](#类型检查规则)） | `ANN` | `@typescript-eslint/explicit-module-boundary-types` | 不适用（见[类型检查规则](#类型检查规则)） |
+| 危险写法 | 库代码不用崩溃式捷径 | 崩溃 | `clippy::unwrap_used`、`clippy::expect_used`、`clippy::panic` | `S101` | `@typescript-eslint/no-non-null-assertion` | `forbidigo`（`panic`）、`forcetypeassert` |
+| 危险写法 | 测试里不 sleep | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`std::thread::sleep`） | `TID251`（`banned-api`：`time.sleep`） | `no-restricted-syntax`（`setTimeout`） | `forbidigo`（`time.Sleep`） |
+| 危险写法 | 测试里不读真实时间 | 时好时坏的测试 | `clippy::disallowed_methods`（`disallowed-methods`：`SystemTime::now`、`Instant::now`） | `TID251`（`banned-api`：`time.time`、`datetime.datetime.now`） | `no-restricted-syntax`（`Date.now`、`new Date()`） | `forbidigo`（`time.Now`、`time.Since`、`time.Until`） |
+| 危险写法 | 不残留调试器 | 发布代码停住 | 不适用 | `T100` | `no-debugger` | `forbidigo`（`runtime.Breakpoint`） |
+| 危险写法 | 不残留调试输出 | 输出泄露、刷屏 | `clippy::dbg_macro`、`clippy::print_stdout`、`clippy::print_stderr` | `T20` | `no-console` | `forbidigo`（`fmt.Print`、`fmt.Printf`、`fmt.Println`、`print`、`println`） |
+| 危险写法 | 不用已废弃的 API | 用上将删的接口 | 见[类型检查规则](#类型检查规则) | 见[类型检查规则](#类型检查规则) | `@typescript-eslint/no-deprecated` | `staticcheck`（`SA1019`） |
+| escape hatch | 动态 import 在白名单里 | 绕开分层规则 | 不适用 | `TID251`（`banned-api`：`importlib.import_module`） | `no-restricted-syntax`（`ImportExpression`） | `forbidigo`（`plugin.Open`） |
+| escape hatch | eval 和动态执行在白名单里 | 绕开类型检查 | 不适用 | `S307`、`S102` | `no-eval`、`no-implied-eval`、`no-new-func` | 不适用 |
+| escape hatch | 反射访问私有符号在白名单里 | 绕开封装 | 不适用 | `SLF001` | `no-restricted-syntax`（方括号访问私有成员） | `depguard`（`unsafe`：改私有字段、`//go:linkname` 都要它） |
+| escape hatch | unsafe 或 FFI 在白名单里 | 绕开内存安全 | `unsafe_code` | `TID251`（`banned-api`：`ctypes`） | 不适用 | `depguard`（`unsafe`，cgo 也引入它） |
+| escape hatch | 不检查的强制转换在白名单里 | 绕开类型检查 | 不适用 | `TID251`（`banned-api`：`typing.cast`） | `@typescript-eslint/no-unsafe-type-assertion` | 不适用（类型断言运行时检查；`unsafe.Pointer` 转换见上一行） |
+| escape hatch | 不用 any 或类型未知的值 | 绕开类型检查 | 不适用 | `ANN401` | `@typescript-eslint/no-explicit-any`、`@typescript-eslint/no-unsafe-*` | 不适用（`any` 用前要类型断言） |
+| escape hatch | 屏蔽类型检查的注释写明规则 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `PGH003` | `@typescript-eslint/ban-ts-comment`（只准带说明的 `@ts-expect-error`） | 不适用（类型错误无法屏蔽） |
+| 不检测测试环境 | 发布代码不按名字读 CI 或测试标记变量，普通配置变量照常读；见[测试标记变量](#测试标记变量) | 测试环境走特判 | 无现成规则（自己写的检查） | 无现成规则（自己写的检查） | `no-restricted-syntax`，见[测试标记变量](#测试标记变量) | 无现成规则 |
+| 不检测测试环境 | 测试模块以外不用测试专用编译开关（`cfg(test)`） | 测试环境走特判 | 无现成规则（自己写的检查） | 不适用 | 不适用 | 不适用（测试代码只在 `_test.go`） |
+| 不检测测试环境 | 发布代码不查测试框架是否已加载 | 测试环境走特判 | 不适用 | `TID251`（`banned-api`：`sys.modules`） | `no-restricted-syntax`（`import.meta.vitest`、`globalThis.__vitest_worker__`） | `forbidigo`（`testing.Testing`） |
+| 不检测测试环境 | 不按主机名、用户、当前目录分支 | 换台机器就变 | `clippy::disallowed_methods`（`disallowed-methods`：`std::env::current_dir`） | `TID251`（`banned-api`：`socket.gethostname`、`getpass.getuser`、`os.getcwd`） | `no-restricted-imports`（`node:os`）、`no-restricted-syntax`（`process.cwd`） | `forbidigo`（`os.Hostname`、`os.Getwd`）、`depguard`（`os/user`） |
+| 不检测测试环境 | 发布代码不 import mock 库 | 生产里留 mock | 编译器（mock 库只放 dev-dependencies） | `TID251`（`banned-api`：`unittest.mock`） | `no-restricted-imports` | `depguard`（`github.com/stretchr/testify/mock`、`github.com/golang/mock`、`go.uber.org/mock`） |
+| 不新增占位 | 不新增 TODO、FIXME 注释 | 留占位冒充完成 | 无现成规则 | `FIX` | `no-warning-comments` | `godox`（`TODO`、`FIXME`、`XXX`） |
+| 不新增占位 | 不新增"未实现"占位 | 留占位冒充完成 | `clippy::todo`、`clippy::unimplemented` | 无现成规则 | 无现成规则 | `forbidigo`（`panic`，见崩溃式捷径一行） |
+| 测试质量 | 每个测试有断言 | 空测试 | 无现成规则 | 无现成规则 | `vitest/expect-expect`（`@vitest/eslint-plugin`） | 无现成规则 |
+| 测试质量 | 没有恒真或常量断言 | 空测试 | `clippy::assertions_on_constants` | `F631`、`PLW0129` | 无现成规则 | `testifylint`（`useless-assert`，只查 testify）、`staticcheck`（`SA4000`） |
+| 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `clippy::disallowed_methods`（`disallowed-methods`：`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） | `forbidigo`（`recover`） |
+| 测试质量 | 测试里没有行内覆盖超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `TID251`（`banned-api`：`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` | `forbidigo`（`rand.Seed`、`quick.Config`） |
 
 #### 测试标记变量
 
@@ -150,38 +152,38 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 
 代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/`。怎么量、上限多少，见各语言 README 的"注释预算"一节：
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) | [comment-budget](go/README.md#注释预算) |
 
 ### 类型检查规则
 
-工具：Rust 用[编译器](rust/README.md#类型检查编译器)，Python 用 [pyright](python/README.md#类型检查pyright)，TypeScript 用 [tsc](typescript/README.md#类型检查tsc)。
+工具：Rust 用[编译器](rust/README.md#类型检查编译器)，Python 用 [pyright](python/README.md#类型检查pyright)，TypeScript 用 [tsc](typescript/README.md#类型检查tsc)，Go 用编译器和 [go vet](go/README.md#类型检查go-vet)。
 
-类型检查配置至少开着这些规则。只列类型检查器自己查的规则（rustc 及其 lint、pyright、tsc）；linter 实现的在 [linter 规则](#linter-规则)。
+类型检查配置至少开着这些规则。只列类型检查器自己查的规则（rustc 及其 lint、pyright、tsc、Go 编译器和 go vet）；linter 实现的在 [linter 规则](#linter-规则)。
 
-| 规则 | 防什么 | Rust | Python | TypeScript |
-|---|---|---|---|---|
-| 最严格模式 | 放宽检查 | 编译器本身 | pyright `typeCheckingMode = "strict"` | tsc `strict` |
-| 不准 any 或类型未知的值 | 类型检查失效 | 不适用 | `reportUnknown*`（strict） | `noImplicitAny`（strict，只管隐式 any）；显式 any 见 [linter 规则](#linter-规则) |
-| 公开函数的参数和返回值写类型 | 接口类型靠推断 | 编译器强制 | `reportMissingParameterType`（strict，只管参数）；返回值见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) |
-| 可能为空的值先处理再用 | 空值崩溃 | 编译器强制（`Option`） | `reportOptional*`（strict） | `strictNullChecks`（strict） |
-| 按下标取值当作可能取不到 | 越界、缺键 | 不适用 | 无现成规则 | `noUncheckedIndexedAccess` |
-| 不写多余的类型转换和比较 | 掩盖类型错误 | 见 [linter 规则](#linter-规则) | `reportUnnecessaryCast`、`reportUnnecessaryComparison`（strict） | 见 [linter 规则](#linter-规则) |
-| 屏蔽类型检查的注释写明规则，多余的报错 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `reportUnnecessaryTypeIgnoreComment`；写明规则见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) |
-| 不用已废弃的 API | 用上将删的接口 | `deprecated` | `reportDeprecated`（strict） | 见 [linter 规则](#linter-规则) |
+| 规则 | 防什么 | Rust | Python | TypeScript | Go |
+|---|---|---|---|---|---|
+| 最严格模式 | 放宽检查 | 编译器本身 | pyright `typeCheckingMode = "strict"` | tsc `strict` | 编译器本身、`go vet`（全部默认分析器） |
+| 不准 any 或类型未知的值 | 类型检查失效 | 不适用 | `reportUnknown*`（strict） | `noImplicitAny`（strict，只管隐式 any）；显式 any 见 [linter 规则](#linter-规则) | 不适用（`any` 用前要类型断言） |
+| 公开函数的参数和返回值写类型 | 接口类型靠推断 | 编译器强制 | `reportMissingParameterType`（strict，只管参数）；返回值见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) | 编译器强制 |
+| 可能为空的值先处理再用 | 空值崩溃 | 编译器强制（`Option`） | `reportOptional*`（strict） | `strictNullChecks`（strict） | 无现成规则 |
+| 按下标取值当作可能取不到 | 越界、缺键 | 不适用 | 无现成规则 | `noUncheckedIndexedAccess` | 无现成规则 |
+| 不写多余的类型转换和比较 | 掩盖类型错误 | 见 [linter 规则](#linter-规则) | `reportUnnecessaryCast`、`reportUnnecessaryComparison`（strict） | 见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) |
+| 屏蔽类型检查的注释写明规则，多余的报错 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `reportUnnecessaryTypeIgnoreComment`；写明规则见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) | 不适用（类型错误无法屏蔽） |
+| 不用已废弃的 API | 用上将删的接口 | `deprecated` | `reportDeprecated`（strict） | 见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则)（`go vet` 不查） |
 
 ### 死代码
 
-文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。模板见各语言 README：[Rust](rust/README.md#死代码编译器cargo-machete)、[Python](python/README.md#死代码vulturedeptry)、[TypeScript](typescript/README.md#死代码knip)。
+文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。模板见各语言 README：[Rust](rust/README.md#死代码编译器cargo-machete)、[Python](python/README.md#死代码vulturedeptry)、[TypeScript](typescript/README.md#死代码knip)、[Go](go/README.md#死代码unuseddeadcode)。
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 | golangci-lint `unused`（`--tests=false`，不看测试文件）；有 `main` 包的模块再跑 `deadcode`（不带 `-test`）；只有库的模块不查导出的函数，同 Rust 不查 `pub` 项 |
 
 ### 重复代码
 
-三种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
+四种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
 
 ```sh
 jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscpd-baseline.json --update-baseline .
@@ -193,36 +195,36 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 依赖检查至少开着这些规则。Rust 的配置模板见 [Rust README](rust/README.md#依赖检查cargo-deny)。"脚本"指各 repo 自己写的检查；标"项目白名单"的，名单内容由各项目定，放进锁住的依赖白名单。
 
-| 规则 | 防什么 | Rust | Python | TypeScript |
-|---|---|---|---|---|
-| 新增或变了的包在依赖白名单里 | 引入改过的包 | [依赖白名单](#依赖白名单)：`Cargo.lock` 和 merge-base 比（项目白名单） | 同 Rust 列，比 `uv.lock`，或由 `requirements.txt` 解析的 `pylock.toml` | 同 Rust 列，比 `package-lock.json` |
-| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | [`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`、`allow-file=none`；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 |
-| 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
-| 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
-| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
-| 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
-| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit `--locked`，读从 `uv.lock` 导出或由 `requirements.txt` 解析的 `pylock.toml`（2.10.1 不读 `uv.lock`） | `npm audit` |
-| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 |
-| 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
+| 规则 | 防什么 | Rust | Python | TypeScript | Go |
+|---|---|---|---|---|---|
+| 新增或变了的包在依赖白名单里 | 引入改过的包 | [依赖白名单](#依赖白名单)：`Cargo.lock` 和 merge-base 比（项目白名单） | 同 Rust 列，比 `uv.lock`，或由 `requirements.txt` 解析的 `pylock.toml` | 同 Rust 列，比 `package-lock.json` | 同 Rust 列，比 `go list -m all` 的 build list |
+| 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | [`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`、`allow-file=none`；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 | path：只能写成 `replace` 到本地目录，见下一行；git、URL：不适用（`go.mod` 只按模块路径和版本写依赖） |
+| 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） | `replace`：无现成规则（脚本查 `go.mod` 里没有 `replace`） |
+| 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（四种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
+| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` | 不适用：Go 构建不跑依赖的脚本 |
+| 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 | 不适用 |
+| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit `--locked`，读从 `uv.lock` 导出或由 `requirements.txt` 解析的 `pylock.toml`（2.10.1 不读 `uv.lock`） | `npm audit` | [govulncheck](go/README.md#依赖检查go-mod-tidygovulncheck)（只报代码调用到的） |
+| 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | [`license-check`](go/README.md#许可证license-check) 认出 build list 里每个模块的许可证文件，对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 |
+| 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) | [`go mod tidy -diff`](go/README.md#依赖检查go-mod-tidygovulncheck) |
 
 ### 依赖白名单
 
-一份项目依赖白名单管三种语言：`rust.yml`、`python.yml`、`typescript.yml` 的 `deny-allowlist` 输入，默认 `.github/checks/deny-allowlist.toml`，写法同 cargo-deny。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `bans.allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
+一份项目依赖白名单管四种语言：`rust.yml`、`python.yml`、`typescript.yml`、`go.yml` 的 `deny-allowlist` 输入，默认 `.github/checks/deny-allowlist.toml`，写法同 cargo-deny。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `bans.allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
 
-- 条目：`"name"` 准这个包的所有版本，`"name@version"` 只准这个版本；也认 cargo-deny 的 `{ crate = "name@version" }` 和 `{ name = "...", version = "..." }`。包名照 lockfile 里的写；失败的输出给出要加的那一条。
-- 比什么：Rust 是 `Cargo.lock` 里有 `source` 的包（workspace 成员和 path 依赖不算）；Python 是 `uv.lock`，没有就是由 `requirements.txt` 解析的 `pylock.toml`（见 [Python README](python/README.md#依赖白名单和漏洞pylocktoml)）；TypeScript 是 `package-lock.json` 的 `packages` 里 `node_modules/` 下的包（workspace 链接不算）。只换了来源、版本没变的包不算变了。
-- 白名单文件不存在等于空名单（Rust 的 `deny-merge` 仍要求文件存在）；merge-base 上没有 lockfile 时，所有包都算新增。
-- 名单不分语言：一条 `name` 在三种语言里都放行同名的包。
+- 条目：`"name"` 准这个包的所有版本，`"name@version"` 只准这个版本；也认 cargo-deny 的 `{ crate = "name@version" }` 和 `{ name = "...", version = "..." }`。包名照 lockfile 里的写，Go 写模块路径；失败的输出给出要加的那一条。
+- 比什么：Rust 是 `Cargo.lock` 里有 `source` 的包（workspace 成员和 path 依赖不算）；Python 是 `uv.lock`，没有就是由 `requirements.txt` 解析的 `pylock.toml`（见 [Python README](python/README.md#依赖白名单和漏洞pylocktoml)）；TypeScript 是 `package-lock.json` 的 `packages` 里 `node_modules/` 下的包（workspace 链接不算）；Go 是 build list，即 PR 的项目目录和 merge-base 的副本里各跑一遍 `go list -mod=readonly -m -json all` 列出的模块，主模块不算，`replace` 成别的模块的按替换后的路径和版本算，`replace` 成本地目录的算项目自己的，不算（见 [Go README](go/README.md#依赖检查go-mod-tidygovulncheck)）。只换了来源、版本没变的包不算变了。
+- 白名单文件不存在等于空名单（Rust 的 `deny-merge` 仍要求文件存在）；merge-base 上没有 lockfile（Go 是 `go.mod`）时，所有包都算新增。
+- 名单不分语言：一条 `name` 在四种语言里都放行同名的包。
 - `bans.allow` 不交给 cargo-deny：名单不空时，cargo-deny 会禁掉名单外的所有 crate。
 - 测试：在该目录跑 `python3 -m unittest dependency_allowlist_test`。
 
 ### 覆盖率
 
-三种语言各自只跑单元测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
+四种语言各自只跑单元测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
 
 | 项 | 内容 |
 |---|---|
-| 总覆盖率 | (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，取 Cobertura 报告根节点的总数。不低于门槛 |
+| 总覆盖率 | (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，取 Cobertura 报告根节点的总数。不低于门槛。`go test` 不量分支，Go 的报告里没有分支，总覆盖率和改动行都只算行 |
 | 改动行 | diff-cover 对 merge-base 算 PR 改动行的覆盖率，不低于门槛 |
 | 门槛 | [`coverage/coverage.toml`](coverage/coverage.toml)：`total-min`、`diff-min`，0 到 100，两个键都必须写 |
 | 退出码 | 0 通过，1 不达标，2 出错（配置不对、报告读不了、一行发布代码都没量到、找不到 diff-cover） |
@@ -231,12 +233,12 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 
 门槛只用固定值，不和 merge-base 比：和 merge-base 比，每个 PR 都只能持平或往上，门槛越叠越高。不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步在各 workflow 单独的 Coverage job 里跑，静态检查的 job 不跑测试。
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
-| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`：Coverage 步只跑这些目标 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) | [`go test -cover`](go/README.md#覆盖率go-test) |
+| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`：Coverage 步只跑这些目标 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` | `go.yml` 的 `unit-tests` 输入选 `go test` 的包模式，默认 `./...`：Coverage 步只跑这些包；集成测试放在 build tag（如 `//go:build integration`）后面不参与默认编译，或不列进 `unit-tests` |
 
-覆盖率只算单元测试：改动行、总覆盖率、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。单元测试只跑一遍，就在 Coverage 步里（分片时在各片里）。集成测试是 repo 自己的，由 repo 自己的 job 跑，不进覆盖率，三个 workflow 都不跑。
+覆盖率只算单元测试：改动行、总覆盖率、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。单元测试只跑一遍，就在 Coverage 步里（分片时在各片里）。集成测试是 repo 自己的，由 repo 自己的 job 跑，不进覆盖率，四个 workflow 都不跑。
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 
@@ -247,7 +249,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | 项 | 内容 |
 |---|---|
 | 分数 | CRAP = 复杂度² × (1 − 覆盖率)³ + 复杂度 |
-| 复杂度 | [lizard](https://github.com/terryyin/lizard) 算的圈复杂度，三种语言同一个工具。版本连同依赖带 hash 固定在 [`crap/requirements.txt`](crap/requirements.txt)（生成命令同覆盖率）。Rust 的 `match` 按分支数算，但范围模式的分支（`90..=100 =>`）lizard 不算，分数偏低 |
+| 复杂度 | [lizard](https://github.com/terryyin/lizard) 算的圈复杂度，四种语言同一个工具。版本连同依赖带 hash 固定在 [`crap/requirements.txt`](crap/requirements.txt)（生成命令同覆盖率）。Rust 的 `match` 按分支数算，但范围模式的分支（`90..=100 =>`）lizard 不算，分数偏低 |
 | 覆盖率 | 第 8 项 Coverage 步对 PR 跑出的同一份 Cobertura 报告，只来自单元测试，不再跑测试。一个函数的覆盖率 = 它起止行之间 (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，和第 8 项同一算法。声明那一行（`def`、`export const f =`）在模块加载时就算执行过，不计入，没被调用的函数才会是 0%；只有一行的函数例外。只量报告里有的文件，一行都没量到的函数不列 |
 | 不失败 | 脚本永远退出 0；报告不存在、读不了、lizard 装不上或跑不了时，打印一行 `CRAP report skipped: <原因>`，同一行也写进 job summary。这一步另加 `continue-on-error`，任何意外都不改 job 结果 |
 
@@ -255,21 +257,21 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 
 ### 变异测试
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| cargo-mutants | mutmut | Stryker |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| cargo-mutants | mutmut | Stryker | gremlins |
 
 ### sanitizer
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| ASan、TSan、Miri | 不适用 | 不适用 |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| ASan、TSan、Miri | 不适用 | 不适用 | `-race`（竞态检测） |
 
 ### 文档测试
 
-| Rust | Python | TypeScript |
-|---|---|---|
-| `cargo test --doc` | doctest | 无标准工具 |
+| Rust | Python | TypeScript | Go |
+|---|---|---|---|
+| `cargo test --doc` | doctest | 无标准工具 | `Example` 函数（带 `// Output:`，由 `go test` 跑） |
 
 ## 流程级
 
@@ -338,3 +340,4 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | Rust | `rustfmt.toml`, `.rustfmt.toml`, `clippy.toml`, `.clippy.toml`, `**/.cargo/config.toml`, `**/.cargo/config`, `**/.cargo/mutants.toml`, `mutants.toml`, `deny.toml`, `rust-toolchain.toml`, `rust-toolchain`, `**/.config/nextest.toml`, `build.rs` |
 | Python | `pyproject.toml`, `setup.py`, `ruff.toml`, `.ruff.toml`, `setup.cfg`, `tox.ini`, `pytest.ini`, `conftest.py`, `.coveragerc`, `mypy.ini`, `.mypy.ini`, `pyrightconfig.json`, `sitecustomize.py`, `usercustomize.py` |
 | TypeScript | `package.json`, `.prettierignore`, `.eslintignore`, `tsconfig*.json`, `jsconfig*.json`, `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `prettier.config.*`, `vitest.config.*`, `vite.config.*`, `jest.config.*`, `.c8rc*`, `.nycrc*`, `stryker.conf.*`, `knip.json`, `.knip.json*`, `.npmrc` |
+| Go | `go.mod`, `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`, `go.work` |

@@ -239,6 +239,58 @@ def parse_paths(out: str) -> Iterator[Finding]:
             yield Finding(where(row.strip()), None, "not formatted")
 
 
+def parse_golangci(out: str) -> Iterator[Finding]:
+    for issue in json.loads(out)["Issues"] or ():
+        linter, pos = issue["FromLinter"], issue["Pos"]
+        yield Finding(
+            where(pos["Filename"]),
+            pos["Line"],
+            f"{linter}: {issue['Text']}",
+            anywhere=linter == "typecheck",
+        )
+
+
+NON_SPACE = re.compile(r"\S")
+
+
+# go vet -json prints indented JSON objects one after another, not one per line.
+# dependency_allowlist.py has its own copy: both scripts run standalone, from their own directories.
+def json_stream(out: str) -> Iterator[Any]:
+    decoder, at = json.JSONDecoder(), 0
+    while start := NON_SPACE.search(out, at):
+        value, at = decoder.raw_decode(out, start.start())
+        yield value
+
+
+GO_POSITION = re.compile(r"(.+?):(\d+)(?::\d+)?")
+
+
+def parse_go_vet(out: str) -> Iterator[Finding]:
+    for packages in json_stream(out):
+        for analyzers in packages.values():
+            for analyzer, diagnostics in analyzers.items():
+                for diagnostic in diagnostics:
+                    posn = GO_POSITION.fullmatch(diagnostic["posn"])
+                    if not posn:
+                        raise ValueError(f"unexpected position: {diagnostic['posn']}")
+                    yield Finding(
+                        where(posn[1]), int(posn[2]), f"{analyzer}: {diagnostic['message']}"
+                    )
+
+
+DEADCODE = re.compile(r"(.+):(\d+):\d+: (.+)")
+
+
+def parse_deadcode(out: str) -> Iterator[Finding]:
+    for row in rows(out):
+        if not row.strip():
+            continue
+        match = DEADCODE.fullmatch(row)
+        if not match:
+            raise ValueError(f"unexpected line: {row}")
+        yield Finding(where(match[1]), int(match[2]), match[3])
+
+
 @dataclass(frozen=True)
 class Format:
     parse: Callable[[str], Iterable[Finding]]
@@ -257,6 +309,9 @@ FORMATS = {
     "tsc": Format(parse_tsc, frozenset({0, 1, 2})),
     "knip": Format(parse_knip, frozenset({0, 1})),
     "paths": Format(parse_paths, frozenset({0, 1})),
+    "golangci": Format(parse_golangci, frozenset({0, 1})),
+    "go-vet": Format(parse_go_vet, frozenset({0})),
+    "deadcode": Format(parse_deadcode, frozenset({0})),
 }
 
 

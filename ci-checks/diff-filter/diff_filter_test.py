@@ -7,6 +7,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 from diff_filter import FORMATS, Finding, main, parse_diff, split
@@ -21,6 +22,10 @@ def git(cwd: Path, *args: str) -> None:
         check=True,
         capture_output=True,
     )
+
+
+def golangci(linter: str, text: str, filename: str, line: int) -> dict[str, Any]:
+    return {"FromLinter": linter, "Text": text, "Pos": {"Filename": filename, "Line": line}}
 
 
 def parse(name: str, out: str) -> set[Finding]:
@@ -259,6 +264,77 @@ class Parsers(unittest.TestCase):
             },
         )
 
+    def test_golangci_typecheck_fails_anywhere(self):
+        out = json.dumps(
+            {
+                "Issues": [
+                    golangci("errcheck", "Error return value is not checked", "a/a.go", 9),
+                    golangci("typecheck", "undefined: x", "b/b.go", 3),
+                ],
+                "Report": {},
+            }
+        )
+        self.assertEqual(
+            parse("golangci", out),
+            {
+                Finding(ROOT / "a/a.go", 9, "errcheck: Error return value is not checked"),
+                Finding(ROOT / "b/b.go", 3, "typecheck: undefined: x", anywhere=True),
+            },
+        )
+
+    def test_golangci_without_issues(self):
+        for out in ('{"Issues":null,"Report":{}}', '{"Issues":[],"Report":{}}'):
+            with self.subTest(out):
+                self.assertEqual(parse("golangci", out), set())
+
+    def test_go_vet_position_without_a_column(self):
+        # Go drops a zero column, e.g. after a //line directive from goyacc.
+        out = json.dumps({"example.com/m": {"printf": [{"posn": "/repo/parser.y:12", "message": "bad"}]}})
+        self.assertEqual(parse("go-vet", out), {Finding(ROOT / "parser.y", 12, "printf: bad")})
+
+    def test_go_vet_reads_the_object_stream(self):
+        diagnostic = {"posn": "/repo/a/a.go:5:24", "end": "/repo/a/a.go:5:27", "message": "bad"}
+        out = (
+            "{}\n"
+            + json.dumps(
+                {
+                    "example.com/m/a": {
+                        "printf": [diagnostic],
+                        "unreachable": [{"posn": "/repo/a/a.go:9:2", "message": "unreachable"}],
+                    }
+                },
+                indent="\t",
+            )
+            + json.dumps(
+                {"example.com/m/b": {"copylocks": [{"posn": "/x/b.go:3:1", "message": "c"}]}}
+            )
+            + "\n"
+        )
+        self.assertEqual(
+            parse("go-vet", out),
+            {
+                Finding(ROOT / "a/a.go", 5, "printf: bad"),
+                Finding(ROOT / "a/a.go", 9, "unreachable: unreachable"),
+                Finding(Path("/x/b.go"), 3, "copylocks: c"),
+            },
+        )
+
+    def test_go_vet_without_diagnostics(self):
+        for out in ("", "{}\n", "{}\n{}\n"):
+            with self.subTest(out):
+                self.assertEqual(parse("go-vet", out), set())
+
+    def test_deadcode(self):
+        out = "a/a.go:9:6: unreachable func: F\ncmd/x/main.go:12:1: unreachable func: T.m\n"
+        self.assertEqual(
+            parse("deadcode", out),
+            {
+                Finding(ROOT / "a/a.go", 9, "unreachable func: F"),
+                Finding(ROOT / "cmd/x/main.go", 12, "unreachable func: T.m"),
+            },
+        )
+        self.assertEqual(parse("deadcode", ""), set())
+
     def test_unparsable_output_raises(self):
         for name, out in [
             ("cargo", "not json\n"),
@@ -270,6 +346,21 @@ class Parsers(unittest.TestCase):
         ]:
             with self.subTest(name), self.assertRaises((ValueError, KeyError, TypeError)):
                 parse(name, out)
+
+    def test_unparsable_go_output_raises(self):
+        for name, out in [
+            ("golangci", "level=error msg=boom\n"),
+            ("golangci", "{}"),
+            ("go-vet", "# example.com/m/a\n"),
+            ("go-vet", "{} trailing"),
+            ("go-vet", '{"p": {"printf": [{"posn": "a.go", "message": "x"}]}}'),
+            ("deadcode", "garbage\n"),
+            ("deadcode", "a.go:9: no column\n"),
+        ]:
+            with self.subTest(name, out=out):
+                fmt = FORMATS[name]
+                with self.assertRaises((ValueError, KeyError, TypeError)):
+                    list(fmt.parse(out))
 
 
 class Split(unittest.TestCase):
@@ -434,6 +525,59 @@ class Main(unittest.TestCase):
         code, out = self.run_main("Traceback: boom\n", 3)
         self.assertEqual(code, 2)
         self.assertIn("Traceback: boom", out)
+
+    def test_golangci_issue_in_untouched_line_passes(self):
+        issue = golangci("errcheck", "unchecked", "m.py", 1)
+        code, out = self.run_main(json.dumps({"Issues": [issue]}), 1, "golangci")
+        self.assertEqual(code, 0, out)
+        self.assertIn("src/m.py: 1", out)
+
+    def test_golangci_issue_in_changed_line_fails(self):
+        issue = golangci("errcheck", "unchecked", "m.py", 3)
+        code, out = self.run_main(json.dumps({"Issues": [issue]}), 1, "golangci")
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/m.py:3: errcheck: unchecked", out)
+
+    def test_golangci_typecheck_in_untouched_line_fails(self):
+        issue = golangci("typecheck", "undefined: y", "m.py", 1)
+        self.assertEqual(self.run_main(json.dumps({"Issues": [issue]}), 1, "golangci")[0], 1)
+
+    def test_golangci_clean_run_passes(self):
+        self.assertEqual(self.run_main('{"Issues":null,"Report":{}}', 0, "golangci")[0], 0)
+
+    def test_golangci_other_exit_is_a_tool_failure(self):
+        code, out = self.run_main('{"Issues":null,"Report":{}}', 3, "golangci")
+        self.assertEqual(code, 2)
+        self.assertIn("exited with 3", out)
+
+    def test_go_vet_finding_in_changed_line_fails_and_untouched_line_passes(self):
+        def vet(line: int) -> str:
+            posn = f"{self.repo / 'src/m.py'}:{line}:1"
+            return json.dumps({"example.com/m": {"printf": [{"posn": posn, "message": "bad"}]}})
+
+        code, out = self.run_main("{}\n" + vet(1), 0, "go-vet")
+        self.assertEqual(code, 0, out)
+        self.assertIn("src/m.py: 1", out)
+        code, out = self.run_main(vet(3), 0, "go-vet")
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/m.py:3: printf: bad", out)
+
+    def test_go_vet_compile_error_is_a_failure(self):
+        code, out = self.run_main("", 1, "go-vet")
+        self.assertEqual(code, 2)
+        self.assertIn("exited with 1", out)
+
+    def test_deadcode_finding_in_changed_line_fails_and_untouched_line_passes(self):
+        code, out = self.run_main("m.py:1:5: unreachable func: old\n", 0, "deadcode")
+        self.assertEqual(code, 0, out)
+        code, out = self.run_main("m.py:3:5: unreachable func: New\n", 0, "deadcode")
+        self.assertEqual(code, 1, out)
+        self.assertIn("src/m.py:3: unreachable func: New", out)
+
+    def test_deadcode_nonzero_exit_is_a_tool_failure(self):
+        code, out = self.run_main("m.py:3:5: unreachable func: New\n", 1, "deadcode")
+        self.assertEqual(code, 2)
+        self.assertIn("exited with 1", out)
 
     def test_unknown_base_is_a_failure(self):
         self.assertEqual(self.run_main("", 0, base="no-such-ref")[0], 2)

@@ -136,6 +136,37 @@ NPM_HEAD = {
 }
 
 
+def go_list(*modules: object) -> str:
+    return "\n".join(json.dumps(m, indent="\t") for m in modules) + "\n"
+
+
+GO_MAIN = {"Path": "example.com/app", "Main": True, "Dir": "/src/app", "GoVersion": "1.16"}
+GO_LOCAL = {"Path": "example.com/lib", "Version": "v0.0.0", "Replace": {"Path": "../lib", "Dir": "/src/lib"}}
+
+
+def go_fork(version: str) -> dict[str, object]:
+    fork = {"Path": "example.com/fork/text", "Version": version}
+    return {"Path": "golang.org/x/text", "Version": "v0.3.0", "Replace": fork}
+
+
+GO_BASE = go_list(
+    GO_MAIN,
+    {"Path": "github.com/google/uuid", "Version": "v1.6.0"},
+    go_fork("v0.3.1"),
+    GO_LOCAL,
+)
+
+GO_HEAD = go_list(
+    GO_MAIN,
+    {"Path": "github.com/google/uuid", "Version": "v1.6.0"},
+    go_fork("v0.3.2"),
+    GO_LOCAL,
+    {"Path": "example.com/tools", "Version": "v1.0.0", "Replace": {"Path": "./tools", "Dir": "/src/app/tools"}},
+    {"Path": "rsc.io/quote", "Version": "v1.5.2"},
+    {"Path": "rsc.io/sampler", "Version": "v1.3.0", "Indirect": True},
+)
+
+
 class Check(unittest.TestCase):
     def run_main(self, fmt: str, base: str | None, head: str, allowlist: str | None) -> tuple[int, list[str]]:
         with tempfile.TemporaryDirectory() as tmp:
@@ -180,6 +211,42 @@ class Check(unittest.TestCase):
         ):
             code, flagged = self.run_main("npm", json.dumps(NPM_BASE), json.dumps(NPM_HEAD), allowlist)
             self.assertEqual((code, flagged), (0, []), allowlist)
+
+    def test_go_reports_new_and_transitive_modules_under_their_replacement(self):
+        code, flagged = self.run_main("go", GO_BASE, GO_HEAD, "")
+        self.assertEqual(code, 1)
+        self.assertEqual(flagged, ["example.com/fork/text@v0.3.2", "rsc.io/quote@v1.5.2", "rsc.io/sampler@v1.3.0"])
+
+    def test_go_without_base_skips_the_main_module_and_local_replaces(self):
+        code, flagged = self.run_main("go", None, GO_BASE, None)
+        self.assertEqual((code, flagged), (1, ["example.com/fork/text@v0.3.1", "github.com/google/uuid@v1.6.0"]))
+
+    def test_go_allowlist_entry_forms(self):
+        for allowlist in (
+            '[bans]\nallow = ["rsc.io/quote", "rsc.io/sampler@v1.3.0", "example.com/fork/text"]\n',
+            (
+                '[bans]\nallow = [{ crate = "rsc.io/quote@v1.5.2" }, { name = "rsc.io/sampler" },'
+                ' { name = "example.com/fork/text", version = "v0.3.2" }]\n'
+            ),
+        ):
+            code, flagged = self.run_main("go", GO_BASE, GO_HEAD, allowlist)
+            self.assertEqual((code, flagged), (0, []), allowlist)
+
+    def test_go_allowing_the_replaced_path_does_not_allow_the_replacement(self):
+        allowlist = '[bans]\nallow = ["golang.org/x/text", "rsc.io/quote", "rsc.io/sampler"]\n'
+        code, flagged = self.run_main("go", GO_BASE, GO_HEAD, allowlist)
+        self.assertEqual((code, flagged), (1, ["example.com/fork/text@v0.3.2"]))
+
+    def test_go_message_names_the_entry_and_the_allowlist(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base, head, allow = Path(tmp, "base"), Path(tmp, "head"), Path(tmp, "allow.toml")
+            base.write_text(GO_BASE)
+            head.write_text(GO_HEAD)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main(["go", str(allow), str(base), str(head)])
+            message = f'rsc.io/quote@v1.5.2: not in bans.allow of {allow}; add "rsc.io/quote@v1.5.2"'
+            self.assertIn(message, out.getvalue())
 
     def test_unchanged_and_removed_packages_pass(self):
         code, flagged = self.run_main("python", PYLOCK_HEAD, PYLOCK_BASE, "")

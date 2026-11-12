@@ -69,11 +69,11 @@ class Merging(unittest.TestCase):
         code, _ = self.run_main('[bans]\nallow = "serde"\n')
         self.assertEqual(code, 2)
 
-    def test_missing_project_file_is_an_error(self):
+    def test_missing_project_file_is_an_empty_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp, "deny.toml")
-            self.assertEqual(main([str(SHARED), str(LICENSES), str(Path(tmp, "missing.toml")), str(out)]), 2)
-            self.assertFalse(out.exists())
+            self.assertEqual(main([str(SHARED), str(LICENSES), str(Path(tmp, "missing.toml")), str(out)]), 0)
+            self.assertEqual(tomllib.loads(out.read_text()), self.run_main("")[1])
 
 
 if __name__ == "__main__":

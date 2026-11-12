@@ -1,38 +1,16 @@
 import json
 import sys
 import tomllib
-from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-ALLOWLIST_KEYS = {
-    ("bans", "allow"),
-    ("bans", "build", "allow-build-scripts"),
-    ("sources", "allow-git"),
-    ("sources", "allow-registry"),
-    ("licenses", "exceptions"),
-}
-
-
-class Error(Exception):
-    pass
-
-
-def leaves(table: dict[str, Any], path: tuple[str, ...] = ()) -> Iterator[tuple[tuple[str, ...], Any]]:
-    for key, value in table.items():
-        if isinstance(value, dict):
-            yield from leaves(value, path + (key,))
-        else:
-            yield path + (key,), value
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "allowlist"))
+from allowlist import Error, leaves, load
 
 
 def merge(shared: dict[str, Any], project: dict[str, Any]) -> dict[str, Any]:
+    """project is a validated allowlist: every leaf is an array under an allowlist key."""
     for path, value in leaves(project):
-        name = ".".join(path)
-        if path not in ALLOWLIST_KEYS:
-            raise Error(f"{name}: not an allowlist key; allowed: {', '.join(sorted('.'.join(k) for k in ALLOWLIST_KEYS))}")
-        if not isinstance(value, list):
-            raise Error(f"{name}: must be an array")
         node = shared
         for key in path[:-1]:
             node = node.setdefault(key, {})
@@ -72,8 +50,7 @@ def main(argv: list[str]) -> int:
     try:
         shared = tomllib.loads(shared_path.read_text())
         shared.setdefault("licenses", {})["allow"] = tomllib.loads(licenses_path.read_text())["allow"]
-        project = tomllib.loads(project_path.read_text())
-        output.write_text("\n".join(dump(merge(shared, project))) + "\n")
+        output.write_text("\n".join(dump(merge(shared, load(project_path).raw))) + "\n")
     except (OSError, tomllib.TOMLDecodeError, Error) as error:
         print(f"deny_merge: {error}", file=sys.stderr)
         return 2

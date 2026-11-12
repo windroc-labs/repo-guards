@@ -12,7 +12,7 @@ on:
         type: string
         default: .
       deny-allowlist:
-        description: The repo's cargo-deny allowlist, merged into the shared deny.toml
+        description: The repo's dependency allowlist, merged into the shared deny.toml; may be absent
         type: string
         default: .github/checks/deny-allowlist.toml
       unit-tests:

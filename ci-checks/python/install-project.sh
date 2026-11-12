@@ -37,14 +37,18 @@ case $command in
     else
       uv venv --clear --python 3.12 .venv
     fi
+    hint="::error::Resolving builds only what the allowlist admits. If uv says building source distributions is disabled: for a git or URL line in the project's requirement files, add its repository URL to python.sources.allow-git or its URL prefix to python.sources.allow-registry; for a PyPI sdist, or a git or URL source another package depends on, add its package name to python.bans.build.allow-build-scripts."
     allowlist=(uv run --no-project --python 3.12 "$(dirname "$0")/../allowlist/allowlist.py")
     "${allowlist[@]}" prebuild python --allowlist "$ALLOWLIST" "${files[@]}" > "$resolved.prebuild"
     while IFS= read -r requirement; do
-      uv pip compile --python .venv/bin/python --no-deps --quiet -o /dev/null - <<< "$requirement"
+      if ! uv pip compile --python .venv/bin/python --no-deps --quiet -o /dev/null - <<< "$requirement"; then
+        echo "::error::Building the admitted requirement $requirement failed."
+        exit 1
+      fi
     done < "$resolved.prebuild"
     if ! uv pip compile --python .venv/bin/python "${wheels[@]}" --emit-index-annotation --generate-hashes --quiet \
       -o "$resolved" "${files[@]}"; then
-      echo "::error::Resolving builds nothing. If uv says building source distributions is disabled, a git requirement it must build to read: add its repository URL to python.sources.allow-git in the allowlist; a PyPI sdist: add its name to python.bans.build.allow-build-scripts."
+      echo "$hint"
       exit 1
     fi
     ;;

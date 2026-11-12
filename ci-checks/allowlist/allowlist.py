@@ -262,8 +262,8 @@ def violations(
 ) -> list[str]:
     """One line per package the rules reject, naming the allowlist entry (under prefix) that would admit it.
 
-    Registries are not checked: python.yml and typescript.yml never limited them. A remote package is an npm
-    package from a tarball URL, which npm's allow-remote=none rejects unless sources.allow-registry holds its prefix.
+    Registries are not checked: python.yml and typescript.yml never limited them. A remote package comes from a
+    URL no registry serves (a Python direct URL, an npm tarball URL); sources.allow-registry prefixes admit it.
     """
     found: list[str] = []
     for package in locked:
@@ -273,7 +273,7 @@ def violations(
         if package.kind == "remote" and not under(package.url, allowlist.registries):
             origin = urllib.parse.urlsplit(package.url)
             found.append(
-                f"{label}: tarball URL {package.url} is not allowed; "
+                f"{label}: URL source {package.url} is not allowed; "
                 f"add {origin.scheme}://{origin.netloc} to {prefix}sources.allow-registry"
             )
         if package.kind == "git":
@@ -307,8 +307,10 @@ def read_uv_lock(path: Path) -> list[Locked]:
     for package in tomllib.loads(path.read_text()).get("package", []):
         source: dict[str, str] = package.get("source", {})
         name, version = package["name"], package.get("version", "")
-        if kind := next((k for k in ("registry", "git", "url") if k in source), None):
+        if kind := next((k for k in ("registry", "git") if k in source), None):
             locked.append(Locked(name, version, kind, source[kind]))
+        elif "url" in source:
+            locked.append(Locked(name, version, "remote", source["url"]))
         elif any(k in source for k in UV_LOCAL_SOURCES):
             locked.append(Locked(name, version, "local", ""))
         else:
@@ -326,7 +328,13 @@ def read_requirements(path: Path) -> list[Locked]:
             if index and locked and locked[-1].kind == "registry" and not locked[-1].url:
                 locked[-1] = locked[-1]._replace(url=index.group(1))
         elif line.startswith(("-e ", "--editable ")):
-            locked.append(Locked(Path(line.split(maxsplit=1)[1]).name, "", "local", ""))
+            target = line.split(maxsplit=1)[1]
+            if "://" in target:
+                egg = re.search(r"[#&]egg=([A-Za-z0-9._-]+)", target)
+                kind = url_kind(target, path)
+                locked.append(Locked(egg.group(1) if egg else "", "", kind, target))
+            else:
+                locked.append(Locked(Path(target).name, "", "local", ""))
         elif line.startswith("-") and not raw[0].isspace():
             if re.split(r"[\s=]", line, maxsplit=1)[0] not in COMPILE_OPTIONS:
                 raise Error(f"{path}: cannot read option line {line!r}")
@@ -338,15 +346,20 @@ def read_requirements(path: Path) -> list[Locked]:
             if version:
                 locked.append(Locked(name, version, "registry", ""))
             else:
-                kind = (
-                    "git"
-                    if url.startswith("git+")
-                    else "local"
-                    if url.startswith("file:")
-                    else "url"
-                )
+                kind = url_kind(url, path)
                 locked.append(Locked(name, "", kind, "" if kind == "local" else url))
     return locked
+
+
+def url_kind(url: str, where: Path) -> str:
+    """The kind of a direct reference: git, a local file, or a remote URL (wheel or sdist)."""
+    if url.startswith("git+"):
+        return "git"
+    if url.startswith("file:"):
+        return "local"
+    if url.startswith(("https:", "http:")):
+        return "remote"
+    raise Error(f"{where}: {url!r} is no known source")
 
 
 def read_cargo_lock(path: Path) -> list[Locked]:
@@ -442,7 +455,6 @@ def read_python_lock(args: argparse.Namespace) -> list[Locked]:
 
 
 def check_python(args: argparse.Namespace) -> int:
-    """A git source has no wheel, so the allow-git entry that admits it also admits its build."""
     allowlist = load(args.allowlist, "python")
     return report(violations(read_python_lock(args), allowlist, "python.", pep503))
 
@@ -492,25 +504,47 @@ def requirement_lines(path: Path, seen: set[Path]) -> Iterator[str]:
             yield line
 
 
+# A requirement whose source is a URL: [-e ][name[extras] @ ]URL[ ; markers]
+DIRECT_REFERENCE = re.compile(
+    r"(?:(?:-e|--editable)\s+)?(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@\s*)?"
+    r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://\S+)(?:\s+;.*)?"
+)
+
+
+def admits_source(url: str, allowlist: Allowlist) -> bool:
+    """Whether an entry admits this git or remote source, and so its build: neither has a wheel to fall back on."""
+    if url.startswith("git+"):
+        return any(s.matches(url) for s in allowlist.git)
+    return url.startswith(("https:", "http:")) and under(url, allowlist.registries)
+
+
 def prebuild_python(args: argparse.Namespace) -> int:
-    """The git requirements the allowlist admits, as written. uv caches metadata by the URL as written, so
-    building each alone lets the strict resolve read a git source that names no package. Only chooses what
-    to build: admission is check python's, on uv's output, so a line missed here fails the resolve."""
+    """The direct-reference requirements the allowlist admits, as written. uv caches metadata by the URL as
+    written, so building each alone lets the strict resolve read a source that names no package. Only chooses
+    what to build: admission is check python's, on uv's output, so a line missed here fails the resolve."""
     allowlist = load(args.allowlist, "python")
     seen: set[Path] = set()
     for path in args.files:
         for line in requirement_lines(path, seen):
-            url = re.search(r"git\+\S+", line)
-            if url and any(s.matches(url.group()) for s in allowlist.git):
+            direct = DIRECT_REFERENCE.fullmatch(line)
+            if direct and admits_source(direct.group("url"), allowlist):
                 print(line)
     return 0
 
 
 def env_python(args: argparse.Namespace) -> int:
-    """UV_NO_BINARY_PACKAGE: the build entries, plus the git packages of a checked lock or resolution."""
+    """UV_NO_BINARY_PACKAGE: the build entries, plus the git and remote sdist packages of a checked lock or
+    resolution. An admitted git or remote source admits its build; a remote wheel needs none."""
     allowlist = load(args.allowlist, "python")
     names = [spec.name for spec in allowlist.build]
-    names += [package.name for package in read_python_lock(args) if package.kind == "git"]
+    names += [
+        package.name
+        for package in read_python_lock(args)
+        if package.name
+        and (
+            package.kind == "git" or (package.kind == "remote" and not package.url.endswith(".whl"))
+        )
+    ]
     if names:
         print(f"UV_NO_BINARY_PACKAGE={' '.join(dict.fromkeys(names))}")
     return 0

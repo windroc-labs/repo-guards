@@ -287,11 +287,11 @@ class Violations(unittest.TestCase):
         self.assertIn("idna@3.10", message)
         self.assertIn("python.bans.allow", message)
 
-    def test_url_and_local_sources_have_no_rule(self):
-        self.assertEqual(
-            self.check([Locked("w", "1.0", "url", "https://example.org/w-1.0-py3-none-any.whl")]),
-            [],
-        )
+    def test_python_url_source_needs_a_prefix_entry(self):
+        locked = [Locked("w", "1.0", "remote", "https://example.org/w-1.0-py3-none-any.whl")]
+        (message,) = self.check(locked)
+        self.assertIn("add https://example.org to python.sources.allow-registry", message)
+        self.assertEqual(self.check(locked, Allowlist(registries=("https://example.org",))), [])
 
 
 UV_LOCK = """\
@@ -384,7 +384,10 @@ class Readers(unittest.TestCase):
                 ),
                 Locked("member", "0.2.0", "local", ""),
                 Locked(
-                    "wheel-url", "1.0", "url", "https://example.org/wheel_url-1.0-py3-none-any.whl"
+                    "wheel-url",
+                    "1.0",
+                    "remote",
+                    "https://example.org/wheel_url-1.0-py3-none-any.whl",
                 ),
                 Locked("numpy", "2.0.2", "registry", PYPI),
                 Locked("numpy", "2.2.6", "registry", PYPI),
@@ -402,7 +405,7 @@ class Readers(unittest.TestCase):
                 Locked("private-pkg", "2.0.0", "registry", "https://pypi.example.org/simple"),
                 Locked("somepkg", "", "git", "git+https://github.com/example/somepkg@0123"),
                 Locked(
-                    "wheel-url", "", "url", "https://example.org/wheel_url-1.0-py3-none-any.whl"
+                    "wheel-url", "", "remote", "https://example.org/wheel_url-1.0-py3-none-any.whl"
                 ),
                 Locked("local-pkg", "", "local", ""),
             ],
@@ -463,6 +466,7 @@ class Cli(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertNotIn("private-pkg", err)
             self.assertIn("somepkg@4.0.0: git source", err)
+            self.assertIn("wheel-url@1.0: URL source", err)
             self.assertNotIn("allow-build-scripts", err)
 
     def test_check_python_admits_a_git_source_by_url_or_commit_alone(self):
@@ -527,6 +531,7 @@ class Cli(unittest.TestCase):
             Path(tmp, "a.toml").write_text(
                 '[python.bans.build]\nallow-build-scripts = ["SomePkg"]\n'
                 '[python.sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
+                'allow-registry = ["https://example.org"]\n'
             )
             Path(tmp, "r.txt").write_text(REQUIREMENTS)
             code, _, err = self.run_main(
@@ -597,13 +602,17 @@ class Cli(unittest.TestCase):
                 (0, "", ""),
             )
 
-    def test_prebuild_python_lists_the_admitted_git_lines_as_written(self):
+    def test_prebuild_python_lists_the_admitted_direct_references_as_written(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "requirements.txt").write_text(
                 "-r=more.txt\n"
                 "-rmore2.txt\n"
                 "--requirement extra.txt\n"
                 "-r requirements.txt\n"
+                "--requirement=extra2.txt\n"
+                "evil @ http://127.0.0.1:8765/evil-1.0.tar.gz?x=git+https://git.example.org/o/named\n"
+                "evil2 @ https://files.example.org/e-1.0.tar.gz#git+https://git.example.org/o/named\n"
+                "https://files.example.net/pkg/sdist-1.0.tar.gz\n"
                 "six==1.17.0\n"
                 f"git+https://git.example.org/o/dyn@{SHA_A}  # no name\n"
                 'named @ git+https://git.example.org/o/named@main ; python_version >= "3"\n'
@@ -616,12 +625,19 @@ class Cli(unittest.TestCase):
             Path(tmp, "more2.txt").write_text("git+https://git.example.org/o/more2\n")
             Path(tmp, "extra.txt").write_text("-c constraints.txt\n")
             Path(tmp, "constraints.txt").write_text(f"git+https://git.example.org/o/con@{SHA_B}\n")
+            Path(tmp, "extra2.txt").write_text(
+                "-c=c2.txt\n--constraint=c3.txt\n--constraint c4.txt\n"
+            )
+            for name in ("c2", "c3", "c4"):
+                Path(tmp, f"{name}.txt").write_text(f"git+https://git.example.org/o/inc@{name}\n")
             Path(tmp, "a.toml").write_text(
                 '[python.sources]\nallow-git = ["https://git.example.org/o/named", '
                 '"https://git.example.org/o/more", "https://git.example.org/o/more2", '
                 '"https://git.example.org/o/long", "https://git.example.org/o/edit", '
+                '"https://git.example.org/o/inc", '
                 f'{{ url = "https://git.example.org/o/dyn", rev = "{SHA_A}" }}, '
                 f'{{ url = "https://git.example.org/o/con", rev = "{SHA_A}" }}]\n'
+                'allow-registry = ["https://files.example.net/pkg"]\n'
                 '[sources]\nallow-git = ["https://git.example.org/o/unlisted"]\n'
             )
             code, out, err = self.run_main(
@@ -640,6 +656,10 @@ class Cli(unittest.TestCase):
             [
                 "git+https://git.example.org/o/more",
                 "git+https://git.example.org/o/more2",
+                "git+https://git.example.org/o/inc@c2",
+                "git+https://git.example.org/o/inc@c3",
+                "git+https://git.example.org/o/inc@c4",
+                "https://files.example.net/pkg/sdist-1.0.tar.gz",
                 f"git+https://git.example.org/o/dyn@{SHA_A}",
                 'named @ git+https://git.example.org/o/named@main ; python_version >= "3"',
                 f"-e git+https://git.example.org/o/edit.git@{SHA_A}#egg=edit",
@@ -682,6 +702,26 @@ class Cli(unittest.TestCase):
                     ]
                 ),
                 (0, "UV_NO_BINARY_PACKAGE=somepkg\n", ""),
+            )
+
+    def test_env_python_lets_url_sdists_build_and_not_url_wheels(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "r.txt").write_text(
+                "sd @ https://files.example.net/sd-1.0.tar.gz\n"
+                "wh @ https://files.example.net/wh-1.0-py3-none-any.whl\n"
+            )
+            self.assertEqual(
+                self.run_main(
+                    [
+                        "env",
+                        "python",
+                        "--allowlist",
+                        str(Path(tmp, "none.toml")),
+                        "--requirements",
+                        str(Path(tmp, "r.txt")),
+                    ]
+                ),
+                (0, "UV_NO_BINARY_PACKAGE=sd\n", ""),
             )
 
 
@@ -872,9 +912,9 @@ class Npm(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertNotIn("@scope/private", err)
             self.assertIn(
-                "tarred@1.0.0: tarball URL https://files.example.org/tarred-1.0.0.tgz", err
+                "tarred@1.0.0: URL source https://files.example.org/tarred-1.0.0.tgz", err
             )
-            self.assertIn("overridden@4.0.0: tarball URL", err)
+            self.assertIn("overridden@4.0.0: URL source", err)
             self.assertIn("hosted@1.0.0: git source", err)
             self.assertNotIn("github.com to typescript.sources.allow-registry", err)
             self.assertIn("somepkg@4.0.0: git source", err)

@@ -11,7 +11,7 @@
 | `uv.lock` | `uv sync --locked` |
 | 没有 `uv.lock` | `uv pip compile` 解析 `requirements` 输入的文件（默认 `requirements.txt`，空格分开）和存在的 `requirements-dev` 文件（默认 `requirements-dev.txt`，放 pytest 等测试用的包），记下每个包来自哪个 index，再 `uv pip sync` 进 `.venv`。Python 版本取 `.python-version`，没有就用 3.12 |
 
-两种都只装 wheel；[依赖白名单](../README.md#依赖白名单)的 `[python]` 表里 `bans.build.allow-build-scripts` 的包和 `sources.allow-git` 放行的 git 依赖从源码构建。Dependency rules 步在装之前：有 `uv.lock` 查它；没有就解析再查解析结果。解析不跑构建代码，只在解析前把 requirements 文件里（跟着 `-r`、`-c`）放行的 git 依赖照原样单独构建一次，没写包名的 git 行也解析得出来。之后各步都用 `.venv`，两种项目跑法一样。只有零散脚本、没有 `src` 的项目把 `source-dirs` 设成 `.`：vulture 跳过 `.venv`，pyright 和 coverage.py 本来就不进去。
+两种都只装 wheel；[依赖白名单](../README.md#依赖白名单)的 `[python]` 表里 `bans.build.allow-build-scripts` 的包，和 `sources.allow-git`、`sources.allow-registry` 放行的 git、URL 依赖从源码构建。Dependency rules 步在装之前：有 `uv.lock` 查它；没有就解析再查解析结果。解析不跑构建代码，只在解析前把 requirements 文件里（跟着 `-r`、`-c`）放行的 git、URL 行照原样单独构建一次，没写包名的行也解析得出来。之后各步都用 `.venv`，两种项目跑法一样。只有零散脚本、没有 `src` 的项目把 `source-dirs` 设成 `.`：vulture 跳过 `.venv`，pyright 和 coverage.py 本来就不进去。
 
 ## formatter（ruff format）
 
@@ -67,7 +67,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 
 ## 依赖检查
 
-`python.yml` 的 Dependency rules 步在安装前用 [`allowlist.py`](../allowlist/allowlist.py) 拿项目的包对[依赖白名单](../README.md#依赖白名单)的 `[python]` 表：有 `uv.lock` 读它，没有就读[项目安装](#项目安装)的解析结果。git 源要在 `sources.allow-git` 里（按 URL，带 `rev` 的还要对上 commit），放行就准构建，不用再写包名；`bans.allow` 非空时只准名单里的包。别的 index 和 URL 依赖不挡。这一步失败时，两个 job 都不装项目。Vulnerabilities 步用 `uv pip freeze` 列出 `.venv` 装好的包，`name==version` 的交给 pip-audit。
+`python.yml` 的 Dependency rules 步在安装前用 [`allowlist.py`](../allowlist/allowlist.py) 拿项目的包对[依赖白名单](../README.md#依赖白名单)的 `[python]` 表：有 `uv.lock` 读它，没有就读[项目安装](#项目安装)的解析结果。git 源要在 `sources.allow-git` 里（按 URL，带 `rev` 的还要对上 commit），放行就准构建，不用再写包名；直接写 URL 的依赖要在 `sources.allow-registry` 的 URL 前缀下；`bans.allow` 非空时只准名单里的包。别的 index 不挡。这一步失败时，两个 job 都不装项目。Vulnerabilities 步用 `uv pip freeze` 列出 `.venv` 装好的包，`name==version` 的交给 pip-audit。
 
 ## 许可证（pip-licenses）
 

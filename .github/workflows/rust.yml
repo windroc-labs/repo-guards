@@ -191,10 +191,9 @@ jobs:
             mkdir -p "$RUNNER_TEMP/shard"
             # Shards share profile file names, so each prefixes its own.
             for profile in "$profiles"/*.profraw; do cp "$profile" "$RUNNER_TEMP/shard/$SHARD-${profile##*/}"; done
-            # Artifact names are unique per run, and a caller may call this workflow once per working-directory;
-            # / is not allowed in a name, so it is escaped the way URLs escape it.
-            project=${PROJECT//\%/%25}
-            echo "artifact=rust-coverage-${project//\//%2F}%.shard" >> "$GITHUB_OUTPUT"
+            # Artifact names are unique per run, and a caller may call this workflow once per working-directory.
+            artifact=$(uv run --no-project --python 3.12 "$RG/coverage/shard_artifact.py" rust "$PROJECT")
+            echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
             exit
           fi
           # --list builds every shard's test binaries and runs no test.
@@ -243,6 +242,7 @@ jobs:
     steps:
       - *checkout
       - *checkout-repo-guards
+      - *install-uv
       - *install-rust
       - *cache
       - *install-llvm-cov

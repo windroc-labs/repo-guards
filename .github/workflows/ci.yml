@@ -213,6 +213,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/deny-merge
         run: python3 -m unittest deny_merge_test
+      - name: shard-artifact tests
+        id: shard-artifact
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/coverage
+        run: python3 -m unittest shard_artifact_test
       - name: shard-targets tests
         id: shard-targets
         if: ${{ !cancelled() }}
@@ -250,12 +255,13 @@ jobs:
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
           GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
           GO_COVERAGE_PROFILE: ${{ steps.go-coverage-profile.outcome }}
+          SHARD_ARTIFACT: ${{ steps.shard-artifact.outcome }}
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

@@ -228,15 +228,15 @@ jobs:
             go test -vet=off -coverpkg=./... -coverprofile="${profiles[0]}" "${args[@]}"
           fi
           if [[ $MODE == shard ]]; then
-            # Artifact names are unique per run, and a caller may call this workflow once per working-directory;
-            # / is not allowed in a name, so it is escaped the way URLs escape it.
-            project=${PROJECT//\%/%25}
-            echo "artifact=go-coverage-${project//\//%2F}%.shard" >> "$GITHUB_OUTPUT"
+            # Artifact names are unique per run, and a caller may call this workflow once per working-directory.
+            artifact=$(uv run --no-project --python 3.12 "$RG/coverage/shard_artifact.py" go "$PROJECT")
+            echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
             exit
           fi
           # Whole and merged profiles take one path: each test binary's blocks, of one run or of every shard, are merged
           # (set mode: covered by any; count modes: summed) and the files coverage.toml ignores dropped.
-          uv run --no-project --python 3.12 "$RG/go/coverage-profile/coverage_profile.py" "$RG/go/coverage.toml" "$(go list -m)" "$RUNNER_TEMP/coverage-merged.out" "${profiles[@]}"
+          module=$(go list -m)
+          uv run --no-project --python 3.12 "$RG/go/coverage-profile/coverage_profile.py" "$RG/go/coverage.toml" "$module" "$RUNNER_TEMP/coverage-merged.out" "${profiles[@]}"
           gocover-cobertura < "$RUNNER_TEMP/coverage-merged.out" > "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
@@ -280,6 +280,7 @@ jobs:
     steps:
       - *checkout
       - *checkout-repo-guards
+      - *install-uv
       - *install-go
       - *go-caches
       - *coverage

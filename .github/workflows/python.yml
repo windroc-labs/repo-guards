@@ -98,37 +98,44 @@ jobs:
           git worktree prune
           git worktree add -q --detach "$RUNNER_TEMP/allowlist-base" "$(git merge-base "$BASE_REF" HEAD)"
           export_lock "$RUNNER_TEMP/allowlist-base/$PROJECT_DIR" "$RUNNER_TEMP/pylock-base"
+      - name: Inline exemptions
+        id: inline-exemptions
+        # The whole repo from its root, whatever working-directory is; UV_NO_CONFIG keeps the caller's uv config out.
+        working-directory: repo
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" python
       - name: Format
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff -- ruff check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Comment budget
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
       - name: Type check
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 "$RG/python/pyproject-config/pyproject_config.py" pyright-config "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
           python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
       - name: Unused dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           deptry=$(python3 "$RG/python/pyproject-config/pyproject_config.py" pin "$RG/python/pyproject.toml" "deptry==")
           uv run --no-project --python .venv/bin/python --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: pip-audit --locked "$RUNNER_TEMP/pylock-head"
       - name: Dependency allowlist
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" python "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/pylock-base/dependencies.toml" "$RUNNER_TEMP/pylock-head/dependencies.toml"
       - name: Licenses
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           # The project itself is installed only from a pyproject.toml.
           ignore=()

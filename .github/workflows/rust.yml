@@ -90,28 +90,35 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete@0.9.2,cargo-deny@0.20.2
+      - name: Inline exemptions
+        id: inline-exemptions
+        # The whole repo from its root, whatever working-directory is; UV_NO_CONFIG keeps the caller's uv config out.
+        working-directory: repo
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" rust
       - name: Format
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- cargo fmt --all --check --message-format short -- --config-path "$RG/rust/rustfmt.toml"
       - name: Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
       - name: Comment budget
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
       - name: Type check and dead code
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
       - name: Unused dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: cargo machete
       - name: Dependency rules
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
       - name: Dependency allowlist
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |
           base=$(git merge-base "$BASE_REF" HEAD)
           # No lock at the merge-base (a new project) leaves the base file absent: every crate counts as new.

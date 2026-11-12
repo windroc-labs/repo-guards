@@ -32,5 +32,3 @@ jobs:
       unit-tests: ./...
   jscpd:
     uses: windroc-labs/repo-guards/.github/workflows/jscpd.yml@main
-  inline-exemptions:
-    uses: windroc-labs/repo-guards/.github/workflows/inline-exemptions.yml@main

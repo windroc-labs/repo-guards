@@ -505,30 +505,62 @@ class EndToEnd(unittest.TestCase):
             ie.run_scanner("go", Path("/r"), ["a.go"], runner=missing)
 
 
-class Workflow(unittest.TestCase):
-    REPO = ie.CI_CHECKS.parent
-    TEXT = (REPO / ".github/workflows/inline-exemptions.yml").read_text()
+class Workflows(unittest.TestCase):
+    """The check is a step of each language workflow's Checks job and of jscpd.yml; callers add nothing."""
 
-    def test_s35_only_contents_read(self):
-        self.assertIn("\npermissions:\n  contents: read\n\njobs:", self.TEXT)
-        self.assertEqual(self.TEXT.count("permissions:"), 1)
+    WORKFLOWS = ie.CI_CHECKS.parent / ".github/workflows"
+    GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}"
 
-    def test_s1_template_calls_it_and_the_check_is_named(self):
-        template = (ie.CI_CHECKS / "ci.yml").read_text()
-        self.assertIn("uses: windroc-labs/repo-guards/.github/workflows/inline-exemptions.yml@main", template)
-        self.assertIn("    name: Inline exemptions\n", self.TEXT)
+    @staticmethod
+    def steps(job):
+        return job.split("\n      - ")[1:]
 
-    def test_s4_fr1_called_only_with_runs_on_and_no_event_filter(self):
-        on = self.TEXT.split("\non:\n", 1)[1].split("\npermissions:", 1)[0]
-        self.assertTrue(on.startswith("  workflow_call:\n    inputs:\n      runs-on:\n"))
-        self.assertEqual(on.count("type:"), 1)
-        self.assertNotIn("github.event_name", self.TEXT)
-        self.assertNotIn("fetch-depth", self.TEXT)
+    @staticmethod
+    def name(step):
+        # An anchored step (- &id) has its name on the next line.
+        return next(line.strip().removeprefix("name: ") for line in step.splitlines() if line.strip().startswith("name: "))
 
-    def test_fr5_overrides_apply_before_the_check(self):
-        apply = self.TEXT.index("name: Apply caller overrides")
-        self.assertLess(apply, self.TEXT.index("name: Find languages"))
-        self.assertLess(apply, self.TEXT.index("name: Inline exemptions\n        run:"))
+    def checks_job(self, language):
+        text = (self.WORKFLOWS / f"{language}.yml").read_text()
+        self.assertIn("\npermissions:\n  contents: read\n", text)
+        self.assertEqual(text.count("permissions:"), 1)
+        return text.split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
+
+    def test_no_standalone_workflow_or_template_job(self):
+        self.assertFalse((self.WORKFLOWS / "inline-exemptions.yml").exists())
+        self.assertNotIn("inline-exemptions", (ie.CI_CHECKS / "ci.yml").read_text())
+
+    def test_language_step_is_the_first_check_and_gates_the_rest(self):
+        for language in ie.LANGUAGES:
+            with self.subTest(language):
+                steps = self.steps(self.checks_job(language))
+                names = [self.name(step) for step in steps]
+                at = names.index("Inline exemptions")
+                self.assertLess(names.index("Apply caller overrides"), at)
+                self.assertEqual(names[at + 1], "Format")
+                step = steps[at]
+                self.assertIn("id: inline-exemptions", step)
+                self.assertIn("working-directory: repo\n", step)
+                self.assertIn('UV_NO_CONFIG: "1"', step)
+                self.assertTrue(step.rstrip().endswith(f'inline_exemptions.py" {language}'), step)
+                for later in steps[at + 1 :]:
+                    self.assertIn(self.GATE, later)
+                for earlier in steps[:at]:
+                    self.assertNotIn("cancelled()", earlier)
+
+    def test_jscpd_step_runs_before_duplication_and_stops_it(self):
+        text = (self.WORKFLOWS / "jscpd.yml").read_text()
+        self.assertIn("\npermissions:\n  contents: read\n", text)
+        self.assertIn('UV_NO_CONFIG: "1"', text)
+        steps = self.steps(text)
+        names = [self.name(step) for step in steps]
+        at = names.index("Inline exemptions")
+        self.assertLess(names.index("Apply caller overrides"), names.index("Find languages"))
+        self.assertLess(names.index("Find languages"), at)
+        self.assertTrue(steps[at].rstrip().endswith('inline_exemptions.py" jscpd'))
+        self.assertLess(at, names.index("Duplication"))
+        for later in steps[at + 1 :]:
+            self.assertNotIn("if:", later)
 
 
 if __name__ == "__main__":

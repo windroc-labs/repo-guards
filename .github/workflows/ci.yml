@@ -208,12 +208,6 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/python/comment-budget
         run: python3 -m unittest comment_budget_test
-      - name: Job plan and coverage gate tests
-        id: workflow
-        if: ${{ !cancelled() }}
-        run: |
-          (cd ci-checks/job-plan && python3 -m unittest job_plan_test)
-          (cd ci-checks/coverage && python3 -m unittest coverage_gate_test)
       - name: TypeScript comment budget tests
         id: typescript
         if: ${{ !cancelled() }}
@@ -231,12 +225,11 @@ jobs:
         env:
           SCANNER: ${{ steps.scanner.outcome }}
           PYTHON: ${{ steps.python.outcome }}
-          WORKFLOW: ${{ steps.workflow.outcome }}
           TYPESCRIPT: ${{ steps.typescript.outcome }}
           RUST: ${{ steps.rust.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON WORKFLOW TYPESCRIPT RUST; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

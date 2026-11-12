@@ -120,36 +120,7 @@ jobs:
               exit 1
             fi
           done
-          python3 - "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP" <<'PY'
-          import json, os, subprocess, sys
-          top, tmp = sys.argv[1], sys.argv[2]
-          indexes = {}
-
-          def index_of(path, commit):
-              # FR-21: a file is named by its 1-based place in the scanned commit's file list, never by its path.
-              if commit not in indexes:
-                  cmd = ["ls-files", "-z"] if commit == "HEAD" else ["ls-tree", "-r", "-z", "--name-only", commit]
-                  listed = subprocess.run(["git", "-C", top, *cmd], capture_output=True, check=True).stdout
-                  indexes[commit] = {os.fsdecode(p): n for n, p in enumerate(dict.fromkeys(listed.split(b"\0")[:-1]), 1)}
-              return indexes[commit].get(path)
-
-          hits = 0
-          for scan in ("files", "commits", "messages"):
-              for f in json.load(open(os.path.join(tmp, "gitleaks-%s.json" % scan))):
-                  hits += 1
-                  line, col = f["StartLine"], f["StartColumn"]
-                  if scan == "messages":
-                      where = "commit %s line %d" % (os.path.basename(f["File"]), line)
-                  else:
-                      commit = f["Commit"] if scan == "commits" else "HEAD"
-                      n = index_of(os.path.relpath(f["File"], top) if scan == "files" else f["File"], commit)
-                      where = "file #%d:%d:%d" % (n, line, col) if n else "line %d" % line
-                      if scan == "commits":
-                          where = "commit %s %s" % (commit, where)
-                  print("%s: gitleaks (leak) rule %s" % (where, f["RuleID"]))
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write("hits=%d\n" % hits)
-          PY
+          python3 "$GITHUB_WORKSPACE/tree/repo/scanner/gitleaks_report.py" "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP"
       - name: actionlint
         id: actionlint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}

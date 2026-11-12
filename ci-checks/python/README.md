@@ -53,3 +53,17 @@
 `python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 
 vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁免。
+
+## 许可证（pip-licenses）
+
+[`license-check/`](license-check/) 判定每个包的许可证是否被 [`licenses.toml`](../licenses.toml) 的 `allow` 满足：一个只用标准库的脚本，要 Python 3.11 及以上。
+
+| 项 | 内容 |
+|---|---|
+| 输入 | `pip-licenses --from mixed --format json` 的输出。每个包的 `License` 是 PEP 639 的 `License-Expression`；没有就是 trove classifier 名，多个用 `; ` 隔开；再没有就是 `License` 元数据 |
+| 判定 | 多个 classifier 有一个满足就过。classifier 名先按 `python-classifiers` 换成 SPDX，再当 SPDX 表达式算：`OR` 有一边在 `allow` 里就过，`AND` 要每边都在，`AND` 比 `OR` 先结合，可加括号；`<id> WITH <exception>` 整体要在 `allow` 里。标识符和运算符不分大小写；解析不了的（如自由文本）不过 |
+| 参数 | `license_check.py LICENSES_TOML PIP_LICENSES_JSON` |
+| 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
+| 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
+
+`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里只写单个许可证，不写表达式。

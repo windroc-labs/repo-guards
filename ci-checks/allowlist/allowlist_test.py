@@ -8,9 +8,11 @@ from pathlib import Path
 from allowlist import (
     Allowlist,
     Error,
+    GitSource,
     LicenseException,
     Locked,
     Spec,
+    commit_of,
     load,
     main,
     normalize_git,
@@ -22,6 +24,8 @@ from allowlist import (
 )
 
 PYPI = "https://pypi.org/simple"
+SHA_A = "a" * 40
+SHA_B = "b" * 40
 
 
 def load_text(text: str, language: str = "rust") -> Allowlist:
@@ -52,7 +56,35 @@ class Loading(unittest.TestCase):
         self.assertNotIn("python", rust.raw)
         self.assertNotIn("typescript", rust.raw)
         self.assertEqual(python, Allowlist(build=(Spec("somepkg"),)))
-        self.assertEqual(typescript, Allowlist(git=("https://git.example.org/o/js",)))
+        self.assertEqual(typescript, Allowlist(git=(GitSource("https://git.example.org/o/js"),)))
+
+    def test_git_entries_take_a_url_or_a_url_and_commit(self):
+        for language, prefix in (
+            ("rust", ""),
+            ("python", "python."),
+            ("typescript", "typescript."),
+        ):
+            allowlist = load_text(
+                f'[{prefix}sources]\nallow-git = ["https://h.example/o/r", '
+                f'{{ url = "https://h.example/o/s", rev = "{SHA_A.upper()}" }}]\n',
+                language,
+            )
+            self.assertEqual(
+                allowlist.git,
+                (GitSource("https://h.example/o/r"), GitSource("https://h.example/o/s", SHA_A)),
+                language,
+            )
+
+    def test_bad_git_entries_are_rejected(self):
+        for entry in (
+            '{ url = "https://h.example/o/r", rev = "main" }',
+            '{ url = "https://h.example/o/r", rev = "abc1234" }',
+            '{ url = "https://h.example/o/r", branch = "main" }',
+            f'{{ rev = "{SHA_A}" }}',
+            '{ url = "" }',
+        ):
+            with self.assertRaisesRegex(Error, "python.sources.allow-git", msg=entry):
+                load_text(f"[python.sources]\nallow-git = [{entry}]\n", "python")
 
     def test_every_section_is_validated_whichever_language_loads(self):
         for text in (
@@ -75,7 +107,7 @@ class Loading(unittest.TestCase):
             allowlist.packages, (Spec("serde", "1.0.228"), Spec("libc"), Spec("ring", "0.17.8"))
         )
         self.assertEqual(allowlist.build, (Spec("somepkg"),))
-        self.assertEqual(allowlist.git, ("https://github.com/example/repo",))
+        self.assertEqual(allowlist.git, (GitSource("https://github.com/example/repo"),))
         self.assertEqual(allowlist.registries, ("https://example.org/simple",))
         self.assertEqual(
             allowlist.licenses,
@@ -116,7 +148,7 @@ class Loading(unittest.TestCase):
             "[bans]\nallow = [1]\n",
             '[bans]\nallow = [{ reason = "x" }]\n',
             '[bans]\nallow = [""]\n',
-            '[sources]\nallow-git = [{ url = "x" }]\n',
+            '[sources]\nallow-git = [{ url = "x", rev = "main" }]\n',
             '[[licenses.exceptions]]\ncrate = "ring"\n',
             '[[licenses.exceptions]]\nallow = ["MIT"]\n',
             '[licenses]\nexceptions = ["ring"]\n',
@@ -163,6 +195,27 @@ class GitUrls(unittest.TestCase):
             normalize_git("https://git.example.org/b/repo"),
         )
 
+    def test_commit_of_each_lock_format(self):
+        for url in (
+            f"https://github.com/o/r?rev=v1#{SHA_A}",  # uv.lock
+            f"git+https://github.com/o/r@{SHA_A}",  # uv pip compile output
+            f"git+ssh://git@github.com/o/r.git#{SHA_A}",  # package-lock.json
+            f"git+https://github.com/o/r?branch=main#{SHA_A}",  # Cargo.lock
+        ):
+            self.assertEqual(commit_of(url), SHA_A, url)
+        for url in ("git+https://github.com/o/r", "git+https://github.com/o/r@main"):
+            self.assertIsNone(commit_of(url), url)
+
+    def test_url_entry_admits_any_commit_rev_entry_only_its_own(self):
+        locked = f"git+https://github.com/o/r@{SHA_A}"
+        self.assertTrue(GitSource("https://github.com/o/r").matches(locked))
+        self.assertTrue(GitSource("https://github.com/o/r.git", SHA_A).matches(locked))
+        self.assertFalse(GitSource("https://github.com/o/r", SHA_B).matches(locked))
+        self.assertFalse(GitSource("https://github.com/o/other").matches(locked))
+        self.assertFalse(
+            GitSource("https://github.com/o/r", SHA_A).matches("git+https://github.com/o/r")
+        )
+
 
 class Violations(unittest.TestCase):
     def check(self, locked: list[Locked], allowlist: Allowlist | None = None) -> list[str]:
@@ -203,7 +256,20 @@ class Violations(unittest.TestCase):
         self.assertIn("python.sources.allow-git", message)
         self.assertIn("https://github.com/example/somepkg", message)
         self.assertEqual(
-            self.check(locked, Allowlist(git=("https://github.com/example/somepkg.git",))), []
+            self.check(
+                locked, Allowlist(git=(GitSource("https://github.com/example/somepkg.git"),))
+            ),
+            [],
+        )
+
+    def test_other_commit_of_a_pinned_repo_names_the_rev_entry(self):
+        locked = [Locked("", "", "git", f"git+https://github.com/o/r@{SHA_B}")]
+        (message,) = self.check(
+            locked, Allowlist(git=(GitSource("https://github.com/o/r", SHA_A),))
+        )
+        self.assertIn(
+            f'add {{ url = "https://github.com/o/r", rev = "{SHA_B}" }} to python.sources.allow-git',
+            message,
         )
 
     def test_empty_package_list_restricts_nothing(self):
@@ -777,6 +843,72 @@ class Npm(unittest.TestCase):
                 self.run_main(["licenses", "typescript", "--allowlist", str(Path(tmp, "a.toml"))]),
                 (0, "pkg\tMPL-2.0;Unlicense\n@scope/other@1.0.0\tCC0-1.0\n", ""),
             )
+
+
+CARGO_LOCK = f"""\
+version = 4
+
+[[package]]
+name = "app"
+version = "0.1.0"
+
+[[package]]
+name = "serde"
+version = "1.0.228"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "forked"
+version = "0.3.0"
+source = "git+https://git.example.org/o/forked?rev={SHA_A}#{SHA_A}"
+"""
+
+
+class Rust(unittest.TestCase):
+    def run_check(self, allowlist: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "Cargo.lock").write_text(CARGO_LOCK)
+            Path(tmp, "a.toml").write_text(allowlist)
+            out, err = StringIO(), StringIO()
+            with redirect_stdout(out), redirect_stderr(err):
+                code = main(
+                    [
+                        "check",
+                        "rust",
+                        "--allowlist",
+                        str(Path(tmp, "a.toml")),
+                        "--cargo-lock",
+                        str(Path(tmp, "Cargo.lock")),
+                    ]
+                )
+            return code, err.getvalue()
+
+    def test_cargo_lock_git_commit_must_match_a_rev_entry(self):
+        code, err = self.run_check(
+            f'[sources]\nallow-git = [{{ url = "https://git.example.org/o/forked", rev = "{SHA_B}" }}]\n'
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(
+            f"forked@0.3.0: git source git+https://git.example.org/o/forked?rev={SHA_A}", err
+        )
+        self.assertIn(f'rev = "{SHA_A}" }} to sources.allow-git', err)
+        self.assertEqual(
+            self.run_check(
+                f'[sources]\nallow-git = [{{ url = "https://git.example.org/o/forked", rev = "{SHA_A}" }}]\n'
+            ),
+            (0, ""),
+        )
+
+    def test_cargo_lock_git_url_entry_admits_any_commit(self):
+        self.assertEqual(
+            self.run_check('[sources]\nallow-git = ["https://git.example.org/o/forked"]\n'), (0, "")
+        )
+
+    def test_only_the_git_rule_runs_for_rust(self):
+        code, err = self.run_check(
+            '[bans]\nallow = ["app"]\n[sources]\nallow-git = ["https://git.example.org/o/forked"]\n'
+        )
+        self.assertEqual((code, err), (0, ""))
 
 
 if __name__ == "__main__":

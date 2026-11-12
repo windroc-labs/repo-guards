@@ -106,6 +106,8 @@ jobs:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
+          lock="$(dirname "$(cargo locate-project --workspace --message-format plain)")/Cargo.lock"
+          uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check rust --allowlist "$GITHUB_WORKSPACE/repo/$ALLOWLIST" --cargo-lock "$lock"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
 
   # The coverage steps run the PR's tests, so they get a job of their own.

@@ -50,6 +50,17 @@ class Merging(unittest.TestCase):
         self.assertEqual(merged["advisories"], shared["advisories"])
         self.assertEqual(merged["graph"], shared["graph"])
 
+    def test_git_entry_with_a_commit_reaches_cargo_deny_as_its_url(self):
+        code, merged = self.run_main(
+            '[sources]\nallow-git = ["https://github.com/example/repo", '
+            f'{{ url = "https://github.com/example/pinned", rev = "{"a" * 40}" }}]\n'
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            merged["sources"]["allow-git"],
+            ["https://github.com/example/repo", "https://github.com/example/pinned"],
+        )
+
     def test_shared_config_allows_foundational_build_scripts(self):
         baseline = tomllib.loads(SHARED.read_text())["bans"]["build"]["allow-build-scripts"]
         for crate in ("libc", "serde", "proc-macro2", "quote", "getrandom"):

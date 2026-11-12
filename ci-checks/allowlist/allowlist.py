@@ -60,11 +60,34 @@ class Locked(NamedTuple):
         return f"{self.name}@{self.version}" if self.version else self.name
 
 
+COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def commit_of(url: str) -> str | None:
+    """The commit a locked git URL records: its #fragment (uv.lock, npm, Cargo.lock) or trailing @rev (uv pip compile)."""
+    rest, _, fragment = url.strip().partition("#")
+    rev = fragment or urllib.parse.urlsplit(rest.removeprefix("git+")).path.rpartition("@")[2]
+    return rev.lower() if COMMIT.fullmatch(rev.lower()) else None
+
+
+class GitSource(NamedTuple):
+    """A sources.allow-git entry: a repository URL, optionally pinned to one commit."""
+
+    url: str
+    rev: str | None = None
+
+    def matches(self, url: str) -> bool:
+        return normalize_git(url) == normalize_git(self.url) and self.rev in (None, commit_of(url))
+
+    def __str__(self) -> str:
+        return self.url if self.rev is None else f'{{ url = "{self.url}", rev = "{self.rev}" }}'
+
+
 @dataclass(frozen=True)
 class Allowlist:
     packages: tuple[Spec, ...] = ()
     build: tuple[Spec, ...] = ()
-    git: tuple[str, ...] = ()
+    git: tuple[GitSource, ...] = ()
     registries: tuple[str, ...] = ()
     licenses: tuple[LicenseException, ...] = ()
     raw: dict[str, Any] = field(default_factory=dict, compare=False)
@@ -109,6 +132,19 @@ def strings(entries: list[Any], where: str) -> tuple[str, ...]:
     if not all(isinstance(e, str) and e for e in entries):
         raise Error(f"{where}: entries must be non-empty strings")
     return tuple(entries)
+
+
+def git_source(entry: Any, where: str) -> GitSource:
+    if isinstance(entry, str) and entry:
+        return GitSource(entry)
+    if isinstance(entry, dict) and set(entry) <= {"url", "rev"}:
+        url, rev = entry.get("url"), entry.get("rev")
+        if isinstance(url, str) and url:
+            if rev is None:
+                return GitSource(url)
+            if isinstance(rev, str) and COMMIT.fullmatch(rev.lower()):
+                return GitSource(url, rev.lower())
+    raise Error(f'{where}: {entry!r} must be "URL" or {{ url = "URL", rev = "<full commit SHA>" }}')
 
 
 def license_exception(entry: Any, where: str) -> LicenseException:
@@ -162,7 +198,9 @@ def parse(raw: dict[str, Any], prefix: str) -> Allowlist:
             to_spec(e, prefix + "bans.build.allow-build-scripts")
             for e in entries("bans", "build", "allow-build-scripts")
         ),
-        git=strings(entries("sources", "allow-git"), prefix + "sources.allow-git"),
+        git=tuple(
+            git_source(e, prefix + "sources.allow-git") for e in entries("sources", "allow-git")
+        ),
         registries=strings(entries("sources", "allow-registry"), prefix + "sources.allow-registry"),
         licenses=tuple(
             license_exception(e, prefix + "licenses.exceptions")
@@ -199,6 +237,23 @@ def under(url: str, prefixes: Iterable[str]) -> bool:
     return any(url == p.rstrip("/") or url.startswith(p.rstrip("/") + "/") for p in prefixes)
 
 
+def git_violations(locked: Iterable[Locked], allowlist: Allowlist, prefix: str) -> list[str]:
+    """The git rule alone. The suggested entry pins the locked commit when the repo is listed only pinned."""
+    found: list[str] = []
+    for package in locked:
+        if package.kind != "git" or any(s.matches(package.url) for s in allowlist.git):
+            continue
+        repo = normalize_git(package.url)
+        pinned = any(normalize_git(s.url) == repo for s in allowlist.git)
+        commit = commit_of(package.url)
+        entry = GitSource(f"https://{repo}", commit if pinned and commit else None)
+        found.append(
+            f"{str(package) or repo}: git source {package.url} is not allowed; "
+            f"add {entry} to {prefix}sources.allow-git"
+        )
+    return found
+
+
 def violations(
     locked: Iterable[Locked],
     allowlist: Allowlist,
@@ -210,7 +265,6 @@ def violations(
     Registries are not checked: python.yml and typescript.yml never limited them. A remote package is an npm
     package from a tarball URL, which npm's allow-remote=none rejects unless sources.allow-registry holds its prefix.
     """
-    git = {normalize_git(u) for u in allowlist.git}
     found: list[str] = []
     for package in locked:
         if package.kind == "local":
@@ -222,11 +276,8 @@ def violations(
                 f"{label}: tarball URL {package.url} is not allowed; "
                 f"add {origin.scheme}://{origin.netloc} to {prefix}sources.allow-registry"
             )
-        if package.kind == "git" and normalize_git(package.url) not in git:
-            found.append(
-                f"{label}: git source {package.url} is not allowed; "
-                f"add https://{normalize_git(package.url)} to {prefix}sources.allow-git"
-            )
+        if package.kind == "git":
+            found += git_violations([package], allowlist, prefix)
         if allowlist.packages and not any(
             s.matches(package.name, package.version, canonical) for s in allowlist.packages
         ):
@@ -295,6 +346,22 @@ def read_requirements(path: Path) -> list[Locked]:
                     else "url"
                 )
                 locked.append(Locked(name, "", kind, "" if kind == "local" else url))
+    return locked
+
+
+def read_cargo_lock(path: Path) -> list[Locked]:
+    locked: list[Locked] = []
+    for package in tomllib.loads(path.read_text()).get("package", []):
+        source: str = package.get("source", "")
+        name, version = package["name"], package.get("version", "")
+        if source.startswith("git+"):
+            locked.append(Locked(name, version, "git", source))
+        elif source.startswith(("registry+", "sparse+")):
+            locked.append(Locked(name, version, "registry", source.partition("+")[2]))
+        elif not source:
+            locked.append(Locked(name, version, "local", ""))
+        else:
+            raise Error(f"{path}: package {name} has an unknown source {source!r}")
     return locked
 
 
@@ -412,6 +479,12 @@ def check_python(args: argparse.Namespace) -> int:
     return report(found)
 
 
+def check_rust(args: argparse.Namespace) -> int:
+    """cargo-deny runs every other rule; its allow-git has no commit, so a pinned entry's commit is checked here."""
+    allowlist = load(args.allowlist, "rust")
+    return report(git_violations(read_cargo_lock(args.cargo_lock), allowlist, ""))
+
+
 def check_typescript(args: argparse.Namespace) -> int:
     allowlist = load(args.allowlist, "typescript")
     return report(violations(read_package_lock(args.lock), allowlist, "typescript."))
@@ -450,6 +523,10 @@ def parser() -> argparse.ArgumentParser:
     check = commands.add_parser(
         "check", help="check locked packages against the dependency rules"
     ).add_subparsers(required=True)
+    rust = check.add_parser("rust")
+    rust.add_argument("--allowlist", type=Path, required=True)
+    rust.add_argument("--cargo-lock", type=Path, required=True)
+    rust.set_defaults(run=check_rust)
     python = check.add_parser("python")
     python.add_argument("--allowlist", type=Path, required=True)
     lock = python.add_mutually_exclusive_group(required=True)

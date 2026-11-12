@@ -50,7 +50,11 @@ def main(argv: list[str]) -> int:
     try:
         shared = tomllib.loads(shared_path.read_text())
         shared.setdefault("licenses", {})["allow"] = tomllib.loads(licenses_path.read_text())["allow"]
-        output.write_text("\n".join(dump(merge(shared, load(project_path, "rust").raw))) + "\n")
+        project = load(project_path, "rust")
+        if project.git:
+            # cargo-deny matches git sources by URL only; allowlist.py check rust checks the commits.
+            project.raw["sources"]["allow-git"] = [source.url for source in project.git]
+        output.write_text("\n".join(dump(merge(shared, project.raw))) + "\n")
     except (OSError, tomllib.TOMLDecodeError, Error) as error:
         print(f"deny_merge: {error}", file=sys.stderr)
         return 2

@@ -23,78 +23,68 @@ on:
 permissions:
   contents: read
 
+# Fast checks share one job; each slow one (a build of the project, or its tests) runs in its own job, in parallel.
+# Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
-  rust:
-    name: Rust
+  checks:
+    name: Checks
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
+      BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       CARGO_TERM_COLOR: always
-    defaults:
+      TOOLCHAIN: rust-toolchain.toml
+      COMPONENTS: rustfmt
+    defaults: &defaults
       run:
         shell: bash
         working-directory: repo/${{ inputs.working-directory }}
     steps:
-      - name: Check out
+      - &checkout
+        name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: repo
           fetch-depth: 0
           persist-credentials: false
       # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - name: Check out repo-guards at the pinned commit
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           path: repo-guards
           persist-credentials: false
-      - name: Install uv
+      - &install-uv
+        name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
           enable-cache: false
-      - name: Install Rust from the shared rust-toolchain.toml
+      # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain; COMPONENTS adds to it.
+      - &install-rust
+        name: Install Rust
         run: |
-          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' "$RG/rust/rust-toolchain.toml")
+          toolchain=$(sed -n -E 's/^(channel|toolchain) = "(.*)"$/\2/p' "$RG/rust/$TOOLCHAIN")
           if ! command -v rustup >/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
             echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
             export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
           fi
-          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
-          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
-          coverage=$(sed -n 's/^toolchain = "\(.*\)"$/\1/p' "$RG/rust/coverage.toml")
-          rustup toolchain install "$coverage" --profile minimal --component llvm-tools-preview
-          echo "COVERAGE_TOOLCHAIN=$coverage" >> "$GITHUB_ENV"
-      - name: Cache Rust builds
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: repo/${{ inputs.working-directory }}
-          save-if: ${{ github.event_name == 'push' }}
-      - name: Install cargo-machete, cargo-deny and cargo-llvm-cov
+          rustup toolchain install "$toolchain" --profile minimal ${COMPONENTS:+--component "$COMPONENTS"}
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+      - name: Install cargo-machete and cargo-deny
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-machete@0.9.2,cargo-deny@0.20.2,cargo-llvm-cov@0.9.1
-      - name: Install diff-cover
-        working-directory: ${{ runner.temp }}
-        run: |
-          uv venv --python 3.12 coverage-venv
-          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
+          tool: cargo-machete@0.9.2,cargo-deny@0.20.2
       - name: Format
         if: ${{ !cancelled() }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- cargo fmt --all --check --message-format short -- --config-path "$RG/rust/rustfmt.toml"
-      - name: Lint
-        if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
-      - name: Type check and dead code
-        if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
       - name: Unused dependencies
         if: ${{ !cancelled() }}
         run: cargo machete
@@ -105,7 +95,80 @@ jobs:
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
-      # The coverage steps run the PR's tests, so they come after every static check.
+
+  lint:
+    name: Lint
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      CARGO_TERM_COLOR: always
+      TOOLCHAIN: rust-toolchain.toml
+      COMPONENTS: clippy
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-rust
+      - &cache
+        name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: repo/${{ inputs.working-directory }}
+          save-if: ${{ github.event_name == 'push' }}
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
+
+  type-check:
+    name: Type check and dead code
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      CARGO_TERM_COLOR: always
+      TOOLCHAIN: rust-toolchain.toml
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-rust
+      - *cache
+      - name: Type check and dead code
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
+
+  # The coverage steps run the PR's tests, so they get a job of their own.
+  coverage:
+    name: Coverage
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      CARGO_TERM_COLOR: always
+      TOOLCHAIN: coverage.toml
+      COMPONENTS: llvm-tools-preview
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-rust
+      - *cache
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        with:
+          tool: cargo-llvm-cov@0.9.1
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Coverage
         id: coverage
         if: ${{ !cancelled() }}
@@ -127,7 +190,6 @@ jobs:
             exit 1
           fi
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
-          export RUSTUP_TOOLCHAIN=$COVERAGE_TOOLCHAIN
           measure() {
             (cd "$1" && cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$2")
           }

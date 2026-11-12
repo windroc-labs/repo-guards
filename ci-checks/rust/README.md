@@ -79,4 +79,4 @@ mod tests { /* … */ }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 ```
 
-`rust.yml` 最后两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`），Coverage gate 判定。加在测试模块之外的 `coverage(off)` 算行内豁免。
+`rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`），Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。

@@ -134,3 +134,14 @@ jobs:
         run: |
           PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
             --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"
+      # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
+      - name: CRAP report
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          if uv venv -q --no-config --clear --python 3.12 "$RUNNER_TEMP/crap-venv" \
+            && uv pip install -q --no-config --python "$RUNNER_TEMP/crap-venv/bin/python" --require-hashes -r "$RG/crap/requirements.txt"; then
+            "$RUNNER_TEMP/crap-venv/bin/python" "$RG/crap/crap_report.py" --coverage "$RUNNER_TEMP/coverage-head.xml"
+          else
+            echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi

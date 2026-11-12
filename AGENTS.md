@@ -12,6 +12,8 @@ Before you commit, push or comment, check that none of these appear:
 
 Numeric repository IDs are fine.
 
+Before you push, also run `python3 scanner/scan.py --names-file <path to the private-name list>` from the repo root, with the owner's list kept outside the checkout. It checks the tracked files and the commits in `origin/main..HEAD` for private names, local paths, emails, em dashes and broken relative links. It supplements the check above; it does not replace it.
+
 If a change needs any of the above, stop and ask the owner.
 
 ## If something leaks

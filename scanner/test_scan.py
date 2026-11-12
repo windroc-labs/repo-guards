@@ -79,12 +79,12 @@ class Repo:
     def index(self, name):
         return self.git("ls-files").splitlines().index(name) + 1
 
-    def scan(self, *args, env=None):
+    def scan(self, *args, env=None, stdin=""):
         run_env = git_env()
         run_env.update(env or {})
         proc = subprocess.run(
             [sys.executable, str(SCRIPT), *args], cwd=self.dir, env=run_env,
-            capture_output=True, text=True,
+            input=stdin, capture_output=True, text=True,
         )
         return proc.returncode, proc.stdout + proc.stderr
 
@@ -642,6 +642,189 @@ class Links(unittest.TestCase):
         self.assertIn("a.md:1:12: link (hygiene)", out)
         self.assertRegex(out, r"link\s+hygiene\s+2")
 
+
+ZERO = "0" * 40
+
+
+class PrePush(unittest.TestCase):
+    """`--pre-push origin` with git's hook input on stdin; the Repo's origin/main is what the remote has."""
+
+    def push(self, repo, *updates, names=(NAME,), checks=None):
+        stdin = "".join(" ".join(u) + "\n" for u in updates)
+        env = {SECRET_ENV: "\n".join(names)} if names else None
+        args = ("--checks", checks) if checks else ()
+        return repo.scan(*args, "--pre-push", "origin", env=env, stdin=stdin)
+
+    def main_update(self, repo, ref="refs/heads/main"):
+        return ("refs/heads/main", repo.git("rev-parse", "HEAD"), ref, repo.git("rev-parse", "origin/main"))
+
+    def entry(self, repo, sha, path):
+        listing = repo.git("diff-tree", "-r", "--root", "-c", "--no-commit-id", "--name-only", sha)
+        return listing.splitlines().index(path) + 1
+
+    def test_hit_in_a_pushed_file_names_its_commit_and_entry(self):
+        repo = Repo(self)
+        repo.write({"a.md": "clean\n", "b.md": "x\nsee " + HOME_BOB + "\n"})
+        sha = repo.commit("add")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s file #%d:2:5: local-path (leak)" % (sha, self.entry(repo, sha, "b.md")), out)
+        self.assertNotIn("b.md", out)
+        self.assertIn("files with hits: 1, total hits: 1", out)
+
+    def test_hit_in_a_pushed_path(self):
+        repo = Repo(self)
+        repo.write({"docs/" + NAME + ".md": "clean\n"})
+        sha = repo.commit("add")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s file #1 path: private-name (leak)" % sha, out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_default_checks_are_the_leak_class(self):
+        repo = Repo(self)
+        repo.write({"a.md": EM + " [x](missing.md)\n"})
+        repo.commit("add " + EM)
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 0, out)
+        self.assertIsNone(summary_count(out, "em-dash"))
+        self.assertEqual(summary_count(out, "private-name"), ("leak", "0"))
+
+    def test_content_the_remote_has_or_the_push_leaves_unchanged_is_not_scanned(self):
+        repo = Repo(self, {"old.md": "about " + NAME + "\n"})
+        repo.write({"new.md": "clean\n"})
+        repo.commit("add")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 0, out)
+
+    def test_a_file_added_then_deleted_inside_the_push_is_found(self):
+        repo = Repo(self)
+        repo.write({"tmp.md": "mail " + BOB_MAIL + "\n"})
+        sha = repo.commit("add")
+        repo.git("rm", "-q", "tmp.md")
+        repo.commit("remove")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s file #1:1:6: email (leak)" % sha, out)
+        self.assertNotIn(BOB_MAIL, out)
+
+    def test_deletions_gitlinks_and_non_text_files(self):
+        repo = Repo(self)
+        repo.write({"bin.dat": b"\xff\xfe" + HOME_BOB.encode()})
+        repo.git("rm", "-q", "README.md")
+        repo.git("update-index", "--add", "--cacheinfo", "160000,%s,sub" % repo.git("rev-parse", "HEAD"))
+        repo.commit("mixed")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 0, out)
+        self.assertIn("skipped non-text files: 1", out)
+
+    def test_pushed_commit_messages_and_emails(self):
+        repo = Repo(self)
+        sha = repo.commit("x\n\nabout " + NAME, email=BOB_MAIL)
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 3: private-name" % sha, out)
+        self.assertIn("commit %s author: email" % sha, out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_new_branch_skips_what_the_remote_tracking_refs_reach(self):
+        repo = Repo(self)
+        repo.commit("old " + HOME_BOB)
+        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/topic", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("total hits: 1", out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_remote_sha_from_the_input_excludes_its_history(self):
+        repo = Repo(self)
+        old = repo.commit("old " + HOME_BOB)
+        new = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/topic", new, "refs/heads/topic", old))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % new, out)
+        self.assertIn("total hits: 1", out)
+
+    def test_ref_names_with_unicode_line_separators(self):
+        repo = Repo(self)
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/a\u0085b", sha, "refs/heads/a\u2028b", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_remote_sha_missing_here_is_ignored(self):
+        repo = Repo(self)
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/main", "1" * 40))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_local_ref_with_spaces(self):
+        repo = Repo(self)
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("HEAD@{0 minutes ago}", sha, "refs/heads/x", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_each_ref_of_a_multi_ref_push(self):
+        repo = Repo(self)
+        clean = repo.commit("clean")
+        repo.git("checkout", "-q", "-b", "other", "origin/main")
+        leak = repo.commit("see " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/main", clean, "refs/heads/main", ZERO),
+                              ("refs/heads/other", leak, "refs/heads/other", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % leak, out)
+        self.assertIn("total hits: 1", out)
+
+    def test_annotated_tag_push_scans_the_tagged_commits(self):
+        repo = Repo(self)
+        sha = repo.commit("see " + HOME_BOB)
+        repo.git("tag", "-a", "v1", "-m", "release")
+        code, out = self.push(repo, ("refs/tags/v1", repo.git("rev-parse", "v1"), "refs/tags/v1", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_ref_naming_a_tree_or_blob_is_a_usage_error(self):
+        repo = Repo(self)
+        tree = repo.git("rev-parse", "HEAD^{tree}")
+        blob = repo.git("rev-parse", "HEAD:README.md")
+        repo.git("tag", "-a", "t", "-m", "x", tree)
+        for sha in (tree, blob, repo.git("rev-parse", "t")):
+            with self.subTest(sha=sha):
+                code, out = self.push(repo, ("refs/tags/t", sha, "refs/tags/t", ZERO))
+                self.assertEqual(code, 2, out)
+
+    def test_delete_only_push_passes(self):
+        repo = Repo(self)
+        code, out = self.push(repo, ("(delete)", ZERO, "refs/heads/old", repo.git("rev-parse", "HEAD")))
+        self.assertEqual(code, 0, out)
+
+    def test_unavailable_list_fails_closed(self):
+        repo = Repo(self)
+        repo.commit("clean")
+        code, out = self.push(repo, self.main_update(repo), names=())
+        self.assertEqual(code, 1, out)
+        self.assertIn("unavailable", out)
+
+    def test_notice_says_nothing_was_published(self):
+        repo = Repo(self)
+        repo.commit("see " + HOME_BOB)
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertNotIn("already public", out)
+        self.assertIn("Nothing was pushed", out)
+
+    def test_link_check_is_a_usage_error(self):
+        repo = Repo(self)
+        code, out = self.push(repo, self.main_update(repo), checks="link")
+        self.assertEqual(code, 2, out)
+
+    def test_malformed_input_is_a_usage_error(self):
+        repo = Repo(self)
+        code, out = repo.scan("--pre-push", "origin", stdin="garbage\n", env={SECRET_ENV: NAME})
+        self.assertEqual(code, 2, out)
 
 if __name__ == "__main__":
     unittest.main()

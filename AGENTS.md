@@ -20,7 +20,7 @@ If a change needs any of the above, stop and ask the owner.
 
 ## Where this code runs
 
-`github-dir-pr.yml`, `go.yml`, `inline-exemptions.yml`, `jscpd.yml`, `python.yml`, `rust.yml` and `typescript.yml` are reusable workflows: they and the `ci-checks/` files they check out run in caller repos, not here. `ci.yml` and `private-names.yml` run here.
+`github-dir-pr.yml`, `go.yml`, `jscpd.yml`, `python.yml`, `rust.yml` and `typescript.yml` are reusable workflows: they and the `ci-checks/` files they check out run in caller repos, not here. `ci.yml` and `private-names.yml` run here.
 Each caller's `.github/`, including its `ci.yml` and `.github/checks/`, is locked by its CODEOWNERS, so its inputs are the owner's choice. Run what the caller asks: do not validate, filter or sanitize its inputs, and do not guard against a malicious caller. A bad input fails only the caller's own run.
 This trust covers the caller's config, not the worker's code under check: catching that code is what the checks are for.
 The leak rules above cover what this repo publishes, not what callers pass in.

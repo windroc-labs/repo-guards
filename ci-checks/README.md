@@ -11,7 +11,7 @@
 1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`with:` 按下表填，`uses:` 保持 `@main`。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
 2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级其他 action 在 `uses:` 里钉住的版本；repo-guards 的 workflow 用 `@main`，不用升级。
 3. 要改共用配置，写进 `.github/checks/repo-guards.toml`（见[覆盖默认配置](#覆盖默认配置)）；jscpd 基线放 `.github/checks/jscpd-baseline.json`。`.github/` 已由 CODEOWNERS 锁住。
-4. 接入行内豁免（[第 13 项](#行内豁免)）：`ci.yml` 留着 `inline-exemptions` job，把代码里现有的每一处行内豁免登记进 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，各写原因；第一次运行的输出就是要加的条目。
+4. 接入行内豁免（[第 13 项](#行内豁免)）：语言 workflow 和 `jscpd.yml` 已带这一步，`ci.yml` 不用加 job；把代码里现有的每一处行内豁免登记进 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，各写原因；第一次运行的输出就是要加的条目。
 5. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
 6. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。这个目录写进 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_configs_test`（要 Python 3.11.4 及以上）。
 
@@ -22,19 +22,18 @@
 | [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `working-directory`（`.`） |
 | [`go.yml`](../.github/workflows/go.yml) | [Go](go/README.md) 各项和依赖检查 | `working-directory`（`.`）、`unit-tests`（`./...`） |
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | 无 |
-| [`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml) | [第 13 项](#行内豁免) | 无 |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml`、`requirements.txt`、`package.json` 或 `go.mod` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它。`unit-tests` 选覆盖率要量的单元测试：Rust 是测试目标，Go 是 `go test` 的参数（包模式），见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。别的设置都在共用配置文件里，项目用覆盖文件改，见[覆盖默认配置](#覆盖默认配置)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，四种语言共用；`exceptions` 是 Python、TypeScript、Go 不查许可证的包（Go 是模块路径，要完全相同），默认空；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。Rust 的例外是 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.exceptions`，cargo-deny 的写法。
 
-四个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
+四个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑；只有 Checks 的第一项 Inline exemptions（[第 13 项](#行内豁免)）例外，它失败时同一 job 后面的项都不跑。
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Checks（Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report） |
-| `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
-| `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
-| `go.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+| `rust.yml` | Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report） |
+| `python.yml` | Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+| `typescript.yml` | Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+| `go.yml` | Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
 
 覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，可在 `--` 后带测试名过滤，如 `"--test=unit -- input::"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，Go 是这片的 `go test` 参数（包模式，如 `"./a/..."`，可带 `-run=<正则>` 按测试名拆，分片时代替 `unit-tests`），都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
 
@@ -92,7 +91,7 @@ source-dirs = ["src", "tools"]
 
 ## 流程级
 
-本 repo 只定要求（第 13 项除外，由 [`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml) 实现；第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
+本 repo 只定要求（第 13 项除外，由四个语言 workflow 和 [`jscpd.yml`](../.github/workflows/jscpd.yml) 实现；第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
 
 状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
 
@@ -261,7 +260,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 
 #### 重复代码
 
-四种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)（项目在覆盖文件的 `["ci-checks/.jscpd.json"]` 节改）：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线固定在 `.github/checks/jscpd-baseline.json`，不存在时直接失败。接入时生成基线，之后只能变小：
+四种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑（之前先对账 `jscpd:ignore-start`，见[行内豁免](#行内豁免)），配置是共用的 [`.jscpd.json`](.jscpd.json)（项目在覆盖文件的 `["ci-checks/.jscpd.json"]` 节改）：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线固定在 `.github/checks/jscpd-baseline.json`，不存在时直接失败。接入时生成基线，之后只能变小：
 
 ```sh
 jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscpd-baseline.json --update-baseline .
@@ -360,7 +359,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 - 没登记的、次数对不上的、登记了但代码里已经没有的，都失败。
 - 例外：Rust 加在 cfg 正好是 `#[cfg(test)]` 的 `mod` 上的 `coverage(off)` 不用登记（模块名不限，`mod x { … }` 和 `mod x;` 都算，`cfg(any(test, …))` 不算；见[第 8 项](#覆盖率)），加在别处的照样登记。
 
-实现：[`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml)，调用方在 `ci.yml` 里加一个 job（见 [`ci.yml`](ci.yml) 模板）。它查 HEAD 上 git 跟踪的全部文件，从 repo 根目录算，不看 diff，不按路径排除，不扫 submodule 的内容；只读 `.rs`、`.py`、`.pyi`、`.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs`、`.go` 和任何目录下的 `Cargo.toml`、`pyproject.toml`、`go.mod`。这些文件里有符号链接、语法错误或不是 UTF-8 时退出 2 并给出文件名。共用部分 [`inline-exemptions/inline_exemptions.py`](inline-exemptions/inline_exemptions.py)（只用标准库）读白名单、对账、报错；各语言的扫描器用该语言自己的解析器，放在各自目录：[`rust/inline-exemptions/`](rust/inline-exemptions)（`syn`）、[`python/inline-exemptions/`](python/inline-exemptions)（`ast`、`tokenize`）、[`typescript/inline-exemptions/`](typescript/inline-exemptions)（TypeScript 编译器的语法解析）、[`go/inline-exemptions/`](go/inline-exemptions)（`go/parser`、`golang.org/x/mod/modfile`）。扫描器只解析，不 import、不构建、不执行调用方的代码。调用方的 `.cargo/config.toml`、`rust-toolchain.toml`、`go.work`、`uv.toml` 也不生效：cargo 在根目录 `/` 运行（不在调用方的目录树里，也不在共享的临时目录里），工具链取本 repo 的 [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml)；Go 设 `GOWORK=off`；uv 不读配置（`UV_NO_CONFIG`、`--no-config`）。
+实现：四个语言 workflow 的 Checks job 和 [`jscpd.yml`](../.github/workflows/jscpd.yml) 各有一步 Inline exemptions，调用方不用改 `ci.yml`。语言 workflow 的这一步在装好工具、套用完覆盖文件之后，是第一个检查步骤，只跑本语言的扫描器，只对账白名单里本语言工具的条目（见下面内置写法表的语言列）；它失败时同一 job 后面的检查步骤不跑。`jscpd` 的条目由 `jscpd.yml` 对账：它在 Duplication 步之前跑 repo 里有的每种语言的扫描器，只对账 `jscpd`，失败时 Duplication 不跑。`generated` 的条目按文件的语言归到那个语言 workflow；`file` 不是这四种语言文件的 `generated` 条目对不上任何代码，算白名单格式不对。白名单格式、`skip` 不对时，每个跑这一步的 workflow 都退出 2。调用方没调用的 workflow 管的工具不查。每一步都查 HEAD 上 git 跟踪的全部文件，从 repo 根目录算，不看 diff，不按路径排除，不扫 submodule 的内容；只读 `.rs`、`.py`、`.pyi`、`.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs`、`.go` 和任何目录下的 `Cargo.toml`、`pyproject.toml`、`go.mod`。这些文件里有符号链接、语法错误或不是 UTF-8 时退出 2 并给出文件名。共用部分 [`inline-exemptions/inline_exemptions.py`](inline-exemptions/inline_exemptions.py)（只用标准库）读白名单、对账、报错；各语言的扫描器用该语言自己的解析器，放在各自目录：[`rust/inline-exemptions/`](rust/inline-exemptions)（`syn`）、[`python/inline-exemptions/`](python/inline-exemptions)（`ast`、`tokenize`）、[`typescript/inline-exemptions/`](typescript/inline-exemptions)（TypeScript 编译器的语法解析）、[`go/inline-exemptions/`](go/inline-exemptions)（`go/parser`、`golang.org/x/mod/modfile`）。扫描器只解析，不 import、不构建、不执行调用方的代码。调用方的 `.cargo/config.toml`、`rust-toolchain.toml`、`go.work`、`uv.toml` 也不生效：cargo 在根目录 `/` 运行（不在调用方的目录树里，也不在共享的临时目录里），工具链取本 repo 的 [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml)；Go 设 `GOWORK=off`；uv 不读配置（`UV_NO_CONFIG`、`--no-config`）。
 
 白名单写在 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，四种语言共用一份，每条一个表，六个字段都要写：
 
@@ -409,7 +408,7 @@ reason = "只在 feature full 下用到"
 
 `.github/checks/repo-guards.toml` 里写的设置（如 `.jscpd.json` 的 `ignorePattern`、`typescript/knip.json` 的 `ignore*`）由 CODEOWNERS 审，不另登记。`# nosec`、`.only` 不在表里：`#nosec` 由 `golangci.toml` 关掉，focus 标记归[测试结果状态门](#测试结果状态门)。
 
-本地：跑过 `fetch_configs.py` 后，在 repo 根目录跑 `uv run --no-config --no-project --python 3.14 .repo-guards/ci-checks/inline-exemptions/inline_exemptions.py`，结果和退出码同 CI；有 Rust、Go、TypeScript 文件时要装 `cargo`、`go`、`node` 和 `npm`。工作区有未提交的改动时，输出第一行先提示，检查按工作区里的内容做。测试：`inline-exemptions/` 跑 `python3 -m unittest inline_exemptions_test`，`python/inline-exemptions/` 跑 `python3 -m unittest exemptions_test`，`rust/inline-exemptions/` 跑 `cargo test --locked`，`go/inline-exemptions/` 跑 `go test ./...`，`typescript/inline-exemptions/` 跑 `npm ci --ignore-scripts && npm test`。
+本地：跑过 `fetch_configs.py` 后，在 repo 根目录跑 `uv run --no-config --no-project --python 3.14 .repo-guards/ci-checks/inline-exemptions/inline_exemptions.py <对象>`，`<对象>` 是 `rust`、`python`、`typescript`、`go` 或 `jscpd`，结果和退出码同 CI 里对应 workflow 的这一步；`rust` 要装 `cargo`，`go` 要装 `go`，`typescript` 要装 `node` 和 `npm`，`jscpd` 要装 repo 里有的语言的这些工具。工作区有未提交的改动时，输出第一行先提示，检查按工作区里的内容做。测试：`inline-exemptions/` 跑 `python3 -m unittest inline_exemptions_test`，`python/inline-exemptions/` 跑 `python3 -m unittest exemptions_test`，`rust/inline-exemptions/` 跑 `cargo test --locked`，`go/inline-exemptions/` 跑 `go test ./...`，`typescript/inline-exemptions/` 跑 `npm ci --ignore-scripts && npm test`。
 
 #### 测试结果状态门
 

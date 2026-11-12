@@ -232,9 +232,27 @@ def normalize_git(url: str) -> str:
     return f"{host.lower()}/{path.removesuffix('.git').strip('/')}"
 
 
+def url_location(url: str) -> tuple[str, str, list[str]] | None:
+    """Scheme, host and decoded path segments; None when a . or .. segment would move the path elsewhere."""
+    parts = urllib.parse.urlsplit(url)
+    segments = urllib.parse.unquote(parts.path).split("/")
+    if any(segment in (".", "..") for segment in segments):
+        return None
+    return parts.scheme.lower(), parts.netloc.lower(), [s for s in segments if s]
+
+
 def under(url: str, prefixes: Iterable[str]) -> bool:
-    url = url.rstrip("/")
-    return any(url == p.rstrip("/") or url.startswith(p.rstrip("/") + "/") for p in prefixes)
+    if (where := url_location(url)) is None:
+        return False
+    for prefix in prefixes:
+        base = url_location(prefix)
+        if base and base[:2] == where[:2] and where[2][: len(base[2])] == base[2]:
+            return True
+    return False
+
+
+def is_wheel(url: str) -> bool:
+    return urllib.parse.urlsplit(url).path.endswith(".whl")
 
 
 def git_violations(locked: Iterable[Locked], allowlist: Allowlist, prefix: str) -> list[str]:
@@ -504,10 +522,10 @@ def requirement_lines(path: Path, seen: set[Path]) -> Iterator[str]:
             yield line
 
 
-# A requirement whose source is a URL: [-e ][name[extras] @ ]URL[ ; markers]
+# A requirement whose source is a URL: [-e ][name[extras] @ ]URL[ ; markers][ --hash=...]
 DIRECT_REFERENCE = re.compile(
     r"(?:(?:-e|--editable)\s+)?(?:[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[^\]]*\])?\s*@\s*)?"
-    r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://\S+)(?:\s+;.*)?"
+    r"(?P<url>[A-Za-z][A-Za-z0-9+.-]*://\S+)(?:\s+;.*?)?(?:\s+--hash[=\s]\S+)*"
 )
 
 
@@ -541,9 +559,7 @@ def env_python(args: argparse.Namespace) -> int:
         package.name
         for package in read_python_lock(args)
         if package.name
-        and (
-            package.kind == "git" or (package.kind == "remote" and not package.url.endswith(".whl"))
-        )
+        and (package.kind == "git" or (package.kind == "remote" and not is_wheel(package.url)))
     ]
     if names:
         print(f"UV_NO_BINARY_PACKAGE={' '.join(dict.fromkeys(names))}")

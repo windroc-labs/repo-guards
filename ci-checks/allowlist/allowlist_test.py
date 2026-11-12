@@ -287,6 +287,21 @@ class Violations(unittest.TestCase):
         self.assertIn("idna@3.10", message)
         self.assertIn("python.bans.allow", message)
 
+    def test_url_prefix_holds_after_dot_segments_and_case(self):
+        prefix = Allowlist(registries=("https://files.example.net/pkg",))
+        for url, admitted in (
+            ("https://Files.Example.net/pkg/a-1.0.tar.gz", True),
+            ("https://files.example.net/pkg/sub/a-1.0.tar.gz", True),
+            ("https://files.example.net/pkg/../evil/e-1.0.tar.gz", False),
+            ("https://files.example.net/pkg/%2e%2e/evil/e-1.0.tar.gz", False),
+            ("https://files.example.net/pkg/./a-1.0.tar.gz", False),
+            ("https://files.example.net/pkgevil/e-1.0.tar.gz", False),
+            ("https://files.example.network/pkg/e-1.0.tar.gz", False),
+        ):
+            with self.subTest(url=url):
+                found = self.check([Locked("a", "1.0", "remote", url)], prefix)
+                self.assertEqual(found == [], admitted, found)
+
     def test_python_url_source_needs_a_prefix_entry(self):
         locked = [Locked("w", "1.0", "remote", "https://example.org/w-1.0-py3-none-any.whl")]
         (message,) = self.check(locked)
@@ -613,6 +628,9 @@ class Cli(unittest.TestCase):
                 "evil @ http://127.0.0.1:8765/evil-1.0.tar.gz?x=git+https://git.example.org/o/named\n"
                 "evil2 @ https://files.example.org/e-1.0.tar.gz#git+https://git.example.org/o/named\n"
                 "https://files.example.net/pkg/sdist-1.0.tar.gz\n"
+                "evil3 @ https://files.example.net/pkg/../evil/e-1.0.tar.gz\n"
+                "evil4 @ https://files.example.net/pkg/%2e%2e/evil/e-1.0.tar.gz\n"
+                "hashed @ https://files.example.net/pkg/h-1.0.tar.gz --hash=sha256:abc\n"
                 "six==1.17.0\n"
                 f"git+https://git.example.org/o/dyn@{SHA_A}  # no name\n"
                 'named @ git+https://git.example.org/o/named@main ; python_version >= "3"\n'
@@ -660,6 +678,7 @@ class Cli(unittest.TestCase):
                 "git+https://git.example.org/o/inc@c3",
                 "git+https://git.example.org/o/inc@c4",
                 "https://files.example.net/pkg/sdist-1.0.tar.gz",
+                "hashed @ https://files.example.net/pkg/h-1.0.tar.gz --hash=sha256:abc",
                 f"git+https://git.example.org/o/dyn@{SHA_A}",
                 'named @ git+https://git.example.org/o/named@main ; python_version >= "3"',
                 f"-e git+https://git.example.org/o/edit.git@{SHA_A}#egg=edit",
@@ -709,6 +728,8 @@ class Cli(unittest.TestCase):
             Path(tmp, "r.txt").write_text(
                 "sd @ https://files.example.net/sd-1.0.tar.gz\n"
                 "wh @ https://files.example.net/wh-1.0-py3-none-any.whl\n"
+                "wf @ https://files.example.net/wf-1.0-py3-none-any.whl#sha256=abc\n"
+                "wq @ https://files.example.net/wq-1.0-py3-none-any.whl?x=1\n"
             )
             self.assertEqual(
                 self.run_main(

@@ -55,6 +55,16 @@
 
 `typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。
 
+## 依赖检查（npm、license-checker）
+
+`typescript.yml` 的 Dependency rules 步用 [`allowlist.py`](../allowlist/allowlist.py) 拿 `package-lock.json`（lockfileVersion 2 或 3）对[依赖白名单](../README.md#依赖白名单)：registry 只准 npmjs 和 `sources.allow-registry`（按 URL 前缀比），git 源只准 `sources.allow-git`，`bans.allow` 非空时只准名单里的包；workspace 和 file 依赖不查。白名单另外这样用：
+
+| 白名单项 | `typescript.yml` 怎么用 |
+|---|---|
+| `sources.allow-git` 有条目 | Apply the dependency allowlist 步把 npm 的 `allow-git` 设成 `all`，`npm ci` 才装得上 git 依赖；不在名单里的由 Dependency rules 挡 |
+| `bans.build.allow-build-scripts` | `npm ci` 照样不跑安装脚本；装完对名单里的包跑 `npm rebuild`，只跑它们的脚本 |
+| `licenses.exceptions` | Licenses 步对每条的包单独跑 license-checker-rseidelsohn，准用共用名单加这条的 `allow`；其余的包对共用名单，`license-exceptions` 里的包不查 |
+
 ## 覆盖率（vitest v8）
 
 | 文件 | 作用 |

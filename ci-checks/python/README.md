@@ -1,6 +1,17 @@
 # Python 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境，项目本身用 `uv sync --locked` 只装 wheel。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境，项目本身装进 `.venv`，见[项目安装](#项目安装)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+
+## 项目安装
+
+项目按原样装，不用改布局。[`install-project.sh`](install-project.sh) 把项目装进项目目录下的 `.venv`，Checks、Coverage 和 Coverage 里 merge-base 的副本都用它：
+
+| 项目里有 | 怎么装 |
+|---|---|
+| `uv.lock` | `uv sync --locked` |
+| 没有 `uv.lock` | `uv pip compile` 解析 `requirements` 输入的文件（默认 `requirements.txt`，空格分开）和存在的 `requirements-dev` 文件（默认 `requirements-dev.txt`，放 pytest 等测试用的包），记下每个包来自哪个 index，再 `uv pip sync` 进 `.venv`。Python 版本取 `.python-version`，没有就用 3.12 |
+
+两种都只装 wheel；[依赖白名单](../README.md#依赖白名单)的 `bans.build.allow-build-scripts` 里的包从源码构建，git 依赖也要写进去。之后各步都用 `.venv`，两种项目跑法一样。只有零散脚本、没有 `src` 的项目把 `source-dirs` 设成 `.`：vulture 跳过 `.venv`，pyright 和 coverage.py 本来就不进去。
 
 ## formatter（ruff format）
 
@@ -48,11 +59,15 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
+| [`pyproject.toml`](pyproject.toml) | `[tool.vulture]`：`paths` 由 `source-dirs` 输入代替，`exclude` 排除测试文件（为什么见[死代码](../README.md#死代码)）；`min_confidence = 60` 报全部类型（未用的函数、类、变量是 60%，未用的 import 是 90%）。deptry 不用配置：依赖从 repo 的 `pyproject.toml` 读，没有 `uv.lock` 时从 `requirements`、`requirements-dev` 输入的文件读，只扫 `source-dirs`。两者的版本固定在 `dev` 组 |
 
 `python.yml` 的 Dead code 步跑 vulture，Unused dependencies 步跑 deptry。
 
 vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁免。
+
+## 依赖检查
+
+`python.yml` 的 Dependency rules 步用 [`allowlist.py`](../allowlist/allowlist.py) 拿项目的包对[依赖白名单](../README.md#依赖白名单)：有 `uv.lock` 读它，没有就读[项目安装](#项目安装)的解析结果。registry 只准 PyPI 和 `sources.allow-registry`；git 源要在 `sources.allow-git` 里，包名还要在 `bans.build.allow-build-scripts` 里；`bans.allow` 非空时只准名单里的包。同一步把 registry 上的包写成 `name==version`，Vulnerabilities 步交给 pip-audit。
 
 ## 许可证（pip-licenses）
 
@@ -62,11 +77,11 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 |---|---|
 | 输入 | `pip-licenses --from all --format json` 的输出。每个包按顺序取一种：PEP 639 的 `License-Expression`；没有就取 trove classifier 名（多个用 `; ` 隔开，有一个满足就过）；再没有就取 `License` 元数据，整段当一个许可证，不拆 |
 | 判定 | classifier 名先按 `python-classifiers` 换成 SPDX，再当 SPDX 表达式算：`OR` 有一边在 `allow` 里就过，`AND` 要每边都在，`AND` 比 `OR` 先结合，可加括号；`<id> WITH <exception>` 整体要在 `allow` 里。标识符和运算符不分大小写；解析不了的（如自由文本）不过 |
-| 参数 | `license_check.py LICENSES_TOML PIP_LICENSES_JSON` |
+| 参数 | `license_check.py LICENSES_TOML PIP_LICENSES_JSON [ALLOWLIST_TOML]`；依赖白名单的 `licenses.exceptions` 给匹配的包加准用的许可证，文件可以不存在 |
 | 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
 | 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
 
-`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己和 `license-exceptions` 里的包，再交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
+`python.yml` 的 Licenses 步用 pip-licenses 列出项目环境里的包，跳过项目自己和 `license-exceptions` 里的包，再连同依赖白名单交给本脚本判定。`allow` 里不写 `OR`、`AND` 表达式；带例外的许可证整体写一条，如 `Apache-2.0 WITH LLVM-exception`。
 
 ## 覆盖率（coverage.py）
 
@@ -74,4 +89,4 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
-`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上，用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
+`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上，用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的依赖（lockfile 或 `requirements-dev`）；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。

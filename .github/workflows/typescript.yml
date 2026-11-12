@@ -12,7 +12,7 @@ on:
         type: string
         default: '["src/index.ts!"]'
       knip-project:
-        description: knip project globs as JSON; a trailing ! marks shipped code
+        description: knip project globs as JSON; a trailing ! marks shipped code, which coverage also measures
         type: string
         default: '["src/**/*.ts!"]'
       license-exceptions:
@@ -27,7 +27,7 @@ jobs:
   typescript:
     name: TypeScript
     runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
@@ -68,6 +68,16 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/ts-tools" --no-audit --no-fund --save-exact license-checker-rseidelsohn@5.0.1
           npm ci --prefix "$RG/typescript/comment-budget" --no-audit --no-fund
           echo "$RUNNER_TEMP/ts-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Install the project
         run: npm ci --no-audit --no-fund
       - name: Format
@@ -90,9 +100,11 @@ jobs:
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           knip --production --config "$RUNNER_TEMP/knip.json"
       - name: Vulnerabilities
+        id: vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit
       - name: Licenses
+        id: licenses
         if: ${{ !cancelled() }}
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
@@ -103,3 +115,29 @@ jobs:
             args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
           fi
           license-checker-rseidelsohn "${args[@]}"
+      # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.
+      - name: Coverage
+        id: coverage
+        if: ${{ !cancelled() && steps.vulnerabilities.outcome == 'success' && steps.licenses.outcome == 'success' }}
+        env:
+          PROJECT: ${{ inputs.knip-project }}
+        run: |
+          flags=(--coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura)
+          mapfile -t include < <(node -e 'for (const g of JSON.parse(process.argv[1])) if (g.endsWith("!")) console.log(g.slice(0, -1))' "$PROJECT")
+          mapfile -t exclude < <(node -e 'for (const g of require(process.argv[1]).exclude) console.log(g)' "$RG/typescript/coverage.json")
+          for glob in "${include[@]}"; do flags+=("--coverage.include=$glob"); done
+          for glob in "${exclude[@]}"; do flags+=("--coverage.exclude=$glob"); done
+          measure() {
+            npx --no-install vitest run "${flags[@]}" --coverage.reportsDirectory="$RUNNER_TEMP/$1" \
+              && mv "$RUNNER_TEMP/$1/cobertura-coverage.xml" "$RUNNER_TEMP/$1.xml"
+          }
+          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
+          git worktree prune
+          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
+          (cd "$RUNNER_TEMP/base" && npm ci --no-audit --no-fund && measure coverage-base) || echo "::warning::Tests at the merge-base failed"
+          measure coverage-head
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        run: |
+          PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
+            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"

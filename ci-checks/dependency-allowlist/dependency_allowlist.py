@@ -13,8 +13,13 @@ def cargo(text: str) -> set[Package]:
     return {(p["name"], p["version"]) for p in tomllib.loads(text).get("package", []) if "source" in p}
 
 
-def pylock(text: str) -> set[Package]:
-    return {(p["name"], p.get("version", "")) for p in tomllib.loads(text).get("packages", [])}
+def python(text: str) -> set[Package]:
+    # pylock.toml lists packages; uv.lock lists package, where an editable or virtual source is the workspace itself.
+    lock = tomllib.loads(text)
+    entries = lock.get("packages") or [
+        p for p in lock.get("package", []) if not p["source"].keys() & {"editable", "virtual"}
+    ]
+    return {(p["name"], p.get("version", "")) for p in entries}
 
 
 def npm(text: str) -> set[Package]:
@@ -26,7 +31,7 @@ def npm(text: str) -> set[Package]:
     }
 
 
-READERS: dict[str, Callable[[str], set[Package]]] = {"cargo": cargo, "pylock": pylock, "npm": npm}
+READERS: dict[str, Callable[[str], set[Package]]] = {"cargo": cargo, "python": python, "npm": npm}
 
 
 def entry(item: str | dict[str, str]) -> tuple[str, str | None]:

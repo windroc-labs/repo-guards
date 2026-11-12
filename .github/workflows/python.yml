@@ -83,13 +83,16 @@ jobs:
         env:
           PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
-          # pylock.toml from uv.lock, else from requirements.txt; a merge-base without either leaves no base lock.
+          # pylock.toml (for pip-audit) and dependencies.toml (for the allowlist: uv.lock itself, which lists every extra and
+          # group, else the compiled pylock.toml); a merge-base without uv.lock or requirements.txt leaves no base files.
           python=$PWD/.venv/bin/python
           export_lock() {
             if [[ -f $1/uv.lock ]]; then
-              (cd "$1" && uv export -q --frozen --all-extras --all-groups --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
+              (cd "$1" && uv export -q --frozen --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
+              cp "$1/uv.lock" "$2/dependencies.toml"
             elif [[ -f $1/requirements.txt ]]; then
               (cd "$1" && uv pip compile -q requirements.txt --python "$python" --format pylock.toml -o "$2/pylock.toml")
+              cp "$2/pylock.toml" "$2/dependencies.toml"
             fi
           }
           mkdir -p "$RUNNER_TEMP/pylock-head" "$RUNNER_TEMP/pylock-base"
@@ -127,7 +130,7 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
-        run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" pylock "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/pylock-base/pylock.toml" "$RUNNER_TEMP/pylock-head/pylock.toml"
+        run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" python "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/pylock-base/dependencies.toml" "$RUNNER_TEMP/pylock-head/dependencies.toml"
       - name: Licenses
         if: ${{ !cancelled() }}
         env:
@@ -183,13 +186,13 @@ jobs:
           pytest=$(pin "pytest==")
           read -ra dirs <<< "$SOURCE_DIRS"
           sources=$(IFS=,; echo "${dirs[*]}")
-          # A uv project's pytest comes from its lock; a requirements.txt project gets the shared dev group's.
+          # A uv project's pytest comes from its lock; a requirements.txt project without one gets the shared dev group's.
           install() {
             if [[ -f uv.lock ]]; then
               uv sync --locked
             else
-              tools+=(--with "$pytest")
               uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
+              .venv/bin/python -c 'import pytest' 2> /dev/null || tools+=(--with "$pytest")
             fi
           }
           cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }

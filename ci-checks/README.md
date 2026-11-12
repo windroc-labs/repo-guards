@@ -191,13 +191,13 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
-| 新增或变了的包在依赖白名单里 | 引入改过的包 | [依赖白名单](#依赖白名单)：`Cargo.lock` 和 merge-base 比（项目白名单） | 同 Rust 列，比 `pylock.toml`（从 `uv.lock` 导出，或由 `requirements.txt` 解析） | 同 Rust 列，比 `package-lock.json` |
+| 新增或变了的包在依赖白名单里 | 引入改过的包 | [依赖白名单](#依赖白名单)：`Cargo.lock` 和 merge-base 比（项目白名单） | 同 Rust 列，比 `uv.lock`，或由 `requirements.txt` 解析的 `pylock.toml` | 同 Rust 列，比 `package-lock.json` |
 | 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | 无现成规则（脚本查 `uv.lock` 里除了项目自己，每个包的 `source` 都是 `registry`）；uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL | [`.npmrc`](typescript/.npmrc) `allow-git=none`、`allow-remote=none`、`allow-file=none`；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 |
 | 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
 | 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | uv `[tool.uv]` `no-build = true`，只装 wheel（项目自己的包和 editable 依赖照样构建） | `.npmrc` `ignore-scripts=true` |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
-| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit `--locked`，读依赖白名单比的同一份 `pylock.toml`（2.10.1 不读 `uv.lock`） | `npm audit` |
+| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit `--locked`，读从 `uv.lock` 导出或由 `requirements.txt` 解析的 `pylock.toml`（2.10.1 不读 `uv.lock`） | `npm audit` |
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
@@ -206,7 +206,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 一份项目依赖白名单管三种语言：`rust.yml`、`python.yml`、`typescript.yml` 的 `deny-allowlist` 输入，默认 `.github/checks/deny-allowlist.toml`，写法同 cargo-deny。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `bans.allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
 
 - 条目：`"name"` 准这个包的所有版本，`"name@version"` 只准这个版本；也认 cargo-deny 的 `{ crate = "name@version" }` 和 `{ name = "...", version = "..." }`。包名照 lockfile 里的写；失败的输出给出要加的那一条。
-- 比什么：Rust 是 `Cargo.lock` 里有 `source` 的包（workspace 成员和 path 依赖不算）；Python 是 `pylock.toml`（见 [Python README](python/README.md#依赖白名单和漏洞pylocktoml)）；TypeScript 是 `package-lock.json` 的 `packages` 里 `node_modules/` 下的包（workspace 链接不算）。只换了来源、版本没变的包不算变了。
+- 比什么：Rust 是 `Cargo.lock` 里有 `source` 的包（workspace 成员和 path 依赖不算）；Python 是 `uv.lock`，没有就是由 `requirements.txt` 解析的 `pylock.toml`（见 [Python README](python/README.md#依赖白名单和漏洞pylocktoml)）；TypeScript 是 `package-lock.json` 的 `packages` 里 `node_modules/` 下的包（workspace 链接不算）。只换了来源、版本没变的包不算变了。
 - 白名单文件不存在等于空名单（Rust 的 `deny-merge` 仍要求文件存在）；merge-base 上没有 lockfile 时，所有包都算新增。
 - 名单不分语言：一条 `name` 在三种语言里都放行同名的包。
 - `bans.allow` 不交给 cargo-deny：名单不空时，cargo-deny 会禁掉名单外的所有 crate。

@@ -74,6 +74,44 @@ name = "local-tool"
 directory = { path = "tools/local" }
 """
 
+UV_LOCK_BASE = """\
+version = 1
+
+[[package]]
+name = "demo-app"
+version = "0.1.0"
+source = { virtual = "." }
+
+[[package]]
+name = "click"
+version = "8.5.1"
+source = { registry = "https://pypi.org/simple" }
+"""
+
+UV_LOCK_HEAD = """\
+version = 1
+
+[[package]]
+name = "demo-app"
+version = "0.2.0"
+source = { editable = "." }
+
+[[package]]
+name = "click"
+version = "8.5.1"
+source = { registry = "https://pypi.org/simple" }
+
+[[package]]
+name = "torch"
+version = "2.9.0"
+source = { registry = "https://download.pytorch.org/whl/cpu" }
+
+[[package]]
+name = "torch"
+version = "2.9.0+cu128"
+source = { registry = "https://download.pytorch.org/whl/cu128" }
+"""
+
 NPM_BASE = {
     "name": "app",
     "lockfileVersion": 3,
@@ -118,9 +156,17 @@ class Check(unittest.TestCase):
         self.assertEqual(flagged, ["libc@0.2.177", "serde@1.0.229"])
 
     def test_pylock_reports_new_packages_and_keeps_versionless_ones(self):
-        code, flagged = self.run_main("pylock", PYLOCK_BASE, PYLOCK_HEAD, "")
+        code, flagged = self.run_main("python", PYLOCK_BASE, PYLOCK_HEAD, "")
         self.assertEqual(code, 1)
         self.assertEqual(flagged, ["local-tool", "numpy@2.5.4"])
+
+    def test_uv_lock_reports_every_extra_and_group_package_and_skips_the_workspace(self):
+        code, flagged = self.run_main("python", UV_LOCK_BASE, UV_LOCK_HEAD, "")
+        self.assertEqual((code, flagged), (1, ["torch@2.9.0", "torch@2.9.0+cu128"]))
+
+    def test_python_compares_a_uv_lock_base_with_a_pylock_head(self):
+        code, flagged = self.run_main("python", UV_LOCK_BASE, PYLOCK_BASE, "")
+        self.assertEqual((code, flagged), (1, ["humantyping@1.0.3"]))
 
     def test_npm_reads_nested_scoped_and_aliased_packages_and_skips_links(self):
         code, flagged = self.run_main("npm", json.dumps(NPM_BASE), json.dumps(NPM_HEAD), "")
@@ -136,7 +182,7 @@ class Check(unittest.TestCase):
             self.assertEqual((code, flagged), (0, []), allowlist)
 
     def test_unchanged_and_removed_packages_pass(self):
-        code, flagged = self.run_main("pylock", PYLOCK_HEAD, PYLOCK_BASE, "")
+        code, flagged = self.run_main("python", PYLOCK_HEAD, PYLOCK_BASE, "")
         self.assertEqual((code, flagged), (0, []))
 
     def test_allow_by_name_matches_every_version(self):
@@ -160,11 +206,11 @@ class Check(unittest.TestCase):
         self.assertEqual((code, flagged), (1, ["libc@0.2.177", "serde@1.0.229"]))
 
     def test_missing_base_lock_makes_every_package_new(self):
-        code, flagged = self.run_main("pylock", None, PYLOCK_BASE, None)
+        code, flagged = self.run_main("python", None, PYLOCK_BASE, None)
         self.assertEqual((code, flagged), (1, ["click@8.5.1", "humantyping@1.0.3"]))
 
     def test_missing_allowlist_file_allows_nothing(self):
-        code, flagged = self.run_main("pylock", PYLOCK_BASE, PYLOCK_HEAD, None)
+        code, flagged = self.run_main("python", PYLOCK_BASE, PYLOCK_HEAD, None)
         self.assertEqual((code, flagged), (1, ["local-tool", "numpy@2.5.4"]))
 
     def test_message_names_the_entry_and_the_allowlist(self):

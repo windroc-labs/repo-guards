@@ -70,7 +70,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 
 ## 依赖白名单和漏洞（pylock.toml）
 
-Export the resolved dependencies 步把项目解析好的依赖写成一份 `pylock.toml`：有 `uv.lock` 用 `uv export --frozen --all-extras --all-groups --format pylock.toml --no-emit-workspace`（含全部 extra 和依赖组，不含项目自己）；没有就用 `uv pip compile requirements.txt --format pylock.toml`，按 `.venv` 的 Python 解析。merge-base 的副本照样导出一份。Vulnerabilities 步用 `pip-audit --locked` 查 PR 这份；Dependency allowlist 步拿两份比，规则见[依赖白名单](../README.md#依赖白名单)。`requirements.txt` 里没写死的版本按当时的 index 解析，两份同时解析，所以多出来的包只来自 PR 的改动。
+Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.toml`：有 `uv.lock` 用 `uv export --frozen --format pylock.toml --no-emit-workspace`（默认的 extra 和依赖组，不含项目自己）；没有就用 `uv pip compile requirements.txt --format pylock.toml`，按 `.venv` 的 Python 解析。merge-base 的副本照样导出。Vulnerabilities 步用 `pip-audit --locked` 查 PR 这份。Dependency allowlist 步比的是 `uv.lock` 本身（全部 extra 和依赖组都在里面，`editable`、`virtual` 来源的项目自己不算），没有 `uv.lock` 就比 `pylock.toml`，规则见[依赖白名单](../README.md#依赖白名单)。`requirements.txt` 里没写死的版本按当时的 index 解析，两份同时解析，所以多出来的包只来自 PR 的改动。
 
 ## 覆盖率（coverage.py）
 
@@ -78,4 +78,4 @@ Export the resolved dependencies 步把项目解析好的依赖写成一份 `pyl
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
-`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上，用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile；只有 `requirements.txt` 的项目用共用 `dev` 组固定的 pytest；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
+`python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上，用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile 或 `requirements.txt`，没装 pytest 的 `requirements.txt` 项目用共用 `dev` 组固定的版本；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。

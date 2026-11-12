@@ -1,6 +1,6 @@
 # TypeScript 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置，由 reusable workflow [`typescript.yml`](../../.github/workflows/typescript.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`typescript.yml` 按 [`package.json`](package.json) 把工具装在 repo 之外，再用 `npm ci` 装 repo 自己的依赖，npm 设置取 [`.npmrc`](.npmrc)（见[依赖检查规则](../README.md#依赖检查规则)）。各节写明它由哪一步跑；顺序同主表。
+[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置，由 reusable workflow [`typescript.yml`](../../.github/workflows/typescript.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`typescript.yml` 按 [`package.json`](package.json) 把工具装在 repo 之外，再用 `npm ci` 装 repo 自己的依赖，npm 设置取 [`.npmrc`](.npmrc)（见[依赖检查规则](../README.md#依赖检查规则)）。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（prettier）
 

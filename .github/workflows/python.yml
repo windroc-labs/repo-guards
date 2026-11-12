@@ -23,36 +23,41 @@ on:
 permissions:
   contents: read
 
+# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
+# Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
-  python:
-    name: Python
+  checks:
+    name: Checks
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
+      BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       SOURCE_DIRS: ${{ inputs.source-dirs }}
       UV_NO_BUILD: "1"
-    defaults:
+    defaults: &defaults
       run:
         shell: bash
         working-directory: repo/${{ inputs.working-directory }}
     steps:
-      - name: Check out
+      - &checkout
+        name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: repo
           fetch-depth: 0
           persist-credentials: false
       # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - name: Check out repo-guards at the pinned commit
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           path: repo-guards
           persist-credentials: false
-      - name: Install uv
+      - &install-uv
+        name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: "0.13.7"
@@ -62,11 +67,6 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
-      - name: Install diff-cover
-        working-directory: ${{ runner.temp }}
-        run: |
-          uv venv --python 3.12 coverage-venv
-          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Install the project from wheels only
         run: uv sync --locked
       - name: Format
@@ -108,7 +108,32 @@ jobs:
           fi
           pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
           python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
-      # The coverage steps run the PR's tests, so they come after every static check.
+
+  # The coverage steps run the PR's tests, so they get a job of their own.
+  coverage:
+    name: Coverage
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
+      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      UV_NO_BUILD: "1"
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
+      - name: Install Python 3.12
+        run: |
+          uv venv --python 3.12 "$RUNNER_TEMP/tools"
+          echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Coverage
         id: coverage
         if: ${{ !cancelled() }}

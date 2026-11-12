@@ -25,6 +25,14 @@
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
+三个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（测试在 merge-base 和 PR 上各跑一遍），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
+
+| workflow | job（里面的步） |
+|---|---|
+| `rust.yml` | Checks（Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules）、Coverage（Coverage、Coverage gate、CRAP report） |
+| `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
+| `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
+
 ## 语言级
 
 现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript 默认选用的工具；每种语言的模板配置和跑它的步见各语言 README。"模板"一列：✅ 三种语言的模板和 workflow 都有了，⚠️ 只做了一部分，空着是还没开始。
@@ -208,14 +216,14 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`](coverage/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.12` 生成）。测试：在 `coverage/` 跑 `python3 -m unittest coverage_gate_test`。
 
-不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步排在各 workflow 的静态检查之后。
+不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步在各 workflow 单独的 Coverage job 里跑，静态检查的 job 不跑测试。
 
 | Rust | Python | TypeScript |
 |---|---|---|
 | [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
-| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`；Tests 步另跑全部测试目标，不量覆盖率 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
+| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`：Coverage 步只跑这些目标 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
 
-覆盖率只算单元测试：改动行、总覆盖率和 merge-base 的比较、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。集成测试照样跑，但不进覆盖率；Python 和 TypeScript 的 workflow 只跑配置选中的测试，集成测试由 repo 自己的 job 跑。
+覆盖率只算单元测试：改动行、总覆盖率和 merge-base 的比较、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。单元测试只跑一遍，就在 Coverage 步里。集成测试是 repo 自己的，由 repo 自己的 job 跑，不进覆盖率，三个 workflow 都不跑。
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 

@@ -11,7 +11,48 @@ private = { ignore = true }
 allow = []
 
 [bans.build]
-allow-build-scripts = []
+allow-build-scripts = [
+    "ahash",
+    "anyhow",
+    "crc32fast",
+    "crossbeam-deque",
+    "crossbeam-epoch",
+    "crossbeam-utils",
+    "generic-array",
+    "getrandom",
+    "icu_normalizer_data",
+    "icu_properties_data",
+    "libc",
+    "libm",
+    "lock_api",
+    "nix",
+    "num-traits",
+    "parking_lot_core",
+    "portable-atomic",
+    "proc-macro2",
+    "quote",
+    "rayon-core",
+    "rustix",
+    "rustversion",
+    "serde",
+    "serde_core",
+    "serde_json",
+    "syn",
+    "thiserror",
+    "typenum",
+    "winapi",
+    "winapi-i686-pc-windows-gnu",
+    "winapi-x86_64-pc-windows-gnu",
+    "windows_aarch64_gnullvm",
+    "windows_aarch64_msvc",
+    "windows_i686_gnu",
+    "windows_i686_gnullvm",
+    "windows_i686_msvc",
+    "windows_x86_64_gnu",
+    "windows_x86_64_gnullvm",
+    "windows_x86_64_msvc",
+    "zerocopy",
+]
 
 [sources]
 unknown-registry = "deny"

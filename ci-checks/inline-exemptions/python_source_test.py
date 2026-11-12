@@ -52,7 +52,7 @@ class FormsTest(unittest.TestCase):
             ("import pytest\npytestmark = pytest.mark.skip\n", "pytest"),
             ('class T:\n    def test(self):\n        self.skipTest("flaky")\n', "unittest"),
             ('import unittest\nraise unittest.SkipTest("x")\n', "unittest"),
-            ("from pytest import mark\n\n\n@mark.skip\ndef test_a():\n    pass\n", "pytest"),
+            ("from pytest import mark\n\n\n" "@mark.skip\ndef test_a():\n    pass\n", "pytest"),
             ("# flake8: noqa\nx = 1\n", "ruff"),
             ("# yapf: disable\nx = 1\n", "ruff-format"),
         ]

@@ -134,13 +134,28 @@ class FileContent(unittest.TestCase):
             "C:" + "\\\\" + "Users" + "\\\\" + "bob",
             "c:" + "\\" + "users" + "\\" + "bob",
             "file://" + USERS_BOB + "/x",
+            "PATH=http://proxy:8080," + HOME_BOB + "/bin",
+            "url=https://a.b;dir=" + HOME_BOB + "/x",
+            "~" + HOME_BOB,
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
                 self.assertEqual(repo.scan(*PUBLIC)[0], 1)
 
-    def test_local_path_inside_a_url_is_not_a_hit(self):
-        repo = Repo(self, {"a.md": "https://example.com" + HOME_BOB + "\n"})
+    def test_home_segments_inside_urls_and_relative_paths_are_not_hits(self):
+        for text in (
+            "https://example.com" + HOME_BOB,
+            "src" + HOME_BOB + "/page.tsx",
+            "GET /api/v1" + USERS_BOB,
+            "app" + USERS_BOB + "/Profile.cs",
+            "." + HOME_BOB,
+        ):
+            with self.subTest(text=text):
+                repo = Repo(self, {"a.md": text + "\n"})
+                self.assertEqual(repo.scan(*PUBLIC)[0], 0)
+
+    def test_relative_tracked_path_with_a_home_segment_is_not_a_hit(self):
+        repo = Repo(self, {"web" + HOME_BOB + ".md": "x\n"})
         self.assertEqual(repo.scan(*PUBLIC)[0], 0)
 
     def test_s9_email_allowlist(self):
@@ -513,7 +528,7 @@ class Links(unittest.TestCase):
         doc = (
             "# Top\n## 1. 设置\n## 死代码（knip）\n## `.github/` 改动单独成 PR\n"
             "## Dup\n## Dup\n## [Linked](x.md) *em*\nSetext Title\n---\n"
-            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n"
+            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n# Using _ as placeholder\n## a_b_\n## _private\n"
         )
         for anchor, fails in (
             ("top", False),
@@ -531,6 +546,9 @@ class Links(unittest.TestCase):
             ("Top", True),
             ("vect", False),
             ("italic", False),
+            ("using-_-as-placeholder", False),
+            ("a_b_", False),
+            ("_private", False),
         ):
             with self.subTest(anchor=anchor):
                 code, out = self.links({"x.md": doc, "a.md": "see [x](x.md#%s)\n" % anchor})

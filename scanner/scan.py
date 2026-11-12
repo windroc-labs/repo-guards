@@ -83,8 +83,7 @@ CHECKS = {
 LOCAL_PATH = re.compile(
     r"(?:/(?:Users|home)/|[A-Za-z]:(?:\\{1,2}|/)(?i:users)(?:\\{1,2}|/))(?=[^\s<>/\\\"'`)\]])"
 )
-# A path after a URL's host (https://host/home/x) is part of the URL, not a home directory.
-URL_WITH_HOST = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s<>\"'`()\[\]]+[^\s<>\"'`()\[\]]*$")
+SHORT_OPTION = re.compile(r"(?:^|\s)-[A-Za-z]$")
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"
     r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![A-Za-z0-9-])"
@@ -110,8 +109,15 @@ def find_email(line: str) -> Iterable[int]:
     return [m.start() for m in EMAIL.finditer(line) if not email_allowed(m.group(0))]
 
 
+def starts_a_path(line: str, i: int) -> bool:
+    """False inside a longer path or URL (src/home/x, https://host/home/x); `-I/home/x` is a flag's value."""
+    before = line[i - 1] if i else " "
+    inside_word = before.isascii() and (before.isalnum() or before in "_.-")
+    return not inside_word or bool(SHORT_OPTION.search(line, 0, i))
+
+
 def find_local_path(line: str) -> Iterable[int]:
-    return [m.start() for m in LOCAL_PATH.finditer(line) if not URL_WITH_HOST.search(line, 0, m.start())]
+    return [m.start() for m in LOCAL_PATH.finditer(line) if starts_a_path(line, m.start())]
 
 
 def find_em_dash(line: str) -> Iterable[int]:
@@ -324,7 +330,7 @@ def rendered(markdown: str) -> str:
     """Inline Markdown outside code spans as GitHub renders it to text."""
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", markdown)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"(?<![^\W_])_+|_+(?![^\W_])", "", text)
+    text = re.sub(r"(?<![^\W_])(__?)(?=\S)(.+?)(?<=\S)\1(?![^\W_])", r"\2", text)
     return html.unescape(re.sub(r"<[^>]+>", "", text))
 
 

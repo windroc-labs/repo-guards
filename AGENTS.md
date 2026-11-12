@@ -18,6 +18,8 @@ Enable the pre-push hook in your clone with `git config core.hooksPath hooks`. O
 
 If a change needs any of the above, stop and ask the owner.
 
+A caller's `ci.yml` belongs to the owner and is trusted: the shared workflows do not validate its inputs.
+
 ## If something leaks
 
 Deleting a file or rewriting history does not remove it: PR diffs, forks and caches keep it. Replace the repo instead. Every step marked "owner" needs an org owner.

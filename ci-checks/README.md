@@ -22,7 +22,7 @@
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。`jobs`、`coverage`、`coverage-shards` 让 caller 自己排 job，见下文。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
 三个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
 
@@ -32,19 +32,7 @@
 | `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
 | `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
 
-caller 可以用三个输入改这个排法。workflow 只照着跑，不替 caller 算：
-
-| 输入 | 写法 | 不写时 |
-|---|---|---|
-| `jobs` | 静态检查的 job，JSON：`[{"name": "<job 名>", "checks": ["<检查>", ...]}, ...]`。每项一个 job，各 job 并行跑；没写进去的检查不跑 | 上表的 Checks |
-| `coverage` | `false` 不跑覆盖率 | 跑 |
-| `coverage-shards` | 覆盖率分片，JSON 字符串列表，每项是一片要跑的测试：Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑 | 一个 Coverage job，和以前一样 |
-
-| workflow | `jobs` 里的检查名（括号里是步名） |
-|---|---|
-| `rust.yml` | `format`、`lint`、`comment-budget`、`type-check`（Type check and dead code）、`unused-dependencies`、`dependency-rules` |
-| `python.yml` | `format`、`lint`、`comment-budget`、`type-check`、`dead-code`、`unused-dependencies`、`vulnerabilities`、`licenses` |
-| `typescript.yml` | `format`、`comment-budget`、`type-check`、`dead-code`（Dead code and unused dependencies）、`vulnerabilities`、`licenses` |
+覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
 
 分片的数据用各工具自己的办法合并：Rust 在 Coverage job 里按所有片的测试目标再编译一遍（不跑测试），用 `cargo llvm-cov report` 合并各片的 `.profraw`；Python 用 `coverage combine`；TypeScript 用 vitest 的 blob 报告和 `--merge-reports`，blob 报告里是绝对路径，各片先把检出目录换成占位符。在样例项目上，各片放在不同目录里跑，合并出的报告和不分片的逐文件、逐行、逐分支一致。
 

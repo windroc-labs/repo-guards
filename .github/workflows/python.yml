@@ -19,18 +19,10 @@ on:
         description: The repo's packages exempt from the license check, one name per line; may be absent
         type: string
         default: .github/checks/license-exceptions.txt
-      jobs:
-        description: The static-check jobs as JSON, [{"name", "checks"}]; a check in no job does not run
-        type: string
-        default: '[{"name":"Checks","checks":["format","lint","comment-budget","type-check","dead-code","unused-dependencies","vulnerabilities","licenses"]}]'
-      coverage:
-        description: Run coverage
-        type: boolean
-        default: true
       coverage-shards:
-        description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; empty measures in one job
+        description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; [] measures in one job
         type: string
-        default: ""
+        default: "[]"
 
 permissions:
   contents: read
@@ -39,12 +31,7 @@ permissions:
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
-    name: ${{ matrix.job.name }}
-    if: ${{ inputs.jobs != '[]' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        job: ${{ fromJSON(inputs.jobs) }}
+    name: Checks
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -87,35 +74,35 @@ jobs:
       - name: Install the project from wheels only
         run: uv sync --locked
       - name: Format
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'format') }}
+        if: ${{ !cancelled() }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Lint
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'lint') }}
+        if: ${{ !cancelled() }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff -- ruff check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Comment budget
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'comment-budget') }}
+        if: ${{ !cancelled() }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
       - name: Type check
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'type-check') }}
+        if: ${{ !cancelled() }}
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
           python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'dead-code') }}
+        if: ${{ !cancelled() }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
       - name: Unused dependencies
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'unused-dependencies') }}
+        if: ${{ !cancelled() }}
         run: |
           deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
           uv run --locked --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'vulnerabilities') }}
+        if: ${{ !cancelled() }}
         run: |
           uv export --locked --format requirements-txt --no-emit-workspace -o "$RUNNER_TEMP/requirements.txt"
           pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --disable-pip --require-hashes
       - name: Licenses
-        if: ${{ !cancelled() && contains(matrix.job.checks, 'licenses') }}
+        if: ${{ !cancelled() }}
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
@@ -130,7 +117,7 @@ jobs:
   coverage:
     name: Coverage
     needs: coverage-shard
-    if: ${{ !cancelled() && inputs.coverage }}
+    if: ${{ !cancelled() }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -138,7 +125,7 @@ jobs:
       BASE_REF: *base-ref
       SOURCE_DIRS: ${{ inputs.source-dirs }}
       UV_NO_BUILD: "1"
-      MODE: ${{ inputs.coverage-shards != '' && 'merge' || 'whole' }}
+      MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
       SHARDS_RESULT: ${{ needs.coverage-shard.result }}
     defaults: *defaults
     steps:
@@ -160,10 +147,9 @@ jobs:
         if: ${{ needs.coverage-shard.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: python-coverage-*
+          pattern: ${{ needs.coverage-shard.outputs.artifact }}-*
           path: ${{ runner.temp }}/shards
           merge-multiple: true
-      # MODE whole measures and reports; shard runs its TESTS and keeps the data file; merge combines every shard's data and reports.
       - &coverage
         name: Coverage
         id: coverage
@@ -178,6 +164,7 @@ jobs:
             echo "::error::a coverage shard failed ($SHARDS_RESULT)"
             exit 1
           fi
+          # Every mode uses the project's environment: its Python version decides which lines and branches count.
           uv sync --locked
           cov=(uv run --locked --with "$coverage" coverage)
           rc=(--rcfile "$RG/python/pyproject.toml")
@@ -188,6 +175,8 @@ jobs:
               read -ra tests <<< "$TESTS"
               mkdir -p "$RUNNER_TEMP/shard"
               "${cov[@]}" run "${rc[@]}" --source "$sources" --data-file "$RUNNER_TEMP/shard/$SHARD.coverage" -m pytest "${tests[@]}"
+              # Artifact names are unique per run, and a caller may call this workflow once per working-directory.
+              echo "artifact=python-coverage-${PROJECT//\//-}" >> "$GITHUB_OUTPUT"
               exit ;;
             merge)
               "${cov[@]}" combine "${rc[@]}" "$RUNNER_TEMP"/shards/*.coverage ;;
@@ -213,9 +202,11 @@ jobs:
   # One job per coverage-shards item, running only its test paths; Coverage combines their data.
   coverage-shard:
     name: Coverage shard ${{ matrix.tests }}
-    if: ${{ inputs.coverage && inputs.coverage-shards != '' }}
+    if: ${{ inputs.coverage-shards != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
+    outputs:
+      artifact: ${{ steps.coverage.outputs.artifact }}
     strategy:
       fail-fast: false
       matrix:
@@ -227,6 +218,7 @@ jobs:
       MODE: shard
       SHARD: ${{ strategy.job-index }}
       TESTS: ${{ matrix.tests }}
+      PROJECT: ${{ inputs.working-directory }}
     defaults: *defaults
     steps:
       - *checkout
@@ -237,7 +229,7 @@ jobs:
       - name: Upload shard data
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: python-coverage-${{ strategy.job-index }}
+          name: ${{ steps.coverage.outputs.artifact }}-${{ strategy.job-index }}
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1

@@ -142,6 +142,8 @@ class FileContent(unittest.TestCase):
             "`-I" + HOME_BOB + "/include`",
             "LDFLAGS='-L" + HOME_BOB + "/lib'",
             "_" + HOME_BOB + "/x_",
+            'DATA_DIR="${DATA_DIR:-' + HOME_BOB + '/data}"',
+            "X=${DIR-" + HOME_BOB + "}",
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
@@ -154,6 +156,8 @@ class FileContent(unittest.TestCase):
             "GET /api/v1" + USERS_BOB,
             "app" + USERS_BOB + "/Profile.cs",
             "." + HOME_BOB,
+            "https://h.com/a/-v" + HOME_BOB,
+            "name-" + HOME_BOB,
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
@@ -533,7 +537,7 @@ class Links(unittest.TestCase):
         doc = (
             "# Top\n## 1. 设置\n## 死代码（knip）\n## `.github/` 改动单独成 PR\n"
             "## Dup\n## Dup\n## [Linked](x.md) *em*\nSetext Title\n---\n"
-            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n# Using _ as placeholder\n## a_b_\n## _private\n## Set APP__DB__HOST\n## ___x___\n"
+            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n# Using _ as placeholder\n## a_b_\n## _private\n## Set APP__DB__HOST\n## ___x___\n## x __ y __ z\n"
         )
         for anchor, fails in (
             ("top", False),
@@ -556,6 +560,7 @@ class Links(unittest.TestCase):
             ("_private", False),
             ("set-app__db__host", False),
             ("x", False),
+            ("x-__-y-__-z", False),
         ):
             with self.subTest(anchor=anchor):
                 code, out = self.links({"x.md": doc, "a.md": "see [x](x.md#%s)\n" % anchor})

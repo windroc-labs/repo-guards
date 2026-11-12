@@ -21,30 +21,25 @@ jobs:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          path: repo
           fetch-depth: 0
           persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       - name: .github changes in their own PR
         shell: bash
+        working-directory: repo
         env:
           BASE_REF: origin/${{ github.base_ref }}
-        run: |
-          changed="$RUNNER_TEMP/changed"
-          git -c core.quotePath=false diff --name-only --no-renames -z "$BASE_REF"...HEAD > "$changed"
-          mapfile -d '' files < "$changed"
-          workflows=()
-          others=()
-          for f in "${files[@]}"; do
-            if [[ $f == .github/* ]]; then
-              workflows+=("$f")
-            else
-              others+=("$f")
-            fi
-          done
-          if (( ${#workflows[@]} && ${#others[@]} )); then
-            echo "::error::A PR that changes .github/ must change nothing else"
-            printf '.github files:\n'
-            printf '  %s\n' "${workflows[@]}"
-            printf 'Other files:\n'
-            printf '  %s\n' "${others[@]}"
-            exit 1
-          fi
+        run: uv run --no-project --python 3.12 "$GITHUB_WORKSPACE/repo-guards/ci-checks/github-dir-pr/github_dir_pr.py" "$BASE_REF"

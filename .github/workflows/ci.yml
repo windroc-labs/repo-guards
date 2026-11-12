@@ -223,6 +223,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/inline-exemptions
         run: python3 -m unittest inline_exemptions_test
+      - name: github-dir-pr tests
+        id: github-dir-pr
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/github-dir-pr
+        run: python3 -m unittest github_dir_pr_test
       - name: deny-merge tests
         id: deny-merge
         if: ${{ !cancelled() }}
@@ -268,6 +273,7 @@ jobs:
           CONFIG_OVERRIDES: ${{ steps.config-overrides.outcome }}
           FETCH_CONFIGS: ${{ steps.fetch-configs.outcome }}
           INLINE_EXEMPTIONS: ${{ steps.inline-exemptions.outcome }}
+          GITHUB_DIR_PR: ${{ steps.github-dir-pr.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
@@ -279,7 +285,7 @@ jobs:
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS INLINE_EXEMPTIONS DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

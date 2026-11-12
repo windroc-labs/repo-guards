@@ -14,7 +14,7 @@ Numeric repository IDs are fine.
 
 Before you push, also run `python3 scanner/scan.py --names-file <path to the private-name list>` from the repo root, with the owner's list kept outside the checkout. It checks the tracked files and the commits in `origin/main..HEAD` for private names, local paths, emails, em dashes and broken relative links. It supplements the check above; it does not replace it.
 
-Enable the pre-push hook in your clone with `git config core.hooksPath hooks`. It refuses a push to a public repo when the pushed commits, tags or ref names carry a leak, or when `REPO_GUARDS_PRIVATE_NAMES` is unset. It does not run the hygiene checks; still run the command above. Details: [hooks/README.md](hooks/README.md).
+Enable the pre-push hook in your clone with `git config core.hooksPath hooks`. On every push from the clone it runs `scanner/scan.py --pre-push` on what the push publishes and refuses the push when the pushed commits, files, tags or ref names carry a leak, or when `REPO_GUARDS_PRIVATE_NAMES` is unset. It does not run the hygiene checks; still run the command above. Details: [hooks/README.md](hooks/README.md).
 
 If a change needs any of the above, stop and ask the owner.
 

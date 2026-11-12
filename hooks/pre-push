@@ -1,3 +1,3 @@
 #!/bin/sh
-# git passes the remote name and URL, and the pushed refs on stdin.
-exec python3 -I "$(dirname -- "$0")/../scanner/scan.py" --checks private-name,local-path,email --pre-push "$1"
+# git passes the remote name and the URL it pushes to, and the pushed refs on stdin.
+exec python3 -I "$(dirname -- "$0")/../scanner/scan.py" --pre-push "$2"

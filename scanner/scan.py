@@ -9,10 +9,11 @@ The list may come from the environment variable REPO_GUARDS_PRIVATE_NAMES instea
 It scans the tracked files and the messages and author and committer emails of the
 commits in `--commits` (default origin/main..HEAD); `--pr-from-env` adds the PR title
 and body from PR_TITLE and PR_BODY.
-`--pre-push REMOTE` (the git pre-push hook, hooks/pre-push) reads git's pre-push input from
-stdin and scans instead only what the push publishes beyond REMOTE's remote-tracking refs:
+`--pre-push URL` (the git pre-push hook, hooks/pre-push) reads git's pre-push input from
+stdin and scans instead only what the push publishes beyond what URL has (`git ls-remote`):
 each pushed commit's message and emails and the files it adds or changes, each annotated
-tag's message and tagger email, and each pushed ref name. A hit in a pushed file is
+tag's name, message and tagger email, and each pushed ref name. Its checks default to the
+leak class. A hit in a pushed file is
 `commit <sha> file #k`, k its line in `git diff-tree -r --root -c --no-commit-id --name-only <sha>`.
 `--public` prints counts only; the default output gives a position for every hit
 but never the matched text. Leak-class hits in files are reported by the file's
@@ -229,12 +230,12 @@ def read_text(full: str) -> str | None:
 
 
 class Report:
-    def __init__(self, checks: list[Check]):
+    def __init__(self, checks: list[Check], notice: str = LEAK_NOTICE):
         self.checks = checks
         self.hits: list[tuple[Check, Where]] = []
         self.unavailable = False
         self.skipped = 0
-        self.notice = LEAK_NOTICE
+        self.notice = notice
 
     def add(self, check: Check, where: Where) -> None:
         self.hits.append((check, where))
@@ -320,6 +321,7 @@ class RefUpdate:
 @dataclass(frozen=True)
 class Tag:
     sha: str
+    name: str
     tagger: str
     message: str
 
@@ -347,7 +349,7 @@ def lines(items: Iterable[str]) -> bytes:
 def parse_updates(text: str) -> list[RefUpdate]:
     updates = []
     for line in text.splitlines():
-        fields = line.split(" ")
+        fields = line.rsplit(" ", 3)
         if len(fields) != 4 or not (SHA.fullmatch(fields[1]) and SHA.fullmatch(fields[3])):
             raise Usage("unexpected pre-push input line %d" % (len(updates) + 1))
         updates.append(RefUpdate(*fields))
@@ -365,13 +367,25 @@ def read_tag(top: str, sha: str) -> tuple[Tag, str, str]:
     head, _, message = git(top, "cat-file", "tag", sha).decode("utf-8", "replace").partition("\n\n")
     fields = dict(line.split(" ", 1) for line in head.splitlines() if " " in line)
     tagger = re.search(r"<([^>]*)>", fields.get("tagger", ""))
-    return Tag(sha, tagger[1] if tagger else "", message), fields["object"], fields["type"]
+    tag = Tag(sha, fields.get("tag", ""), tagger[1] if tagger else "", message)
+    return tag, fields["object"], fields["type"]
 
 
-def read_push(top: str, remote: str, text: str) -> Push:
+def remote_tips(top: str, url: str) -> set[str]:
+    try:
+        out = git(top, "ls-remote", "--end-of-options", url)
+    except Usage:
+        # git's message can echo a URL that carries credentials.
+        raise Usage("git ls-remote failed for the push destination") from None
+    return {line.split("\t")[0] for line in out.decode().splitlines() if line}
+
+
+def read_push(top: str, url: str, text: str) -> Push:
+    """Excludes only commits the destination has now: a local remote-tracking ref can name history it lost."""
     updates = parse_updates(text)
-    types = object_types(top, sorted({s for u in updates for s in (u.local_sha, u.remote_sha) if not absent(s)}))
-    known = sorted({u.remote_sha for u in updates if types.get(u.remote_sha, "missing") != "missing"})
+    remote = remote_tips(top, url) | {u.remote_sha for u in updates if not absent(u.remote_sha)}
+    types = object_types(top, sorted(remote | {u.local_sha for u in updates if not absent(u.local_sha)}))
+    known = sorted(sha for sha in remote if types[sha] != "missing")
     heads, tags, refs = [], [], []
     for number, update in enumerate(updates, 1):
         if absent(update.local_sha):
@@ -384,7 +398,7 @@ def read_push(top: str, remote: str, text: str) -> Push:
         if kind != "commit":
             raise Usage("pushed ref #%d names a %s, which the scan cannot check" % (number, kind))
         heads.append(sha)
-    revisions = [*heads, "--not", "--remotes=" + remote, *known] if heads else []
+    revisions = [*heads, "--not", *known] if heads else []
     return Push(revisions, tags, refs)
 
 
@@ -395,7 +409,10 @@ def blob_texts(top: str, oids: list[str]) -> list[str | None]:
     pos = 0
     for _ in oids:
         end = out.index(b"\n", pos)
-        size = int(out[pos:end].split()[2])
+        header = out[pos:end].split()
+        if header[1] != b"blob":
+            raise Usage("pushed object %s is %s, not a blob" % (header[0].decode(), header[1].decode()))
+        size = int(header[2])
         try:
             texts.append(out[end + 1 : end + 1 + size].decode("utf-8"))
         except UnicodeDecodeError:
@@ -429,6 +446,7 @@ def pushed_files(top: str, shas: list[str]) -> list[TrackedFile]:
 def scan_push_refs(report: Report, finders: dict[Check, Finder], push: Push) -> None:
     email = next((c for c in finders if c.name == "email"), None)
     for tag in push.tags:
+        scan_text(report, finders, tag.name, Where(field="tag %s name" % tag.sha))
         scan_text(report, finders, tag.message, Where(field="tag %s message" % tag.sha))
         if email and tag.tagger and not email_allowed(tag.tagger):
             report.add(email, Where(field="tag %s tagger" % tag.sha, line=1))
@@ -569,29 +587,33 @@ def scan_links(report: Report, check: Check, files: list[TrackedFile]) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=".", help="git checkout to scan (default: current directory)")
-    parser.add_argument("--checks", default=",".join(CHECKS), help="comma-separated checks (default: all): %(default)s")
+    parser.add_argument("--checks", help="comma-separated checks of %s (default: all; with --pre-push, the %s class)"
+                        % (",".join(CHECKS), LEAK))
     parser.add_argument("--names-file", help="private-name list, one literal per line; must be outside the checkout")
     parser.add_argument("--commits", default="origin/main..HEAD",
                         help="revision range whose commit messages and emails are scanned (default: %(default)s)")
     parser.add_argument("--pr-from-env", action="store_true",
                         help="also scan the PR title and body from the PR_TITLE and PR_BODY variables")
     parser.add_argument("--public", action="store_true", help="print counts only, for public CI logs")
-    parser.add_argument("--pre-push", metavar="REMOTE",
+    parser.add_argument("--pre-push", metavar="URL",
                         help="read git's pre-push input from stdin and scan only what the push publishes beyond"
-                             " REMOTE's remote-tracking refs, instead of the tracked files and --commits")
+                             " what URL has, instead of the tracked files and --commits")
     return parser.parse_args(argv)
 
 
 def run(argv: list[str]) -> tuple[int, str]:
     args = parse_args(argv)
-    names = [n.strip() for n in args.checks.split(",") if n.strip()]
+    if args.checks is None:
+        names = [c.name for c in CHECKS.values() if args.pre_push is None or c.klass == LEAK]
+    else:
+        names = [n.strip() for n in args.checks.split(",") if n.strip()]
     unknown = [n for n in names if n not in CHECKS]
     if unknown or not names:
         raise Usage("unknown check %r; choose from %s" % (",".join(unknown), ",".join(CHECKS)))
     checks = [c for c in CHECKS.values() if c.name in names]
     top = os.path.realpath(git(os.path.abspath(args.repo), "rev-parse", "--show-toplevel").decode().strip())
 
-    report = Report(checks)
+    report = Report(checks, LEAK_NOTICE if args.pre_push is None else PRE_PUSH_NOTICE)
     finders: dict[Check, Finder] = {}
     for check in checks:
         if check.name == "link":
@@ -611,7 +633,6 @@ def run(argv: list[str]) -> tuple[int, str]:
         push = read_push(top, args.pre_push, sys.stdin.read())
         log = commits(top, *push.revisions) if finders and push.revisions else []
         files = pushed_files(top, [c.sha for c in log]) if finders else []
-        report.notice = PRE_PUSH_NOTICE
         scan_push_refs(report, finders, push)
     else:
         log = commits(top, "--end-of-options", args.commits) if finders else []

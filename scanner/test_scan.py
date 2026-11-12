@@ -644,16 +644,24 @@ class Links(unittest.TestCase):
 
 
 ZERO = "0" * 40
-LEAKS = "private-name,local-path,email"
 
 
 class PrePush(unittest.TestCase):
-    """`--pre-push` with git's hook input on stdin; the Repo's origin/main is what the remote has."""
+    """`--pre-push` with git's hook input on stdin, against a bare remote holding the Repo's first commit."""
 
-    def push(self, repo, *updates, names=(NAME,), checks=LEAKS):
+    def remote(self, repo, *refspecs):
+        bare = repo.tmp / "remote.git"
+        if not bare.exists():
+            subprocess.run(["git", "init", "-q", "--bare", str(bare)], env=git_env(), check=True)
+        for refspec in refspecs or ("refs/remotes/origin/main:refs/heads/main",):
+            repo.git("push", "-q", "-f", str(bare), refspec)
+        return str(bare)
+
+    def push(self, repo, *updates, names=(NAME,), checks=None, url=None):
         stdin = "".join(" ".join(u) + "\n" for u in updates)
         env = {SECRET_ENV: "\n".join(names)} if names else None
-        return repo.scan("--checks", checks, "--pre-push", "origin", env=env, stdin=stdin)
+        args = ("--checks", checks) if checks else ()
+        return repo.scan(*args, "--pre-push", url or self.remote(repo), env=env, stdin=stdin)
 
     def main_update(self, repo, ref="refs/heads/main"):
         return ("refs/heads/main", repo.git("rev-parse", "HEAD"), ref, repo.git("rev-parse", "origin/main"))
@@ -671,6 +679,24 @@ class PrePush(unittest.TestCase):
         self.assertIn("commit %s file #%d:2:5: local-path (leak)" % (sha, self.entry(repo, sha, "b.md")), out)
         self.assertNotIn("b.md", out)
         self.assertIn("files with hits: 1, total hits: 1", out)
+
+    def test_hit_in_a_pushed_path(self):
+        repo = Repo(self)
+        repo.write({"docs/" + NAME + ".md": "clean\n"})
+        sha = repo.commit("add")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s file #1 path: private-name (leak)" % sha, out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_default_checks_are_the_leak_class(self):
+        repo = Repo(self)
+        repo.write({"a.md": EM + " [x](missing.md)\n"})
+        repo.commit("add " + EM)
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 0, out)
+        self.assertIsNone(summary_count(out, "em-dash"))
+        self.assertEqual(summary_count(out, "private-name"), ("leak", "0"))
 
     def test_content_the_remote_has_or_the_push_leaves_unchanged_is_not_scanned(self):
         repo = Repo(self, {"old.md": "about " + NAME + "\n"})
@@ -690,6 +716,16 @@ class PrePush(unittest.TestCase):
         self.assertIn("commit %s file #1:1:6: email (leak)" % sha, out)
         self.assertNotIn(BOB_MAIL, out)
 
+    def test_deletions_gitlinks_and_non_text_files(self):
+        repo = Repo(self)
+        repo.write({"bin.dat": b"\xff\xfe" + HOME_BOB.encode()})
+        repo.git("rm", "-q", "README.md")
+        repo.git("update-index", "--add", "--cacheinfo", "160000,%s,sub" % repo.git("rev-parse", "HEAD"))
+        repo.commit("mixed")
+        code, out = self.push(repo, self.main_update(repo))
+        self.assertEqual(code, 0, out)
+        self.assertIn("skipped non-text files: 1", out)
+
     def test_pushed_commit_messages_and_emails(self):
         repo = Repo(self)
         sha = repo.commit("x\n\nabout " + NAME, email=BOB_MAIL)
@@ -699,15 +735,24 @@ class PrePush(unittest.TestCase):
         self.assertIn("commit %s author: email" % sha, out)
         self.assertNotIn(NAME, out.lower())
 
-    def test_new_branch_skips_what_the_remote_tracking_refs_hold(self):
+    def test_new_branch_skips_what_the_remote_has(self):
         repo = Repo(self)
         repo.commit("old " + HOME_BOB)
-        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        url = self.remote(repo, "HEAD:refs/heads/main")
         sha = repo.commit("new " + HOME_BOB)
-        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/topic", ZERO))
+        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/topic", ZERO), url=url)
         self.assertEqual(code, 1, out)
         self.assertIn("total hits: 1", out)
         self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_history_the_remote_lost_is_scanned_despite_remote_tracking_refs(self):
+        repo = Repo(self)
+        old = repo.commit("old " + HOME_BOB)
+        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        url = self.remote(repo, "%s:refs/heads/main" % repo.git("rev-parse", "HEAD~1"))
+        code, out = self.push(repo, ("refs/heads/main", old, "refs/heads/topic", ZERO), url=url)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % old, out)
 
     def test_remote_sha_missing_here_is_ignored(self):
         repo = Repo(self)
@@ -716,6 +761,31 @@ class PrePush(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("commit %s line 1: local-path" % sha, out)
 
+    def test_unreachable_destination_is_a_usage_error_without_the_url(self):
+        repo = Repo(self)
+        url = str(repo.tmp / "nope.git")
+        code, out = self.push(repo, self.main_update(repo), url=url)
+        self.assertEqual(code, 2, out)
+        self.assertNotIn(url, out)
+
+    def test_local_ref_with_spaces(self):
+        repo = Repo(self)
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("HEAD@{0 minutes ago}", sha, "refs/heads/x", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_each_ref_of_a_multi_ref_push(self):
+        repo = Repo(self)
+        clean = repo.commit("clean")
+        repo.git("checkout", "-q", "-b", "other", "origin/main")
+        leak = repo.commit("see " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/main", clean, "refs/heads/main", ZERO),
+                              ("refs/heads/other", leak, "refs/heads/other", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % leak, out)
+        self.assertIn("total hits: 1", out)
+
     def test_pushed_ref_name(self):
         repo = Repo(self)
         code, out = self.push(repo, self.main_update(repo, "refs/heads/" + NAME))
@@ -723,16 +793,38 @@ class PrePush(unittest.TestCase):
         self.assertIn("pushed ref #1 line 1: private-name", out)
         self.assertNotIn(NAME, out.lower())
 
-    def test_annotated_tag_message_and_tagger(self):
+    def test_annotated_tag_name_message_and_tagger(self):
         repo = Repo(self)
         env = git_env()
         env["GIT_COMMITTER_EMAIL"] = BOB_MAIL
-        repo.git("tag", "-a", "v1", "-m", "release " + NAME, env=env)
-        tag = repo.git("rev-parse", "v1")
+        repo.git("tag", "-a", "rel-" + NAME, "-m", "release " + NAME, env=env)
+        tag = repo.git("rev-parse", "rel-" + NAME)
         code, out = self.push(repo, ("refs/tags/v1", tag, "refs/tags/v1", ZERO))
         self.assertEqual(code, 1, out)
+        self.assertIn("tag %s name line 1: private-name" % tag, out)
         self.assertIn("tag %s message line 1: private-name" % tag, out)
         self.assertIn("tag %s tagger line 1: email" % tag, out)
+
+    def test_nested_tags_are_all_scanned(self):
+        repo = Repo(self)
+        repo.git("tag", "-a", "inner", "-m", "about " + NAME)
+        inner = repo.git("rev-parse", "inner")
+        repo.git("tag", "-a", "outer", "-m", "clean", "inner")
+        outer = repo.git("rev-parse", "outer")
+        code, out = self.push(repo, ("refs/tags/outer", outer, "refs/tags/outer", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("tag %s message line 1: private-name" % inner, out)
+
+    def test_ref_naming_a_tree_or_blob_is_a_usage_error(self):
+        repo = Repo(self)
+        tree = repo.git("rev-parse", "HEAD^{tree}")
+        blob = repo.git("rev-parse", "HEAD:README.md")
+        repo.git("tag", "-a", "t", "-m", "x", tree)
+        for sha in (tree, blob, repo.git("rev-parse", "t")):
+            with self.subTest(sha=sha):
+                code, out = self.push(repo, ("refs/tags/t", sha, "refs/tags/t", ZERO))
+                self.assertEqual(code, 2, out)
+                self.assertIn("which the scan cannot check", out)
 
     def test_delete_only_push_passes(self):
         repo = Repo(self)
@@ -761,10 +853,8 @@ class PrePush(unittest.TestCase):
 
     def test_malformed_input_is_a_usage_error(self):
         repo = Repo(self)
-        code, out = repo.scan("--checks", LEAKS, "--pre-push", "origin", stdin="garbage\n",
-                              env={SECRET_ENV: NAME})
+        code, out = repo.scan("--pre-push", self.remote(repo), stdin="garbage\n", env={SECRET_ENV: NAME})
         self.assertEqual(code, 2, out)
-
 
 if __name__ == "__main__":
     unittest.main()

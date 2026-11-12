@@ -189,7 +189,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`](coverage/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.12` 生成）。测试：在 `coverage/` 跑 `python3 -m unittest coverage_gate_test`。
 
-不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步排在各 workflow 的静态检查之后，而且依赖检查（漏洞、许可证；Rust 是 cargo-deny）没过就不跑。
+不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步排在各 workflow 的静态检查之后。
 
 | Rust | Python | TypeScript |
 |---|---|---|

@@ -100,11 +100,9 @@ jobs:
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           knip --production --config "$RUNNER_TEMP/knip.json"
       - name: Vulnerabilities
-        id: vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit
       - name: Licenses
-        id: licenses
         if: ${{ !cancelled() }}
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
@@ -115,10 +113,10 @@ jobs:
             args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
           fi
           license-checker-rseidelsohn "${args[@]}"
-      # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.
+      # The coverage steps run the PR's tests, so they come after every static check.
       - name: Coverage
         id: coverage
-        if: ${{ !cancelled() && steps.vulnerabilities.outcome == 'success' && steps.licenses.outcome == 'success' }}
+        if: ${{ !cancelled() }}
         env:
           PROJECT: ${{ inputs.knip-project }}
         run: |

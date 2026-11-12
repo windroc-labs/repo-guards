@@ -97,17 +97,16 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo machete
       - name: Dependency rules
-        id: dependency-rules
         if: ${{ !cancelled() }}
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
-      # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.
+      # The coverage steps run the PR's tests, so they come after every static check.
       - name: Coverage
         id: coverage
-        if: ${{ !cancelled() && steps.dependency-rules.outcome == 'success' }}
+        if: ${{ !cancelled() }}
         run: |
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
           export RUSTUP_TOOLCHAIN=$COVERAGE_TOOLCHAIN

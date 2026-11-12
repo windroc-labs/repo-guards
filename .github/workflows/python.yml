@@ -93,13 +93,11 @@ jobs:
           deptry=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("deptry==")))' "$RG/python/pyproject.toml")
           uv run --locked --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
-        id: vulnerabilities
         if: ${{ !cancelled() }}
         run: |
           uv export --locked --format requirements-txt --no-emit-workspace -o "$RUNNER_TEMP/requirements.txt"
           pip-audit --requirement "$RUNNER_TEMP/requirements.txt" --disable-pip --require-hashes
       - name: Licenses
-        id: licenses
         if: ${{ !cancelled() }}
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
@@ -110,10 +108,10 @@ jobs:
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
           pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"
-      # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.
+      # The coverage steps run the PR's tests, so they come after every static check.
       - name: Coverage
         id: coverage
-        if: ${{ !cancelled() && steps.vulnerabilities.outcome == 'success' && steps.licenses.outcome == 'success' }}
+        if: ${{ !cancelled() }}
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |

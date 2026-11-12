@@ -48,3 +48,106 @@ jobs:
             RANGE='HEAD^!'
           fi
           python3 "$scanner" --repo repo --checks local-path,email,em-dash,link --commits "$RANGE" "${args[@]}"
+
+  tools:
+    name: gitleaks and actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_URL: https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      ACTIONLINT_URL: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+    steps:
+      # gitleaks always reads <target>/.gitleaksignore, so it scans the checkout's parent and its .git, never the work tree root.
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tree/repo
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks and actionlint
+        id: install
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p bin empty
+          for tool in GITLEAKS ACTIONLINT; do
+            url=${tool}_URL sha=${tool}_SHA256
+            curl -sSfL --retry 3 -o "$tool.tar.gz" "${!url}"
+            echo "${!sha}  $tool.tar.gz" | sha256sum -c -
+          done
+          tar -xzf GITLEAKS.tar.gz -C bin gitleaks
+          tar -xzf ACTIONLINT.tar.gz -C bin actionlint
+          printf '[extend]\nuseDefault = true\n' > gitleaks.toml
+          : > actionlint.yaml
+      - name: gitleaks
+        id: gitleaks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ $EVENT != pull_request ]] && ! git -C tree/repo cat-file -e "${RANGE%..HEAD}^{commit}" 2>/dev/null; then
+            RANGE='HEAD^!'
+          fi
+          bin=$RUNNER_TEMP/bin/gitleaks
+          opts=(--config "$RUNNER_TEMP/gitleaks.toml" --gitleaks-ignore-path "$RUNNER_TEMP/empty" --ignore-gitleaks-allow
+                --redact --no-banner --log-level error --exit-code 3 --report-format json)
+          for scan in dir git; do
+            if [[ $scan == dir ]]; then
+              target=(dir "$GITHUB_WORKSPACE/tree")
+            else
+              target=(git "$GITHUB_WORKSPACE/tree/repo/.git" --log-opts "$RANGE")
+            fi
+            code=0
+            err=$RUNNER_TEMP/gitleaks-$scan.err
+            "$bin" "${target[@]}" "${opts[@]}" --report-path "$RUNNER_TEMP/gitleaks-$scan.json" 2> "$err" || code=$?
+            # gitleaks exits 0 when git itself fails, so any error-level log counts as a failed scan.
+            if (( code != 0 && code != 3 )) || [[ -s $err ]]; then
+              cat "$err"
+              echo "::error::gitleaks $scan scan failed with exit code $code"
+              exit 1
+            fi
+          done
+          python3 - "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP" <<'PY'
+          import json, os, subprocess, sys
+          top, tmp = sys.argv[1], sys.argv[2]
+          listed = subprocess.run(["git", "-C", top, "ls-files", "-z"], capture_output=True, check=True).stdout
+          index = {os.fsdecode(p): n for n, p in enumerate(dict.fromkeys(listed.split(b"\0")[:-1]), 1)}
+          hits = 0
+          for scan in ("dir", "git"):
+              for f in json.load(open(os.path.join(tmp, "gitleaks-%s.json" % scan))):
+                  hits += 1
+                  path = os.path.relpath(f["File"], top) if scan == "dir" else f["File"]
+                  n = index.get(path)
+                  where = "file #%d:%d:%d" % (n, f["StartLine"], f["StartColumn"]) if n else "removed file line %d" % f["StartLine"]
+                  if scan == "git":
+                      where = "commit %s %s" % (f["Commit"], where)
+                  print("%s: gitleaks (leak) rule %s" % (where, f["RuleID"]))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("hits=%d\n" % hits)
+          PY
+      - name: actionlint
+        id: actionlint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: tree/repo
+        run: |
+          code=0
+          "$RUNNER_TEMP/bin/actionlint" -config-file "$RUNNER_TEMP/actionlint.yaml" -shellcheck= -pyflakes= -oneline > "$RUNNER_TEMP/actionlint.txt" || code=$?
+          cat "$RUNNER_TEMP/actionlint.txt"
+          if (( code > 1 )); then
+            echo "::error::actionlint failed with exit code $code"
+            exit 1
+          fi
+          echo "hits=$(grep -c . "$RUNNER_TEMP/actionlint.txt")" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          GITLEAKS_HITS: ${{ steps.gitleaks.outputs.hits || 'not run' }}
+          ACTIONLINT_HITS: ${{ steps.actionlint.outputs.hits || 'not run' }}
+        run: |
+          echo "summary:"
+          printf '  %-10s  %-7s  %s\n' gitleaks leak "$GITLEAKS_HITS" actionlint hygiene "$ACTIONLINT_HITS"
+          if [[ $GITLEAKS_HITS != 0 && $GITLEAKS_HITS != 'not run' ]]; then
+            echo 'Leak-class hits are already public: follow "If something leaks" in AGENTS.md.'
+          fi
+          [[ $GITLEAKS_HITS == 0 && $ACTIONLINT_HITS == 0 ]]

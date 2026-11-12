@@ -16,16 +16,21 @@ from config_overrides import toml_string
 
 SECTION = "ci-checks/inline-exemptions/settings.toml"
 OVERRIDES = ".github/checks/repo-guards.toml"
-TOOLS = frozenset(
-    "rustc clippy rustfmt cargo-llvm-cov cargo-test sanitizer cargo-machete "
-    "ruff ruff-format pyright coverage pytest unittest vulture deptry "
-    "tsc eslint prettier vitest-coverage knip vitest "
-    "golangci-lint go-test go-build go-mod jscpd generated".split()
-)
+# Each workflow that runs this check reconciles the tools it owns: a language workflow its language's, jscpd.yml jscpd.
+OWNED = {
+    "rust": frozenset("rustc clippy rustfmt cargo-llvm-cov cargo-test sanitizer cargo-machete".split()),
+    "python": frozenset("ruff ruff-format pyright coverage pytest unittest vulture deptry".split()),
+    "typescript": frozenset("tsc eslint prettier vitest-coverage knip vitest".split()),
+    "go": frozenset("golangci-lint go-test go-build go-mod".split()),
+    "jscpd": frozenset({"jscpd"}),
+}
+TARGETS = tuple(OWNED)
+# "generated" is owned by the workflow of the file's language.
+TOOLS = frozenset().union(*OWNED.values(), {"generated"})
 KEY_FIELDS = ("tool", "file", "rule", "function")
 FIELDS = (*KEY_FIELDS, "count", "reason")
 SUBMODULE, SYMLINK = "160000", "120000"
-USAGE = "usage: inline_exemptions.py [languages]  (run from the repo root)"
+USAGE = f"usage: inline_exemptions.py {{{'|'.join(TARGETS)}|languages}}  (run from the repo root)"
 
 Key = tuple[str, str, str, str]
 Scan = Callable[[str, Path, list[str]], str]
@@ -60,6 +65,12 @@ def language_of(path: str) -> str | None:
         if name in spec.configs or name.endswith(spec.suffixes):
             return language
     return None
+
+
+def owner(tool: str, file: str) -> str | None:
+    if tool == "generated":
+        return language_of(file)
+    return next(target for target, tools in OWNED.items() if tool in tools)
 
 
 def git(root: Path, *args: str) -> str:
@@ -189,6 +200,8 @@ def entry_problem(item: Any) -> str | None:
             return f"field {toml_string(field)} is not a string"
     if item["tool"] not in TOOLS:
         return f"tool {toml_string(item['tool'])} is not a built-in tool"
+    if owner(item["tool"], item["file"]) is None:
+        return f"file {toml_string(item['file'])} is not a Rust, Python, TypeScript or Go file"
     count = item["count"]
     if isinstance(count, bool) or not isinstance(count, int) or count < 1:
         return "count is not a positive integer"
@@ -261,7 +274,7 @@ def report(found: Counter, allowlist: dict[Key, int]) -> list[str]:
     return [*head, *lines, f"{added} to add, {removed} to remove, {changed} to change count."]
 
 
-def check(root: Path, settings_path: Path, scan: Scan, out: TextIO) -> int:
+def check(root: Path, settings_path: Path, scan: Scan, out: TextIO, target: str) -> int:
     def say(*lines: str) -> None:
         for line in lines:
             print(line, file=out)
@@ -273,18 +286,22 @@ def check(root: Path, settings_path: Path, scan: Scan, out: TextIO) -> int:
     except Error as error:
         say(f"error: {toml_string(str(error))}")
         return 2
+    scanned = [target] if target in LANGUAGES else list(LANGUAGES)
     skip, allowlist, problems = load_settings(settings_path)
+    allowlist = {key: count for key, count in allowlist.items() if owner(key[0], key[1]) == target}
     errors = [f"allowlist: {p}" for p in problems]
-    errors += [f"file {toml_string(path)}: is a symlink" for path in symlinks]
+    errors += [f"file {toml_string(path)}: is a symlink" for path in symlinks if language_of(path) in scanned]
     found: Counter = Counter()
     for language, paths in files.items():
+        if language not in scanned:
+            continue
         try:
             keys, failures = parse_output(language, scan(language, root, paths))
         except Error as error:
             errors.append(toml_string(str(error)))
             continue
         errors += [f"file {toml_string(path)}: {toml_string(message)}" for path, message in failures]
-        found.update(key for key in keys if key[0] not in skip)
+        found.update(key for key in keys if key[0] not in skip and owner(key[0], key[1]) == target)
     if errors:
         say(*(f"error: {e}" for e in errors))
         return 2
@@ -307,10 +324,10 @@ def main(argv: list[str]) -> int:
         for language, used in present.items():
             print(f"{language}={'true' if used else 'false'}")
         return 0
-    if argv:
+    if len(argv) != 1 or argv[0] not in TARGETS:
         print(USAGE, file=sys.stderr)
         return 2
-    return check(root, HERE / "settings.toml", run_scanner, sys.stdout)
+    return check(root, HERE / "settings.toml", run_scanner, sys.stdout, argv[0])
 
 
 if __name__ == "__main__":

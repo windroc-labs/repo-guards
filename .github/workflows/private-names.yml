@@ -88,13 +88,7 @@ jobs:
         run: |
           args=(--repo "$RUNNER_TEMP/repo" --checks private-name --commits "$SCAN_RANGE")
           if [[ $GITHUB_EVENT_NAME == pull_request_target ]]; then
-            # Read from the event file, not env:, which the log prints, so the title and body stay out of the log.
-            field() {
-              python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["pull_request"][sys.argv[2]] or "", end="")' "$GITHUB_EVENT_PATH" "$1"
-            }
-            PR_TITLE=$(field title)
-            PR_BODY=$(field body)
-            export PR_TITLE PR_BODY
-            args+=(--pr-from-env)
+            # The scanner reads the title and body from the event file, not env:, which the log prints.
+            args+=(--pr-event "$GITHUB_EVENT_PATH")
           fi
           python3 -I "$RUNNER_TEMP/main/scanner/scan.py" "${args[@]}"

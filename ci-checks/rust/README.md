@@ -63,6 +63,7 @@ repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.git
 | 文件 | 作用 |
 |---|---|
 | [`coverage.toml`](coverage.toml) | `toolchain`：分支覆盖率（`--branch`）只有 nightly 支持，覆盖率几步用这个固定的 nightly，带 `llvm-tools-preview`，其余步仍用 [`rust-toolchain.toml`](rust-toolchain.toml)；`ignore-filename-regex`：排除 `tests/`、`benches/`、`examples/` 和 `*_test.rs`（cargo-llvm-cov 没有配置文件，`rust.yml` 把它传给 `--ignore-filename-regex`） |
+| [`shard-targets/`](shard-targets/) | 分片时，merge 那步从各片取 `--` 前面的测试目标，去重后交给 cargo-llvm-cov（同一个 flag 如 `--lib` 给两次它会报错）。测试：在该目录跑 `python3 -m unittest shard_targets_test` |
 
 `src` 里的测试模块正则排除不了，每个都要加 `coverage(off)`，crate 根也要开这个 nightly 特性，还要在 `Cargo.toml` 里声明 `coverage_nightly` 这个 cfg，否则 stable 下的 Lint 步报 `unexpected_cfgs`：
 

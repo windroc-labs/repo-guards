@@ -8,7 +8,8 @@ Local run, from the repo root, with the private-name list kept outside the check
 The list may come from the environment variable REPO_GUARDS_PRIVATE_NAMES instead.
 It scans the tracked files and the messages and author and committer emails of the
 commits in `--commits` (default origin/main..HEAD); `--pr-from-env` adds the PR title
-and body from PR_TITLE and PR_BODY.
+and body from PR_TITLE and PR_BODY, `--pr-event FILE` from a GitHub event payload's
+`pull_request`.
 `--pre-push REMOTE` (the git pre-push hook, hooks/pre-push) reads git's pre-push input from
 stdin and scans instead each pushed commit's message, emails and added or changed files,
 leaving out commits REMOTE's remote-tracking refs or the input's remote shas reach. Its
@@ -22,6 +23,7 @@ unavailable, 2 usage error.
 
 import argparse
 import html
+import json
 import os
 import posixpath
 import re
@@ -380,10 +382,23 @@ def pushed_files(top: str, shas: list[str]) -> list[TrackedFile]:
     return [TrackedFile(entry, path, text, commit) for (commit, entry, path, _), text in zip(entries, texts)]
 
 
-def scan_pull_request(report: Report, finders: dict[Check, Finder]) -> None:
-    # Title and body arrive through the environment, never through argv or shell text.
-    for field, var in (("title", "PR_TITLE"), ("body", "PR_BODY")):
-        scan_text(report, finders, os.environ.get(var, ""), Where(field=field))
+def pull_request_fields(event_path: str | None) -> dict[str, str]:
+    # Title and body arrive through the environment or the event file, never through argv or shell text.
+    if event_path is None:
+        return {"title": os.environ.get("PR_TITLE", ""), "body": os.environ.get("PR_BODY", "")}
+    try:
+        with open(event_path, encoding="utf-8") as f:
+            pull_request = json.load(f).get("pull_request")
+    except (OSError, ValueError) as e:
+        raise Usage("--pr-event: cannot read the event file: %s" % e.__class__.__name__)
+    if not isinstance(pull_request, dict):
+        raise Usage("--pr-event: no pull_request in the event file")
+    return {field: pull_request.get(field) or "" for field in ("title", "body")}
+
+
+def scan_pull_request(report: Report, finders: dict[Check, Finder], fields: dict[str, str]) -> None:
+    for field, text in fields.items():
+        scan_text(report, finders, text, Where(field=field))
 
 
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
@@ -518,8 +533,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--names-file", help="private-name list, one literal per line; must be outside the checkout")
     parser.add_argument("--commits", default="origin/main..HEAD",
                         help="revision range whose commit messages and emails are scanned (default: %(default)s)")
-    parser.add_argument("--pr-from-env", action="store_true",
-                        help="also scan the PR title and body from the PR_TITLE and PR_BODY variables")
+    pr = parser.add_mutually_exclusive_group()
+    pr.add_argument("--pr-from-env", action="store_true",
+                    help="also scan the PR title and body from the PR_TITLE and PR_BODY variables")
+    pr.add_argument("--pr-event", metavar="FILE",
+                    help="also scan the PR title and body from this GitHub event payload's pull_request")
     parser.add_argument("--public", action="store_true", help="print counts only, for public CI logs")
     parser.add_argument("--pre-push", metavar="REMOTE",
                         help="read git's pre-push input from stdin and scan the pushed commits not on REMOTE's"
@@ -566,8 +584,8 @@ def run(argv: list[str]) -> tuple[int, str]:
     if "link" in names:
         scan_links(report, CHECKS["link"], files)
     scan_commits(report, finders, log)
-    if args.pr_from_env and finders:
-        scan_pull_request(report, finders)
+    if (args.pr_from_env or args.pr_event) and finders:
+        scan_pull_request(report, finders, pull_request_fields(args.pr_event))
     return (1 if report.failed() else 0), report.render(args.public)
 
 

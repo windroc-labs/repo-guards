@@ -1,5 +1,5 @@
 [dependency-groups]
-dev = ["deptry==0.25.1", "jscpd==5.4.3", "pyright==1.1.414", "ruff==0.17.4", "vulture==2.16"]
+dev = ["coverage[toml]==7.17.2", "deptry==0.25.1", "jscpd==5.4.3", "pyright==1.1.414", "ruff==0.17.4", "vulture==2.16"]
 
 [tool.ruff]
 line-length = 100
@@ -18,3 +18,8 @@ reportUnnecessaryTypeIgnoreComment = "error"
 paths = ["src"]
 exclude = ["tests/", "*/test_*.py", "*_test.py"]
 min_confidence = 60
+
+[tool.coverage.run]
+branch = true
+relative_files = true
+omit = ["**/tests/**", "**/test_*.py", "**/*_test.py", "**/conftest.py", "**/*_pb2.py", "**/*_pb2_grpc.py"]

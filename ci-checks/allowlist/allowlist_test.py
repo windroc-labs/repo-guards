@@ -344,11 +344,16 @@ class Cli(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertIn("private-pkg@2.0.0: registry https://pypi.example.org/simple", err)
             self.assertIn("somepkg@4.0.0: git source", err)
+            self.assertIn(
+                "somepkg@4.0.0: a git dependency builds from source; add somepkg to bans.build.allow-build-scripts",
+                err,
+            )
             self.assertEqual(pinned.read_text(), "six==1.17.0\nprivate-pkg==2.0.0\n")
 
     def test_check_python_passes_with_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "a.toml").write_text(
+                '[bans.build]\nallow-build-scripts = ["SomePkg"]\n'
                 '[sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
                 'allow-registry = ["https://pypi.example.org/simple"]\n'
             )

@@ -52,6 +52,9 @@ class Locked(NamedTuple):
     kind: str
     url: str
 
+    def __str__(self) -> str:
+        return f"{self.name}@{self.version}" if self.version else self.name
+
 
 @dataclass(frozen=True)
 class Allowlist:
@@ -178,7 +181,7 @@ def violations(
     for package in locked:
         if package.kind == "local":
             continue
-        label = f"{package.name}@{package.version}" if package.version else package.name
+        label = str(package)
         if package.kind == "registry" and not under(
             package.url, [default_registry, *allowlist.registries]
         ):
@@ -285,7 +288,15 @@ def check_python(args: argparse.Namespace) -> int:
     if args.pinned_out:
         pins = (f"{p.name}=={p.version}\n" for p in locked if p.kind == "registry" and p.version)
         args.pinned_out.write_text("".join(pins))
-    return report(violations(locked, allowlist, PYPI, pep503))
+    found = violations(locked, allowlist, PYPI, pep503)
+    for package in locked:
+        if package.kind == "git" and not any(
+            pep503(s.name) == pep503(package.name) for s in allowlist.build
+        ):
+            found.append(
+                f"{package}: a git dependency builds from source; add {package.name} to bans.build.allow-build-scripts"
+            )
+    return report(found)
 
 
 def check_npm(args: argparse.Namespace) -> int:

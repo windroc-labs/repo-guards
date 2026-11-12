@@ -50,7 +50,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`knip.json`](knip.json) | `entry`、`project` 由 `typescript.yml` 的 `knip-entry`、`knip-project` 输入代替（JSON 数组，默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`），结尾的 `!` 标成发布代码，供 `--production` 用（见[死代码](../README.md#死代码)） |
+| [`knip.json`](knip.json) | `entry`、`project` 默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`，相对 `working-directory`；项目在覆盖文件的 `["ci-checks/typescript/knip.json"]` 节改（见[覆盖默认配置](../README.md#覆盖默认配置)）。结尾的 `!` 标成发布代码，供 `--production` 用（见[死代码](../README.md#死代码)） |
 | [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
 
 `typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。
@@ -61,20 +61,18 @@
 |---|---|
 | [`coverage.json`](coverage.json) | `exclude`：测试文件、`.d.ts` 和 `generated/` 目录，不进分母 |
 
-只算发布代码：`include` 取 `knip-project` 输入里结尾带 `!` 的 glob（去掉 `!`），和死代码用同一份"发布代码"的定义；没被测试 import 的文件也进分母。
+只算发布代码：`include` 取 `knip.json` 的 `project` 里结尾带 `!` 的 glob（去掉 `!`），和死代码用同一份"发布代码"的定义；没被测试 import 的文件也进分母。
 
 repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的 `@vitest/coverage-v8`，版本由 repo 自己的 lockfile 固定。`typescript.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 `vitest run`，不选测试文件：repo 自己的 vitest 配置（`test.include`、`test.exclude`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 用另一份配置另跑（如 `vitest run --config vitest.integration.config.ts`）。覆盖率设置全用命令行参数给（provider `v8`、Cobertura 报告、`include`、`exclude`），命令行优先于 repo 的 vitest 配置；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`/* v8 ignore */` 注释算行内豁免。
 
 ## 读写配置（workflow-config）
 
-[`workflow-config/`](workflow-config/) 是 `typescript.yml` 读写 JSON、TOML 用的脚本，`node workflow-config.ts <命令>` 直接跑，不用装依赖（要 Node 22.18 及以上）。
+[`workflow-config/`](workflow-config/) 是 `typescript.yml` 读写 JSON 用的脚本，`node workflow-config.ts <命令>` 直接跑，不用装依赖（要 Node 22.18 及以上）。
 
 | 命令 | 作用 |
 |---|---|
 | `tsc-flags TSCONFIG` | 每个 `compilerOptions` 打印两行：`--<键>` 和值；Type check 步用它 |
-| `knip-config KNIP_JSON ENTRY_JSON PROJECT_JSON OUTPUT` | 把 `knip.json` 的 `entry`、`project` 换成两个 JSON 数组后写到 `OUTPUT`；Dead code and unused dependencies 步用它 |
-| `license-allow RESOLVE_DIR LICENSES_TOML` | 打印 `allow`，`;` 分开；TOML 用 `RESOLVE_DIR` 里装好的 smol-toml 解析（Licenses 步给 `comment-budget/`） |
-| `coverage-include PROJECT_JSON`、`coverage-exclude COVERAGE_JSON` | 每行打印一个 glob：前者是结尾带 `!` 的（去掉 `!`），后者是 `exclude`；Coverage 步用它们 |
+| `coverage-include KNIP_JSON`、`coverage-exclude COVERAGE_JSON` | 每行打印一个 glob：前者是 `project` 里结尾带 `!` 的（去掉 `!`），后者是 `exclude`；Coverage 步用它们 |
 | `replace FILE FROM TO` | 把文件里所有 `FROM` 换成 `TO`；Coverage 步用它换 blob 报告里的检出根目录 |
 | 退出码 | 0 成功；2 出错（参数不对、文件缺失、JSON 不对） |
 | 测试 | 在该目录跑 `node --test workflow-config.test.ts` |

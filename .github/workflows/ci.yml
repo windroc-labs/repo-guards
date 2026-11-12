@@ -208,6 +208,16 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/dependency-allowlist
         run: python3 -m unittest dependency_allowlist_test
+      - name: config-overrides tests
+        id: config-overrides
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/config-overrides
+        run: python3 -m unittest config_overrides_test
+      - name: fetch-configs tests
+        id: fetch-configs
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/fetch-configs
+        run: python3 -m unittest fetch_configs_test
       - name: deny-merge tests
         id: deny-merge
         if: ${{ !cancelled() }}
@@ -250,6 +260,8 @@ jobs:
           PYTHON: ${{ steps.python.outcome }}
           TYPESCRIPT: ${{ steps.typescript.outcome }}
           RUST: ${{ steps.rust.outcome }}
+          CONFIG_OVERRIDES: ${{ steps.config-overrides.outcome }}
+          FETCH_CONFIGS: ${{ steps.fetch-configs.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
@@ -261,7 +273,7 @@ jobs:
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

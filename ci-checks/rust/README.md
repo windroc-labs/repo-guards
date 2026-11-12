@@ -52,11 +52,11 @@
 | 文件 | 作用 |
 |---|---|
 | [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；带 `build.rs` 的 crate 只准共用白名单 `bans.build.allow-build-scripts` 里的（见下）；许可证只准 [`licenses.toml`](../licenses.toml) 的 `allow`；漏洞和 yanked 的版本都失败 |
-| [`deny-merge/`](deny-merge/) | 把 [`licenses.toml`](../licenses.toml) 的 `allow` 和 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败；`bans.allow` 不并进去。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
+| [`deny-merge/`](deny-merge/) | 把 [`licenses.toml`](../licenses.toml) 的 `allow` 写进 `deny.toml` 的 `licenses.allow`；`deny.toml` 自己有 `licenses.allow`（项目在它那一节覆盖了）就用它的。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
-repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 由 Dependency allowlist 步查，只查 PR 新增或变了的 crate，见[依赖白名单](../README.md#依赖白名单)。
+`sources.allow-git`、`sources.allow-registry`、`bans.build.allow-build-scripts` 和 `licenses.exceptions`（默认空）都在 `deny.toml` 里，项目在覆盖文件的 `["ci-checks/rust/deny.toml"]` 节改（见[覆盖默认配置](../README.md#覆盖默认配置)）。Dependency rules 步合并后跑 cargo-deny 0.20.2。包的白名单不在这里，由 Dependency allowlist 步查，只查 PR 新增或变了的 crate，见[依赖白名单](../README.md#依赖白名单)。
 
-`allow-build-scripts` 的共用白名单只收基础 crate：大多数项目的依赖树里都有（crates.io 近 90 天下载量约 1.5 亿以上，或 `syn` 1、`generic-array` 0.14 这类仍被大量锁住的旧版本），`build.rs` 只探测编译器和目标平台、设 cfg 或链接路径，不编译原生代码（没有 `cc`、`cmake`、`bindgen` 这类构建依赖）。名单按包名匹配所有版本。`ring`、`openssl-sys` 这类要编译原生代码的，和只在某类项目里出现的（如 `httparse`、`wasm-bindgen`），由项目写进自己的白名单；项目白名单接在共用名单后面，重复写共用名单里的包也不报错。
+`allow-build-scripts` 的共用白名单只收基础 crate：大多数项目的依赖树里都有（crates.io 近 90 天下载量约 1.5 亿以上，或 `syn` 1、`generic-array` 0.14 这类仍被大量锁住的旧版本），`build.rs` 只探测编译器和目标平台、设 cfg 或链接路径，不编译原生代码（没有 `cc`、`cmake`、`bindgen` 这类构建依赖）。名单按包名匹配所有版本。`ring`、`openssl-sys` 这类要编译原生代码的，和只在某类项目里出现的（如 `httparse`、`wasm-bindgen`），由项目在覆盖文件里写；覆盖的列表整个替换共用名单，所以连共用名单一起写。
 
 ## 覆盖率（cargo-llvm-cov）
 

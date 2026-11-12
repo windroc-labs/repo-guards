@@ -11,14 +11,6 @@ on:
         description: The module's directory (where go.mod is), relative to the repo root
         type: string
         default: .
-      deny-allowlist:
-        description: The repo's dependency allowlist (shared by rust.yml, python.yml, typescript.yml and go.yml); may be absent
-        type: string
-        default: .github/checks/deny-allowlist.toml
-      license-exceptions:
-        description: The repo's modules exempt from the license check, one module path per line; may be absent
-        type: string
-        default: .github/checks/license-exceptions.txt
       unit-tests:
         description: The go test arguments coverage measures, space-separated and passed as-is, package patterns and optionally -run=<regex>
         type: string
@@ -72,6 +64,9 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      - &apply-overrides
+        name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - &install-go
         name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -114,7 +109,7 @@ jobs:
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- gofmt -l "${files[@]}"
       - name: Lint
         if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- golangci-lint run --config "$RG/go/golangci.yml" --output.json.path stdout ./...
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- golangci-lint run --config "$RG/go/golangci.toml" --output.json.path stdout ./...
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: comment-budget --base "$BASE_REF" --config "$RG/go/comment-budget.toml"
@@ -127,7 +122,7 @@ jobs:
           # Without test files, so code only tests call counts as unused.
           failed=0
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format golangci -- \
-            golangci-lint run --config "$RG/go/golangci.yml" --default=none --enable-only unused --tests=false --output.json.path stdout ./... || failed=1
+            golangci-lint run --config "$RG/go/golangci.toml" --default=none --enable-only unused --tests=false --output.json.path stdout ./... || failed=1
           # deadcode starts from main packages: a library-only module gets the unused check alone.
           mains=$(go list -f '{{if eq .Name "main"}}{{.ImportPath}}{{end}}' ./...)
           if [[ -n $mains ]]; then
@@ -143,7 +138,6 @@ jobs:
       - name: Dependency allowlist
         if: ${{ !cancelled() }}
         env:
-          ALLOWLIST: ${{ inputs.deny-allowlist }}
           PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
           # The build list Go resolves from the module cache: complete below go 1.17 too, and never read from vendor/.
@@ -155,14 +149,13 @@ jobs:
           if [[ -f $RUNNER_TEMP/allowlist-base/$PROJECT_DIR/go.mod ]]; then
             (cd "$RUNNER_TEMP/allowlist-base/$PROJECT_DIR" && modules) > "$RUNNER_TEMP/go-modules-base.json"
           fi
-          uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" go "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/go-modules-base.json" "$RUNNER_TEMP/go-modules-head.json"
+          uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" go "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/go-modules-base.json" "$RUNNER_TEMP/go-modules-head.json"
       - name: Licenses
         if: ${{ !cancelled() }}
-        env:
-          EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
           set -o pipefail
-          go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$EXCEPTIONS"
+          uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions > "$RUNNER_TEMP/license-exceptions.txt"
+          go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$RUNNER_TEMP/license-exceptions.txt"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -185,6 +178,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-go
       - *go-caches
       - name: Install gocover-cobertura
@@ -281,6 +275,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-go
       - *go-caches
       - *coverage

@@ -7,10 +7,6 @@ on:
         description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
         type: string
         default: '"ubuntu-latest"'
-      baseline:
-        description: The repo's duplication baseline
-        type: string
-        default: .github/checks/jscpd-baseline.json
 
 permissions:
   contents: read
@@ -20,6 +16,8 @@ jobs:
     name: Duplication
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 10
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
     defaults:
       run:
         shell: bash
@@ -43,13 +41,13 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      - name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - name: Install jscpd
         working-directory: ${{ runner.temp }}
         run: |
           uv venv --python 3.12 jscpd-venv
-          uv pip install --python jscpd-venv/bin/python --require-hashes -r "$GITHUB_WORKSPACE/repo-guards/ci-checks/jscpd-requirements.txt"
+          uv pip install --python jscpd-venv/bin/python --require-hashes -r "$RG/jscpd-requirements.txt"
       - name: Duplication
-        env:
-          BASELINE: ${{ inputs.baseline }}
         run: |
-          "$RUNNER_TEMP/jscpd-venv/bin/jscpd" --config "$GITHUB_WORKSPACE/repo-guards/ci-checks/.jscpd.json" --baseline "$BASELINE" .
+          "$RUNNER_TEMP/jscpd-venv/bin/jscpd" --config "$RG/.jscpd.json" --baseline .github/checks/jscpd-baseline.json .

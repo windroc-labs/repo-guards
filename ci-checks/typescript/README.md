@@ -53,7 +53,7 @@
 | [`knip.json`](knip.json) | `entry`、`project` 默认 `["src/index.ts!"]`、`["src/**/*.ts!"]`，相对 `working-directory`；项目在覆盖文件的 `["ci-checks/typescript/knip.json"]` 节改（见[覆盖默认配置](../README.md#覆盖默认配置)）。结尾的 `!` 标成发布代码，供 `--production` 用（见[死代码](../README.md#死代码)） |
 | [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
 
-`typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。
+`typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记算行内豁免；`knip.json` 里的 `ignore*` 写在覆盖文件里，由 CODEOWNERS 审，不另登记。
 
 ## 覆盖率（vitest v8）
 

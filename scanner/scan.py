@@ -16,7 +16,9 @@ unavailable, 2 usage error.
 """
 
 import argparse
+import html
 import os
+import posixpath
 import re
 import stat
 import subprocess
@@ -24,6 +26,7 @@ import sys
 import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Iterable
+from urllib.parse import unquote
 
 NAMES_ENV = "REPO_GUARDS_PRIVATE_NAMES"
 LEAK, HYGIENE = "leak", "hygiene"
@@ -73,6 +76,7 @@ CHECKS = {
         Check("local-path", LEAK, True),
         Check("email", LEAK, True),
         Check("em-dash", HYGIENE, False),
+        Check("link", HYGIENE, False),
     )
 }
 
@@ -288,6 +292,119 @@ def scan_pull_request(report: Report, finders: dict[Check, Finder]) -> None:
         scan_text(report, finders, os.environ.get(var, ""), Where(field=field))
 
 
+FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+CODE_SPAN = re.compile(r"(`+)(?!`).*?(?<!`)\1(?!`)")
+INLINE_LINK = re.compile(
+    r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*(<[^>]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)"
+    r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
+)
+REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
+ATX = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+SETEXT = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def outside_fences(text: str) -> Iterable[tuple[int, str]]:
+    fence = ""
+    for number, line in enumerate(text.split("\n"), 1):
+        m = FENCE.match(line)
+        if fence:
+            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+                fence = ""
+        elif m:
+            fence = m.group(1)
+        else:
+            yield number, line
+
+
+def slug(heading: str) -> str:
+    """GitHub's anchor for a heading: rendered text, lowercased, punctuation and symbols dropped."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", heading)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text)).replace("`", "")
+    return "".join(
+        "-" if ch == " " else ch
+        for ch in text.lower()
+        if ch in " -_" or unicodedata.category(ch)[0] in "LMN"
+    )
+
+
+def anchors(text: str) -> set[str]:
+    found: dict[str, int] = {}
+    previous = ""
+    for _, line in outside_fences(text):
+        atx = ATX.match(line)
+        heading = atx.group(1) or "" if atx else None
+        if heading is None and previous.strip() and SETEXT.match(line):
+            heading = previous.strip()
+        previous = "" if heading is not None else line
+        if heading is None:
+            continue
+        base = name = slug(heading.strip())
+        while name in found:
+            found[base] += 1
+            name = "%s-%d" % (base, found[base])
+        found[name] = 0
+    return set(found)
+
+
+def link_targets(text: str) -> Iterable[tuple[int, int, str]]:
+    for number, line in outside_fences(text):
+        line = CODE_SPAN.sub(lambda m: " " * len(m.group(0)), line)
+        ref = REFERENCE.match(line)
+        matches = [ref] if ref else INLINE_LINK.finditer(line)
+        for m in matches:
+            yield number, m.start(1) if ref else m.start(), m.group(1).strip("<>")
+
+
+class LinkIndex:
+    def __init__(self, files: list[TrackedFile]):
+        self.files = {f.path: f for f in files}
+        self.dirs = {posixpath.dirname(p) for p in self.files}
+        self.dirs |= {d for p in list(self.dirs) for d in parents(p)}
+        self.anchors: dict[str, set[str]] = {}
+
+    def exists(self, path: str) -> bool:
+        return path in self.files or path in self.dirs or path == "."
+
+    def anchors_of(self, path: str) -> set[str] | None:
+        f = self.files.get(path)
+        if f is None or f.text is None or not path.lower().endswith(".md"):
+            return None
+        if path not in self.anchors:
+            self.anchors[path] = anchors(f.text)
+        return self.anchors[path]
+
+    def broken(self, source: str, target: str) -> bool:
+        if not target or SCHEME.match(target) or target.startswith("//"):
+            return False
+        path, _, fragment = target.partition("#")
+        resolved = source
+        if path:
+            base = "" if path.startswith("/") else posixpath.dirname(source)
+            resolved = posixpath.normpath(posixpath.join(base, unquote(path).lstrip("/")))
+            if resolved == ".." or resolved.startswith("../") or not self.exists(resolved):
+                return True
+        known = self.anchors_of(resolved) if fragment else None
+        return known is not None and unquote(fragment) not in known
+
+
+def parents(path: str) -> Iterable[str]:
+    while path:
+        path = posixpath.dirname(path)
+        yield path
+
+
+def scan_links(report: Report, check: Check, files: list[TrackedFile]) -> None:
+    index = LinkIndex(files)
+    for f in files:
+        if f.text is None or not f.path.lower().endswith(".md"):
+            continue
+        for number, col, target in link_targets(f.text):
+            if index.broken(f.path, target):
+                report.add(check, Where(f.path, f.index, line=number, col=col + 1))
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=".", help="git checkout to scan (default: current directory)")
@@ -313,6 +430,8 @@ def run(argv: list[str]) -> tuple[int, str]:
     report = Report(checks)
     finders: dict[Check, Finder] = {}
     for check in checks:
+        if check.name == "link":
+            continue
         if check.name == "private-name":
             entries = load_names(args.names_file, top)
             if entries is None:
@@ -322,12 +441,14 @@ def run(argv: list[str]) -> tuple[int, str]:
         else:
             finders[check] = TEXT_FINDERS[check.name]
 
-    if finders:
-        log = commits(top, args.commits)
-        scan_files(report, finders, tracked_files(top))
-        scan_commits(report, finders, log)
-        if args.pr_from_env:
-            scan_pull_request(report, finders)
+    log = commits(top, args.commits) if finders else []
+    files = tracked_files(top) if finders or "link" in names else []
+    scan_files(report, finders, files)
+    if "link" in names:
+        scan_links(report, CHECKS["link"], files)
+    scan_commits(report, finders, log)
+    if args.pr_from_env and finders:
+        scan_pull_request(report, finders)
     return (1 if report.failed() else 0), report.render(args.public)
 
 

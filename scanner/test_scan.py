@@ -444,5 +444,107 @@ class PullRequest(unittest.TestCase):
         self.assertEqual(code, 0, out)
 
 
+class Links(unittest.TestCase):
+    def links(self, files):
+        repo = Repo(self, files)
+        return repo.scan("--checks", "link")
+
+    def test_s12_links_and_anchors_from_the_repo_root(self):
+        listed = subprocess.run(
+            ["git", "-C", str(REPO_ROOT), "ls-files", "-z"], capture_output=True, check=True, env=git_env()
+        ).stdout.decode().split("\0")
+        tree = {p: (REPO_ROOT / p).read_bytes() for p in listed if p and (REPO_ROOT / p).is_file()}
+        for link, fails in (
+            ("ci-checks/README.md#流程级", False),
+            ("ci-checks/README.md#没有这个", True),
+            ("missing/README.md", True),
+        ):
+            with self.subTest(link=link):
+                code, out = self.links({**tree, "a.md": "[x](%s)\n" % link})
+                self.assertEqual(code, 1 if fails else 0, out)
+                if fails:
+                    self.assertIn("a.md:1:1: link (hygiene)", out)
+
+    def test_s13_this_repos_links_pass(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "--checks", "link", "--repo", str(REPO_ROOT)],
+            capture_output=True, text=True, env=git_env(),
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertRegex(proc.stdout, r"link\s+hygiene\s+0")
+
+    def test_anchor_rules(self):
+        doc = (
+            "# Top\n## 1. 设置\n## 死代码（knip）\n## `.github/` 改动单独成 PR\n"
+            "## Dup\n## Dup\n## [Linked](x.md) *em*\nSetext Title\n---\n"
+            "```\n## Not a heading\n```\n"
+        )
+        for anchor, fails in (
+            ("top", False),
+            ("1-设置", False),
+            ("死代码knip", False),
+            ("github-改动单独成-pr", False),
+            ("dup", False),
+            ("dup-1", False),
+            ("dup-2", True),
+            ("linked-em", False),
+            ("setext-title", False),
+            ("not-a-heading", True),
+            ("%E8%AE%BE%E7%BD%AE", True),
+            ("1-%E8%AE%BE%E7%BD%AE", False),
+            ("Top", True),
+        ):
+            with self.subTest(anchor=anchor):
+                code, out = self.links({"x.md": doc, "a.md": "see [x](x.md#%s)\n" % anchor})
+                self.assertEqual(code, 1 if fails else 0, out)
+
+    def test_same_file_anchor(self):
+        self.assertEqual(self.links({"a.md": "# Hi\n[x](#hi)\n"})[0], 0)
+        self.assertEqual(self.links({"a.md": "# Hi\n[x](#ho)\n"})[0], 1)
+
+    def test_targets(self):
+        for link, fails in (
+            ("docs/", False),
+            ("docs", False),
+            ("./docs/b.md", False),
+            ("docs/b.md \"title\"", False),
+            ("<docs/b.md>", False),
+            ("docs/missing.md", True),
+            ("../outside.md", True),
+            ("/docs/b.md", False),
+            ("docs/b.md#L1", True),
+            ("tool.py#L10", False),
+            ("https://example.com/x.md", False),
+            ("mailto:a" + AT + "example.com", False),
+            ("//example.com/x", False),
+        ):
+            with self.subTest(link=link):
+                code, out = self.links({"docs/b.md": "# B\n", "tool.py": "x\n", "a.md": "[x](%s)\n" % link})
+                self.assertEqual(code, 1 if fails else 0, out)
+
+    def test_link_forms(self):
+        for text, fails in (
+            ("![img](missing.png)", True),
+            ("[ref]: missing.md", True),
+            ("[ref]: b.md", False),
+            ("`[x](missing.md)`", False),
+            ("```\n[x](missing.md)\n```", False),
+            ("~~~\n[x](missing.md)\n~~~", False),
+            ("text [x](b.md) and [y](missing.md)", True),
+        ):
+            with self.subTest(text=text):
+                code, out = self.links({"b.md": "b\n", "a.md": text + "\n"})
+                self.assertEqual(code, 1 if fails else 0, out)
+
+    def test_only_markdown_files_are_checked(self):
+        self.assertEqual(self.links({"a.txt": "[x](missing.md)\n"})[0], 0)
+
+    def test_link_hits_are_hygiene_and_counted(self):
+        code, out = self.links({"a.md": "[x](m1.md) [y](m2.md)\n"})
+        self.assertEqual(code, 1, out)
+        self.assertIn("a.md:1:12: link (hygiene)", out)
+        self.assertRegex(out, r"link\s+hygiene\s+2")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -177,6 +177,11 @@ jobs:
         with:
           go-version-file: repo/ci-checks/go/.go-version
           cache: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       - name: Scanner tests
         id: scanner
         if: ${{ !cancelled() }}
@@ -253,6 +258,14 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/go/license-check
         run: go test ./...
+      - name: Inline exemptions tests
+        id: inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/inline-exemptions
+        run: |
+          uv venv -q --python 3.12 "$RUNNER_TEMP/inline-exemptions-venv"
+          uv pip install -q --python "$RUNNER_TEMP/inline-exemptions-venv/bin/python" --require-hashes -r requirements.txt
+          "$RUNNER_TEMP/inline-exemptions-venv/bin/python" -m unittest discover -p '*_test.py'
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -271,9 +284,10 @@ jobs:
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
+          INLINE_EXEMPTIONS: ${{ steps.inline-exemptions.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG INLINE_EXEMPTIONS; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

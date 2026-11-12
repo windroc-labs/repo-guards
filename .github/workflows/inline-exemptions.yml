@@ -1,0 +1,53 @@
+name: Inline exemptions
+
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
+        type: string
+        default: '"ubuntu-latest"'
+
+permissions:
+  contents: read
+
+jobs:
+  inline-exemptions:
+    name: Inline exemptions
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+    defaults:
+      run:
+        shell: bash
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+      - name: Install the checker's parsers
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv -q --python 3.12 inline-exemptions-venv
+          uv pip install -q --python inline-exemptions-venv/bin/python --require-hashes -r "$RG/inline-exemptions/requirements.txt"
+      - name: Inline exemptions
+        run: |
+          "$RUNNER_TEMP/inline-exemptions-venv/bin/python" "$RG/inline-exemptions/inline_exemptions.py"

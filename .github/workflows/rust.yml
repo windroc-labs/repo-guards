@@ -19,6 +19,10 @@ on:
         description: The unit-test targets coverage measures, space-separated --lib, --bins, --bin=<name> or --test=<name>
         type: string
         default: --lib --bins
+      jobs:
+        description: "The jobs to run, one per line: '<job name>: <check> ...'; unlisted checks do not run. Empty: 'Checks: <every check but coverage>' and 'Coverage: coverage'"
+        type: string
+        default: ""
       coverage-shards:
         description: Coverage shards, one per line of space-separated test-name filters; one more shard runs the tests no line matches. Empty measures in one job
         type: string
@@ -27,11 +31,51 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel (or shards, with coverage-shards).
+# Plan lays out the jobs from the caller's jobs and coverage-shards inputs; by default the fast checks share one job
+# and coverage, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
+  plan:
+    name: Plan
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 5
+    outputs:
+      jobs: ${{ steps.plan.outputs.jobs }}
+      coverage: ${{ steps.plan.outputs.coverage }}
+      shards: ${{ steps.plan.outputs.shards }}
+      artifact: ${{ steps.plan.outputs.artifact }}
+    steps:
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - &install-uv
+        name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      - name: Plan
+        id: plan
+        shell: bash
+        env:
+          JOBS: ${{ inputs.jobs }}
+          SHARDS: ${{ inputs.coverage-shards }}
+        run: uv run --no-project --python 3.12 repo-guards/ci-checks/job-plan/job_plan.py --language rust
+
   checks:
-    name: Checks
+    name: ${{ matrix.job.name }}
+    needs: plan
+    if: ${{ needs.plan.outputs.jobs != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
@@ -52,21 +96,8 @@ jobs:
           path: repo
           fetch-depth: 0
           persist-credentials: false
-      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - &checkout-repo-guards
-        name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
-          path: repo-guards
-          persist-credentials: false
-      - &install-uv
-        name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.7"
-          enable-cache: false
+      - *checkout-repo-guards
+      - *install-uv
       # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain; COMPONENTS adds to it.
       - &install-rust
         name: Install Rust
@@ -86,79 +117,44 @@ jobs:
           workspaces: repo/${{ inputs.working-directory }}
           save-if: ${{ github.event_name == 'push' }}
       - name: Install cargo-machete and cargo-deny
+        if: ${{ contains(matrix.job.checks, 'unused-dependencies') || contains(matrix.job.checks, 'dependency-rules') }}
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete@0.9.2,cargo-deny@0.20.2
       - name: Format
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'format') }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- cargo fmt --all --check --message-format short -- --config-path "$RG/rust/rustfmt.toml"
       - name: Lint
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'lint') }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
       - name: Comment budget
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'comment-budget') }}
         run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
       - name: Type check and dead code
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'type-check') }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
       - name: Unused dependencies
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'unused-dependencies') }}
         run: cargo machete
       - name: Dependency rules
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && contains(matrix.job.checks, 'dependency-rules') }}
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
 
-  # Only with coverage-shards: checks the filters and lists the shards, the last one running every test no filter matches.
-  coverage-plan:
-    name: Coverage plan
-    if: ${{ inputs.coverage-shards != '' }}
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 5
-    outputs:
-      shards: ${{ steps.plan.outputs.shards }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-    steps:
-      - name: Plan
-        id: plan
-        shell: bash
-        env:
-          SHARDS: ${{ inputs.coverage-shards }}
-        run: |
-          # Filters are libtest name substrings: a shard runs the tests matching any of its filters, the rest shard skips them all.
-          shards=() rest=()
-          while read -ra filters; do
-            (( ${#filters[@]} )) || continue
-            for filter in "${filters[@]}"; do
-              if [[ ! $filter =~ ^[A-Za-z0-9_:]+$ ]]; then
-                echo "::error::coverage-shards: $filter is not a test-name filter (letters, digits, _ and :)"
-                exit 1
-              fi
-              rest+=(--skip "$filter")
-            done
-            shards+=("{\"name\":\"$(( ${#shards[@]} + 1 ))\",\"filters\":\"${filters[*]}\"}")
-          done <<< "$SHARDS"
-          if (( ${#shards[@]} == 0 )); then
-            echo "::error::coverage-shards names no filter"
-            exit 1
-          fi
-          shards+=("{\"name\":\"rest\",\"filters\":\"${rest[*]}\"}")
-          (IFS=,; echo "shards=[${shards[*]}]") >> "$GITHUB_OUTPUT"
-          echo "artifact=coverage-$GITHUB_RUN_ID-$(od -An -N4 -tx4 /dev/urandom | tr -d ' ')" >> "$GITHUB_OUTPUT"
-
   # The coverage steps run the PR's tests, so they get jobs of their own.
   coverage-shard:
-    name: Coverage shard ${{ matrix.shard.name }}
-    needs: coverage-plan
+    name: ${{ needs.plan.outputs.coverage }} shard ${{ matrix.shard.name }}
+    needs: plan
+    if: ${{ needs.plan.outputs.shards != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.coverage-plan.outputs.shards) }}
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       CARGO_TERM_COLOR: always
@@ -228,16 +224,16 @@ jobs:
       - name: Upload shard profiles
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ needs.coverage-plan.outputs.artifact }}-${{ matrix.shard.name }}
+          name: ${{ needs.plan.outputs.artifact }}-${{ matrix.shard.name }}
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
 
   # Without shards, measures in one job; with them, merges the shards' profiles. Fails when a shard did.
   coverage:
-    name: Coverage
-    needs: [coverage-plan, coverage-shard]
-    if: ${{ !cancelled() }}
+    name: ${{ needs.plan.outputs.coverage }}
+    needs: [plan, coverage-shard]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.coverage != '' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
@@ -246,7 +242,7 @@ jobs:
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
       COMPONENTS: llvm-tools-preview
-      MODE: ${{ inputs.coverage-shards != '' && 'merge' || 'whole' }}
+      MODE: ${{ needs.plan.outputs.shards != '[]' && 'merge' || 'whole' }}
       SHARDS_RESULT: ${{ needs.coverage-shard.result }}
     defaults: *defaults
     steps:
@@ -265,7 +261,7 @@ jobs:
         if: ${{ needs.coverage-shard.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ${{ needs.coverage-plan.outputs.artifact }}-*
+          pattern: ${{ needs.plan.outputs.artifact }}-*
           path: ${{ runner.temp }}/shards
           merge-multiple: true
       - *coverage

@@ -10,21 +10,21 @@ permissions:
 
 jobs:
   github-dir-pr:
-    uses: windroc-labs/repo-guards/.github/workflows/github-dir-pr.yml@0000000000000000000000000000000000000000
+    uses: windroc-labs/repo-guards/.github/workflows/github-dir-pr.yml@main
   rust:
-    uses: windroc-labs/repo-guards/.github/workflows/rust.yml@0000000000000000000000000000000000000000
+    uses: windroc-labs/repo-guards/.github/workflows/rust.yml@main
     with:
       runs-on: '"ubuntu-latest"'
       working-directory: .
       unit-tests: --lib --bins
   python:
-    uses: windroc-labs/repo-guards/.github/workflows/python.yml@0000000000000000000000000000000000000000
+    uses: windroc-labs/repo-guards/.github/workflows/python.yml@main
     with:
       runs-on: '["self-hosted","linux"]'
       source-dirs: src
   typescript:
-    uses: windroc-labs/repo-guards/.github/workflows/typescript.yml@0000000000000000000000000000000000000000
+    uses: windroc-labs/repo-guards/.github/workflows/typescript.yml@main
     with:
       knip-entry: '["src/index.ts!"]'
   jscpd:
-    uses: windroc-labs/repo-guards/.github/workflows/jscpd.yml@0000000000000000000000000000000000000000
+    uses: windroc-labs/repo-guards/.github/workflows/jscpd.yml@main

@@ -83,7 +83,7 @@ CHECKS = {
 LOCAL_PATH = re.compile(
     r"(?:/(?:Users|home)/|[A-Za-z]:(?:\\{1,2}|/)(?i:users)(?:\\{1,2}|/))(?=[^\s<>/\\\"'`)\]])"
 )
-SHORT_OPTION = re.compile(r"(?:^|\s)-[A-Za-z]$")
+SHORT_OPTION = re.compile(r"(?:^|[^A-Za-z0-9_.-])-[A-Za-z]$")
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"
     r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![A-Za-z0-9-])"
@@ -110,9 +110,9 @@ def find_email(line: str) -> Iterable[int]:
 
 
 def starts_a_path(line: str, i: int) -> bool:
-    """False inside a longer path or URL (src/home/x, https://host/home/x); `-I/home/x` is a flag's value."""
+    """False inside a longer path or URL (src/home/<user>, https://host/home/<user>); `-I/home/<user>` is a flag's value."""
     before = line[i - 1] if i else " "
-    inside_word = before.isascii() and (before.isalnum() or before in "_.-")
+    inside_word = before.isascii() and (before.isalnum() or before in ".-")
     return not inside_word or bool(SHORT_OPTION.search(line, 0, i))
 
 
@@ -330,7 +330,7 @@ def rendered(markdown: str) -> str:
     """Inline Markdown outside code spans as GitHub renders it to text."""
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", markdown)
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = re.sub(r"(?<![^\W_])(__?)(?=\S)(.+?)(?<=\S)\1(?![^\W_])", r"\2", text)
+    text = re.sub(r"(?<!\w)(_{1,3})(?=\S)(.+?)(?<=\S)\1(?!\w)", r"\2", text)
     return html.unescape(re.sub(r"<[^>]+>", "", text))
 
 

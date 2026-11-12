@@ -137,6 +137,11 @@ class FileContent(unittest.TestCase):
             "PATH=http://proxy:8080," + HOME_BOB + "/bin",
             "url=https://a.b;dir=" + HOME_BOB + "/x",
             "~" + HOME_BOB,
+            "CFLAGS=-I" + HOME_BOB + "/include",
+            'args: ["-I' + HOME_BOB + '/include"]',
+            "`-I" + HOME_BOB + "/include`",
+            "LDFLAGS='-L" + HOME_BOB + "/lib'",
+            "_" + HOME_BOB + "/x_",
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
@@ -528,7 +533,7 @@ class Links(unittest.TestCase):
         doc = (
             "# Top\n## 1. 设置\n## 死代码（knip）\n## `.github/` 改动单独成 PR\n"
             "## Dup\n## Dup\n## [Linked](x.md) *em*\nSetext Title\n---\n"
-            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n# Using _ as placeholder\n## a_b_\n## _private\n"
+            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n# Using _ as placeholder\n## a_b_\n## _private\n## Set APP__DB__HOST\n## ___x___\n"
         )
         for anchor, fails in (
             ("top", False),
@@ -549,6 +554,8 @@ class Links(unittest.TestCase):
             ("using-_-as-placeholder", False),
             ("a_b_", False),
             ("_private", False),
+            ("set-app__db__host", False),
+            ("x", False),
         ):
             with self.subTest(anchor=anchor):
                 code, out = self.links({"x.md": doc, "a.md": "see [x](x.md#%s)\n" % anchor})

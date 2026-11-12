@@ -189,10 +189,7 @@ impl Visitor {
                     }
                 }
             }
-            ("rustfmt::skip", Meta::Path(_))
-            | ("rustfmt::skip::macros" | "rustfmt::skip::attributes", Meta::List(_)) => {
-                self.add("rustfmt", "skip");
-            }
+            ("rustfmt::skip", Meta::Path(_)) => self.add("rustfmt", "skip"),
             ("coverage", _) if !test_module && single_ident(meta, "off") => {
                 self.add("cargo-llvm-cov", "off");
             }
@@ -446,19 +443,18 @@ fn scan_cargo(text: &str) -> Result<Vec<Occurrence>, String> {
             }
         }
     }
-    for owner in [table.get("package"), workspace].into_iter().flatten() {
-        let ignored = owner
-            .get("metadata")
-            .and_then(|m| m.get("cargo-machete"))
-            .and_then(|m| m.get("ignored"))
-            .and_then(toml::Value::as_array);
-        for name in ignored
-            .into_iter()
-            .flatten()
-            .filter_map(toml::Value::as_str)
-        {
-            found.push(occurrence("cargo-machete", name, ""));
-        }
+    let ignored = table
+        .get("package")
+        .and_then(|p| p.get("metadata"))
+        .and_then(|m| m.get("cargo-machete"))
+        .and_then(|m| m.get("ignored"))
+        .and_then(toml::Value::as_array);
+    for name in ignored
+        .into_iter()
+        .flatten()
+        .filter_map(toml::Value::as_str)
+    {
+        found.push(occurrence("cargo-machete", name, ""));
     }
     Ok(found)
 }
@@ -804,8 +800,6 @@ mod tests {
         assert_eq!(
             rs(text),
             found(&[
-                ("rustfmt", "skip", "f"),
-                ("rustfmt", "skip", "f"),
                 ("cargo-test", "ignore", "f"),
                 ("sanitizer", "address", "f"),
                 ("sanitizer", "memory", "f"),
@@ -905,7 +899,6 @@ mod tests {
                 ("rustc", "unsafe_code", ""),
                 ("rustc", "rustdoc::broken_intra_doc_links", ""),
                 ("clippy", "clippy::pedantic", ""),
-                ("cargo-machete", "anyhow", ""),
             ])
         );
         let error = scan_cargo("[package]\nname = \n").unwrap_err();

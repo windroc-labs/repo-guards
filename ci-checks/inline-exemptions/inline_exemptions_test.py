@@ -389,7 +389,7 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(env["RUSTUP_TOOLCHAIN"], channel)
         with unittest.mock.patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "1.2.3"}):
             self.assertEqual(ie.command("rust", Path("/r"))[2]["RUSTUP_TOOLCHAIN"], "1.2.3")
-        self.assertEqual(cwd, Path(tempfile.gettempdir()))
+        self.assertEqual(cwd, Path("/"))
         manifest = tomllib.loads((ie.CI_CHECKS / "rust/inline-exemptions/Cargo.toml").read_text())
         self.assertIn("workspace", manifest)
 

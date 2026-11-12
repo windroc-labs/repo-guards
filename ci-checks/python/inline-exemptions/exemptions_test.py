@@ -319,7 +319,8 @@ class NotExemptions(unittest.TestCase):
         )
 
     def test_fr8_pyright_remark_is_not_a_setting(self):
-        self.assertEqual(found("src/m.py", "x = 1  # pyright: this is a note\n"), Counter())
+        for remark in ("# pyright: this is a note", "# pyright: strict is a note", "# pyright: Strict"):
+            self.assertEqual(found("src/m.py", f"x = 1  {remark}\n"), Counter(), remark)
         self.assertEqual(
             found("src/m.py", "# pyright: strict, reportPrivateUsage=false\n"),
             Counter(

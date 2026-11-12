@@ -2,7 +2,6 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import tomllib
 from collections import Counter
 from collections.abc import Callable
@@ -104,13 +103,14 @@ def command(language: str, root: Path) -> tuple[list[str], Path, dict[str, str]]
     if language == "python":
         return [sys.executable, str(directory / "exemptions.py"), str(root)], directory, env
     if language == "rust":
-        # Cargo and rustup read config from the working directory up, so run outside the caller's tree.
+        # Cargo and rustup read config from the working directory up: run from / (root-owned), outside
+        # the caller's tree and any shared temp directory.
         if "RUSTUP_TOOLCHAIN" not in env:
             toolchain = tomllib.loads((CI_CHECKS / "rust/rust-toolchain.toml").read_text(encoding="utf-8"))
             env["RUSTUP_TOOLCHAIN"] = toolchain["toolchain"]["channel"]
         manifest = str(directory / "Cargo.toml")
         argv = ["cargo", "run", "--release", "--locked", "--quiet", "--manifest-path", manifest, "--", str(root)]
-        return argv, Path(tempfile.gettempdir()), env
+        return argv, Path("/"), env
     if language == "go":
         env["GOWORK"] = "off"
         return ["go", "run", ".", str(root)], directory, env

@@ -27,7 +27,8 @@ FMT = pattern(rf"#\s*fmt\s*:\s*(?P<word>off|skip){END}")
 YAPF = pattern(rf"#\s*yapf\s*:\s*disable{END}")
 TYPE_IGNORE = pattern(rf"#\s*type\s*:\s*ignore{RULES}")
 PYRIGHT_IGNORE = pattern(rf"#\s*pyright\s*:\s*ignore{RULES}")
-PYRIGHT_SETTINGS = pattern(rf"#\s*pyright\s*:\s*(?P<settings>{SETTING}(?:\s*,\s*{SETTING})*){END}")
+# pyright takes a settings comment only when every comma-separated item is exactly a setting.
+PYRIGHT_SETTINGS = pattern(rf"#\s*pyright\s*:\s*(?P<settings>{SETTING}(?:\s*,\s*{SETTING})*)\s*(?=#|$)", 0)
 NO_COVER = pattern(r"#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(cover|COVER)", 0)
 NO_BRANCH = pattern(r"#\s*(pragma|PRAGMA)[:\s]?\s*(no|NO)\s*(branch|BRANCH)", 0)
 

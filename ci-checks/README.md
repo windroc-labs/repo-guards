@@ -360,7 +360,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 - 没登记的、次数对不上的、登记了但代码里已经没有的，都失败。
 - 例外：Rust 加在 cfg 正好是 `#[cfg(test)]` 的 `mod` 上的 `coverage(off)` 不用登记（模块名不限，`mod x { … }` 和 `mod x;` 都算，`cfg(any(test, …))` 不算；见[第 8 项](#覆盖率)），加在别处的照样登记。
 
-实现：[`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml)，调用方在 `ci.yml` 里加一个 job（见 [`ci.yml`](ci.yml) 模板）。它查 HEAD 上 git 跟踪的全部文件，从 repo 根目录算，不看 diff，不按路径排除，不扫 submodule 的内容；只读 `.rs`、`.py`、`.pyi`、`.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs`、`.go` 和任何目录下的 `Cargo.toml`、`pyproject.toml`、`go.mod`。这些文件里有符号链接、语法错误或不是 UTF-8 时退出 2 并给出文件名。共用部分 [`inline-exemptions/inline_exemptions.py`](inline-exemptions/inline_exemptions.py)（只用标准库）读白名单、对账、报错；各语言的扫描器用该语言自己的解析器，放在各自目录：[`rust/inline-exemptions/`](rust/inline-exemptions)（`syn`）、[`python/inline-exemptions/`](python/inline-exemptions)（`ast`、`tokenize`）、[`typescript/inline-exemptions/`](typescript/inline-exemptions)（TypeScript 编译器的语法解析）、[`go/inline-exemptions/`](go/inline-exemptions)（`go/parser`、`golang.org/x/mod/modfile`）。扫描器只解析，不 import、不构建、不执行调用方的代码。调用方的 `.cargo/config.toml`、`rust-toolchain.toml`、`go.work`、`uv.toml` 也不生效：cargo 在调用方的目录树之外运行，工具链取本 repo 的 [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml)；Go 设 `GOWORK=off`；uv 不读配置（`UV_NO_CONFIG`、`--no-config`）。
+实现：[`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml)，调用方在 `ci.yml` 里加一个 job（见 [`ci.yml`](ci.yml) 模板）。它查 HEAD 上 git 跟踪的全部文件，从 repo 根目录算，不看 diff，不按路径排除，不扫 submodule 的内容；只读 `.rs`、`.py`、`.pyi`、`.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs`、`.go` 和任何目录下的 `Cargo.toml`、`pyproject.toml`、`go.mod`。这些文件里有符号链接、语法错误或不是 UTF-8 时退出 2 并给出文件名。共用部分 [`inline-exemptions/inline_exemptions.py`](inline-exemptions/inline_exemptions.py)（只用标准库）读白名单、对账、报错；各语言的扫描器用该语言自己的解析器，放在各自目录：[`rust/inline-exemptions/`](rust/inline-exemptions)（`syn`）、[`python/inline-exemptions/`](python/inline-exemptions)（`ast`、`tokenize`）、[`typescript/inline-exemptions/`](typescript/inline-exemptions)（TypeScript 编译器的语法解析）、[`go/inline-exemptions/`](go/inline-exemptions)（`go/parser`、`golang.org/x/mod/modfile`）。扫描器只解析，不 import、不构建、不执行调用方的代码。调用方的 `.cargo/config.toml`、`rust-toolchain.toml`、`go.work`、`uv.toml` 也不生效：cargo 在根目录 `/` 运行（不在调用方的目录树里，也不在共享的临时目录里），工具链取本 repo 的 [`rust/rust-toolchain.toml`](rust/rust-toolchain.toml)；Go 设 `GOWORK=off`；uv 不读配置（`UV_NO_CONFIG`、`--no-config`）。
 
 白名单写在 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，四种语言共用一份，每条一个表，六个字段都要写：
 
@@ -388,7 +388,7 @@ reason = "只在 feature full 下用到"
 | Rust（含 `cfg_attr` 里的和宏体里照写的） | `#[allow(…)]`、`#[expect(…)]`、`#![allow(…)]`、`#![expect(…)]` | `clippy::` 开头的 `clippy`，其余 `rustc` / lint 名 |
 | | `#[rustfmt::skip]`；`coverage(off)`；`#[ignore]` | `rustfmt` / `skip`；`cargo-llvm-cov` / `off`；`cargo-test` / `ignore` |
 | | `#[no_sanitize(…)]`、`#[sanitize(<名> = "off")]` | `sanitizer` / sanitizer 名 |
-| | `Cargo.toml` 的 `[lints.*]`、`[workspace.lints.*]` 里设成 `allow` 的 lint；`[package.metadata.cargo-machete]`、`[workspace.metadata.cargo-machete]` 的 `ignored` | `clippy` 或 `rustc` / lint 名（`clippy::x`）；`cargo-machete` / crate 名 |
+| | `Cargo.toml` 的 `[lints.*]`、`[workspace.lints.*]` 里设成 `allow` 的 lint；`[package.metadata.cargo-machete]` 的 `ignored` | `clippy` 或 `rustc` / lint 名（`clippy::x`）；`cargo-machete` / crate 名 |
 | Python（大小写、空格不限） | `# noqa`、`# noqa: <规则>`；文件级 `# ruff: noqa`、`# flake8: noqa` | `ruff`，`V` 开头的规则记 `vulture` |
 | | `# fmt: off`、`# yapf: disable`；`# fmt: skip` | `ruff-format` / `off`；`skip` |
 | | `# type: ignore[…]`、`# pyright: ignore[…]`；文件级 `# pyright: <设置>` | `pyright` / 规则或设置名 |

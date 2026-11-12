@@ -83,6 +83,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 
 `rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`，加上 `unit-tests` 选的测试目标），Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。
 
-覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，如 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`，原样传给 cargo-llvm-cov。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。
+覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，如 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`，原样传给 cargo-llvm-cov。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。目标后面可以接 `--` 和测试名过滤，原样传给测试程序：`--test=unit -- input::` 只跑 `unit` 里名字含 `input::` 的测试。分片（见[覆盖率](../README.md#覆盖率)）时用它把一个测试目标按测试名拆成几片。
 
 单元测试只在 Coverage 步里跑一遍，有测试失败这一步就失败；`rust.yml` 不另跑测试。集成测试（没写进 `unit-tests` 的测试目标）、doctest 和 example 由 repo 自己的 job 跑。

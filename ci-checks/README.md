@@ -254,13 +254,13 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 #### 依赖白名单
 
-一份项目依赖白名单管四种语言：`rust.yml`、`python.yml`、`typescript.yml`、`go.yml` 的 `deny-allowlist` 输入，默认 `.github/checks/deny-allowlist.toml`，写法同 cargo-deny。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `bans.allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
+一份项目依赖白名单管四种语言：[`dependency-allowlist/allowlist.toml`](dependency-allowlist/allowlist.toml) 的 `allow`，默认空，项目在覆盖文件的 `["ci-checks/dependency-allowlist/allowlist.toml"]` 节写（见[覆盖默认配置](#覆盖默认配置)）。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
 
 - 条目：`"name"` 准这个包的所有版本，`"name@version"` 只准这个版本；也认 cargo-deny 的 `{ crate = "name@version" }` 和 `{ name = "...", version = "..." }`。包名照 lockfile 里的写，Go 写模块路径；失败的输出给出要加的那一条。
 - 比什么：Rust 是 `Cargo.lock` 里有 `source` 的包（workspace 成员和 path 依赖不算）；Python 是 `uv.lock`，没有就是由 `requirements.txt` 解析的 `pylock.toml`（见 [Python README](python/README.md#依赖白名单和漏洞pylocktoml)）；TypeScript 是 `package-lock.json` 的 `packages` 里 `node_modules/` 下的包（workspace 链接不算）；Go 是 build list，即 PR 的项目目录和 merge-base 的副本里各跑一遍 `go list -mod=readonly -m -json all` 列出的模块，主模块不算，`replace` 成别的模块的按替换后的路径和版本算，`replace` 成本地目录的算项目自己的，不算（见 [Go README](go/README.md#依赖检查go-mod-tidygovulncheck)）。只换了来源、版本没变的包不算变了。
-- 白名单文件不存在等于空名单（Rust 的 `deny-merge` 仍要求文件存在）；merge-base 上没有 lockfile（Go 是 `go.mod`）时，所有包都算新增。
+- merge-base 上没有 lockfile（Go 是 `go.mod`）时，所有包都算新增。
 - 名单不分语言：一条 `name` 在四种语言里都放行同名的包。
-- `bans.allow` 不交给 cargo-deny：名单不空时，cargo-deny 会禁掉名单外的所有 crate。
+- 名单不放进 `rust/deny.toml` 的 `bans.allow`：那里不空时，cargo-deny 会禁掉名单外的所有 crate。
 - 测试：在该目录跑 `python3 -m unittest dependency_allowlist_test`。
 
 #### 覆盖率

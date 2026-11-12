@@ -19,10 +19,6 @@ on:
         description: The repo's packages exempt from the license check, one name per line; may be absent
         type: string
         default: .github/checks/license-exceptions.txt
-      deny-allowlist:
-        description: The repo's dependency allowlist (shared by rust.yml, python.yml, typescript.yml and go.yml); may be absent
-        type: string
-        default: .github/checks/deny-allowlist.toml
       coverage-shards:
         description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; [] measures in one job
         type: string
@@ -135,9 +131,7 @@ jobs:
         run: pip-audit --locked "$RUNNER_TEMP/pylock-head"
       - name: Dependency allowlist
         if: ${{ !cancelled() }}
-        env:
-          ALLOWLIST: ${{ inputs.deny-allowlist }}
-        run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" python "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/pylock-base/dependencies.toml" "$RUNNER_TEMP/pylock-head/dependencies.toml"
+        run: python3 "$RG/dependency-allowlist/dependency_allowlist.py" python "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/pylock-base/dependencies.toml" "$RUNNER_TEMP/pylock-head/dependencies.toml"
       - name: Licenses
         if: ${{ !cancelled() }}
         env:

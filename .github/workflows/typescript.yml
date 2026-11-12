@@ -23,7 +23,7 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -149,20 +149,13 @@ jobs:
           mapfile -t exclude < <(node -e 'for (const g of require(process.argv[1]).exclude) console.log(g)' "$RG/typescript/coverage.json")
           for glob in "${include[@]}"; do flags+=("--coverage.include=$glob"); done
           for glob in "${exclude[@]}"; do flags+=("--coverage.exclude=$glob"); done
-          measure() {
-            npx --no-install vitest run "${flags[@]}" --coverage.reportsDirectory="$RUNNER_TEMP/$1" \
-              && mv "$RUNNER_TEMP/$1/cobertura-coverage.xml" "$RUNNER_TEMP/$1.xml"
-          }
-          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
-          git worktree prune
-          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
-          (cd "$RUNNER_TEMP/base" && npm ci --no-audit --no-fund && measure coverage-base) || echo "::warning::Tests at the merge-base failed"
-          measure coverage-head
+          npx --no-install vitest run "${flags[@]}" --coverage.reportsDirectory="$RUNNER_TEMP/coverage-head"
+          mv "$RUNNER_TEMP/coverage-head/cobertura-coverage.xml" "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |
           PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
-            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"
+            --head "$RUNNER_TEMP/coverage-head.xml" --compare-branch "$BASE_REF"
       # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
       - name: CRAP report
         if: ${{ !cancelled() }}

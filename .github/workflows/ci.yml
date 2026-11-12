@@ -220,6 +220,11 @@ jobs:
         run: |
           npm ci --no-audit --no-fund --ignore-scripts
           npm test
+      - name: TypeScript workflow config tests
+        id: workflow-config
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/workflow-config
+        run: node --test workflow-config.test.ts
       - name: Dependency allowlist tests
         id: dependency-allowlist
         if: ${{ !cancelled() }}
@@ -251,9 +256,10 @@ jobs:
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
+          WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST SHARD_TARGETS PYPROJECT_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

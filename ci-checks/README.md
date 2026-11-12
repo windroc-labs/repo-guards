@@ -13,7 +13,7 @@
 3. 要改共用配置，写进 `.github/checks/repo-guards.toml`（见[覆盖默认配置](#覆盖默认配置)）；jscpd 基线放 `.github/checks/jscpd-baseline.json`。`.github/` 已由 CODEOWNERS 锁住。
 4. 接入行内豁免（[第 13 项](#行内豁免)）：语言 workflow 和 `jscpd.yml` 已带这一步，`ci.yml` 不用加 job；把代码里现有的每一处行内豁免登记进 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，各写原因；第一次运行的输出就是要加的条目。
 5. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
-6. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。这个目录写进 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_configs_test`（要 Python 3.11.4 及以上）。
+6. 可选：本地要读规则、跑工具时，把 [`fetch-ci-checks/fetch_ci_checks.py`](fetch-ci-checks/fetch_ci_checks.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。脚本在 `.repo-guards/` 里写一个内容为 `*` 的 `.gitignore`，git 自己忽略整个目录，不用改 repo 的 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_ci_checks_test`（要 Python 3.11.4 及以上）。
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
@@ -408,7 +408,7 @@ reason = "只在 feature full 下用到"
 
 `.github/checks/repo-guards.toml` 里写的设置（如 `.jscpd.json` 的 `ignorePattern`、`typescript/knip.json` 的 `ignore*`）由 CODEOWNERS 审，不另登记。`# nosec`、`.only` 不在表里：`#nosec` 由 `golangci.toml` 关掉，focus 标记归[测试结果状态门](#测试结果状态门)。
 
-本地：跑过 `fetch_configs.py` 后，在 repo 根目录跑 `uv run --no-config --no-project --python 3.14 .repo-guards/ci-checks/inline-exemptions/inline_exemptions.py <对象>`，`<对象>` 是 `rust`、`python`、`typescript`、`go` 或 `jscpd`，结果和退出码同 CI 里对应 workflow 的这一步；`rust` 要装 `cargo`，`go` 要装 `go`，`typescript` 要装 `node` 和 `npm`，`jscpd` 要装 repo 里有的语言的这些工具。工作区有未提交的改动时，输出第一行先提示，检查按工作区里的内容做。测试：`inline-exemptions/` 跑 `python3 -m unittest inline_exemptions_test`，`python/inline-exemptions/` 跑 `python3 -m unittest exemptions_test`，`rust/inline-exemptions/` 跑 `cargo test --locked`，`go/inline-exemptions/` 跑 `go test ./...`，`typescript/inline-exemptions/` 跑 `npm ci --ignore-scripts && npm test`。
+本地：跑过 `fetch_ci_checks.py` 后，在 repo 根目录跑 `uv run --no-config --no-project --python 3.14 .repo-guards/ci-checks/inline-exemptions/inline_exemptions.py <对象>`，`<对象>` 是 `rust`、`python`、`typescript`、`go` 或 `jscpd`，结果和退出码同 CI 里对应 workflow 的这一步；`rust` 要装 `cargo`，`go` 要装 `go`，`typescript` 要装 `node` 和 `npm`，`jscpd` 要装 repo 里有的语言的这些工具。工作区有未提交的改动时，输出第一行先提示，检查按工作区里的内容做。测试：`inline-exemptions/` 跑 `python3 -m unittest inline_exemptions_test`，`python/inline-exemptions/` 跑 `python3 -m unittest exemptions_test`，`rust/inline-exemptions/` 跑 `cargo test --locked`，`go/inline-exemptions/` 跑 `go test ./...`，`typescript/inline-exemptions/` 跑 `npm ci --ignore-scripts && npm test`。
 
 #### 测试结果状态门
 

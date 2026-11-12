@@ -198,7 +198,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
 | 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | 只装 wheel：`uv sync` 用 `UV_NO_BUILD`，`uv pip` 用 `--only-binary :all:`（项目自己的包和 editable 依赖照样构建）；`allow-build-scripts` 里的包从源码构建（项目白名单） | `.npmrc` `ignore-scripts=true`；`allow-build-scripts` 里的包在 `npm ci` 后用 `npm rebuild` 跑安装脚本（项目白名单） |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
-| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`）：Dependency rules 把 registry 上的包写成 `name==version`，再 `pip-audit -r --no-deps`；git 等别处来的包没有公告可查 | `npm audit` |
+| 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`）：`uv pip freeze` 列出 `.venv` 装好的包，`name==version` 的交给 `pip-audit -r --no-deps`；git 等别处来的包没有公告可查 | `npm audit` |
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外写进 `licenses.exceptions`（项目白名单） | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外同 Rust 列 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外同 Rust 列 |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) |
 
@@ -221,7 +221,7 @@ crate = "somepkg"
 allow = ["MPL-2.0"]
 ```
 
-键的校验和 Python、TypeScript 的比对都在 [`allowlist/allowlist.py`](allowlist/allowlist.py)（只用标准库，要 Python 3.11 及以上；测试：在该目录跑 `python3 -m unittest allowlist_test`）。每条报错都写明该往哪个表、哪个键加哪一条。Dependency rules 在安装前跑：没放行的 git 源和 tarball 不会被下载或构建。
+键的校验和 Python、TypeScript 的比对都在 [`allowlist/allowlist.py`](allowlist/allowlist.py)（只用标准库，要 Python 3.11 及以上；测试：在该目录跑 `python3 -m unittest allowlist_test`）。每条报错都写明该往哪个表、哪个键加哪一条。Dependency rules 在安装前跑，没放行的 git 源和 tarball 不会被装上。Python 没有 `uv.lock` 时，先查 requirements 文件里直接写的 git 依赖，再解析，再查解析结果；放行的 git 依赖自己又依赖的 git 源在解析时就会下载（在 build 名单里的还会构建），解析后才查到。PyPI 上的包不能依赖 git 源。
 
 | 键 | 放行什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|

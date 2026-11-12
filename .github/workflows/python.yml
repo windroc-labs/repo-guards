@@ -86,17 +86,20 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
-      # Before install: an unlisted git source or tarball never gets fetched or built.
+      # Before install. Without uv.lock, the requirement files' own git lines are checked before resolving clones them.
       - &dependency-rules
         name: Dependency rules
         id: dependency-rules
         run: |
-          bash "$RG/python/install-project.sh" resolve "$RUNNER_TEMP/resolved.txt"
-          lock=(--requirements "$RUNNER_TEMP/resolved.txt")
+          check=(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST")
           if [[ -f uv.lock ]]; then
-            lock=(--uv-lock uv.lock)
+            "${check[@]}" --uv-lock uv.lock
+          else
+            read -ra files <<< "$REQUIREMENTS $REQUIREMENTS_DEV"
+            "${check[@]}" --declared "${files[@]}"
+            bash "$RG/python/install-project.sh" resolve "$RUNNER_TEMP/resolved.txt"
+            "${check[@]}" --requirements "$RUNNER_TEMP/resolved.txt"
           fi
-          uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST" "${lock[@]}" --pinned-out "$RUNNER_TEMP/pinned.txt"
       - name: Install the project
         run: bash "$RG/python/install-project.sh" sync "$RUNNER_TEMP/resolved.txt"
       - name: Format
@@ -126,10 +129,13 @@ jobs:
             files=(--requirements-files "${REQUIREMENTS// /,}" --requirements-files-dev "${REQUIREMENTS_DEV// /,}")
           fi
           uv run --no-project --python .venv/bin/python --with "$deptry" deptry "${files[@]}" $SOURCE_DIRS
-      # Only registry packages have advisories; Dependency rules lists them pinned.
+      # What .venv installed, as name==version lines; git and URL installs (name @ url) have no advisories.
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
-        run: pip-audit --requirement "$RUNNER_TEMP/pinned.txt" --disable-pip --no-deps
+        run: |
+          uv pip freeze --python .venv/bin/python --exclude-editable > "$RUNNER_TEMP/installed.txt"
+          grep -E '^[A-Za-z0-9._-]+==' "$RUNNER_TEMP/installed.txt" > "$RUNNER_TEMP/pinned.txt" || true
+          pip-audit --requirement "$RUNNER_TEMP/pinned.txt" --disable-pip --no-deps
       - name: Licenses
         if: ${{ !cancelled() }}
         env:

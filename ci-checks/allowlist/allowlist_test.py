@@ -195,13 +195,6 @@ class Violations(unittest.TestCase):
             1,
         )
 
-    def test_remote_request_line_is_not_held_to_bans_allow(self):
-        allowlist = Allowlist(
-            packages=(Spec("pkg", "1.0.0"),), registries=("https://files.example.org",)
-        )
-        locked = [Locked("pkg", "", "remote", "https://files.example.org/pkg-1.0.0.tgz")]
-        self.assertEqual(violations(locked, allowlist, "typescript."), [])
-
     def test_git_source_needs_an_entry(self):
         locked = [
             Locked("somepkg", "1.0.0", "git", "git+https://github.com/example/somepkg?rev=abc#abc")
@@ -326,14 +319,8 @@ class Readers(unittest.TestCase):
                 Locked(
                     "wheel-url", "1.0", "url", "https://example.org/wheel_url-1.0-py3-none-any.whl"
                 ),
-                Locked("numpy", "2.0.2", "registry", PYPI, "(python_full_version < '3.10')"),
-                Locked(
-                    "numpy",
-                    "2.2.6",
-                    "registry",
-                    PYPI,
-                    "(python_full_version >= '3.11') or (python_full_version == '3.10.*')",
-                ),
+                Locked("numpy", "2.0.2", "registry", PYPI),
+                Locked("numpy", "2.2.6", "registry", PYPI),
             ],
         )
 
@@ -367,11 +354,10 @@ class Cli(unittest.TestCase):
             code = main(argv)
         return code, out.getvalue(), err.getvalue()
 
-    def test_check_python_reports_each_violation_and_writes_registry_pins(self):
+    def test_check_python_reports_each_violation(self):
         with tempfile.TemporaryDirectory() as tmp:
             lock = Path(tmp, "uv.lock")
             lock.write_text(UV_LOCK)
-            pinned = Path(tmp, "pinned.txt")
             code, _, err = self.run_main(
                 [
                     "check",
@@ -380,8 +366,6 @@ class Cli(unittest.TestCase):
                     str(Path(tmp, "none.toml")),
                     "--uv-lock",
                     str(lock),
-                    "--pinned-out",
-                    str(pinned),
                 ]
             )
             self.assertEqual(code, 1)
@@ -392,12 +376,38 @@ class Cli(unittest.TestCase):
                 "add somepkg to python.bans.build.allow-build-scripts",
                 err,
             )
-            self.assertEqual(
-                pinned.read_text(),
-                "six==1.17.0\nprivate-pkg==2.0.0\n"
-                "numpy==2.0.2 ; (python_full_version < '3.10')\n"
-                "numpy==2.2.6 ; (python_full_version >= '3.11') or (python_full_version == '3.10.*')\n",
+
+    def test_check_python_declared_reads_git_lines_before_resolving(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "requirements.txt").write_text(
+                "-r more.txt\n"
+                "six==1.17.0\n"
+                "somepkg @ git+https://git.example.org/o/somepkg@0123  # pinned\n"
+                "-e git+https://git.example.org/o/editable.git#egg=editable\n"
             )
+            Path(tmp, "more.txt").write_text(
+                "other[extra] @ git+https://git.example.org/o/other@1\n"
+            )
+            Path(tmp, "a.toml").write_text(
+                '[python.sources]\nallow-git = ["https://git.example.org/o/somepkg", "https://git.example.org/o/other"]\n'
+                '[python.bans.build]\nallow-build-scripts = ["somepkg", "other"]\n'
+            )
+            code, _, err = self.run_main(
+                [
+                    "check",
+                    "python",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--declared",
+                    str(Path(tmp, "requirements.txt")),
+                    str(Path(tmp, "requirements-dev.txt")),
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            [line.split(":")[0] for line in err.splitlines()[:-1]], ["editable", "editable"]
+        )
+        self.assertIn("add https://git.example.org/o/editable to python.sources.allow-git", err)
 
     def test_check_python_ignores_other_languages_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -502,7 +512,22 @@ PACKAGE_LOCK = {
             "dependencies": {
                 "left-pad": "^1.3.0",
                 "tarred": "https://files.example.org/tarred-1.0.0.tgz",
+                "hosted": "https://github.com/o/hosted",
+                "overridden": "^4.0.0",
+                "regurl": "https://registry.npmjs.org/regurl/-/regurl-1.0.0.tgz",
             },
+        },
+        "node_modules/hosted": {
+            "version": "1.0.0",
+            "resolved": "git+https://github.com/o/hosted.git#0123",
+        },
+        "node_modules/overridden": {
+            "version": "4.0.0",
+            "resolved": "https://files.example.org/overridden.tgz",
+        },
+        "node_modules/regurl": {
+            "version": "1.0.0",
+            "resolved": "https://registry.npmjs.org/regurl/-/regurl-1.0.0.tgz",
         },
         "node_modules/tarred": {
             "version": "1.0.0",
@@ -552,8 +577,15 @@ class Npm(unittest.TestCase):
         self.assertEqual(
             locked,
             [
-                Locked("tarred", "", "remote", "https://files.example.org/tarred-1.0.0.tgz"),
-                Locked("tarred", "1.0.0", "registry", "https://files.example.org/tarred-1.0.0.tgz"),
+                Locked("hosted", "1.0.0", "git", "git+https://github.com/o/hosted.git#0123"),
+                Locked("overridden", "4.0.0", "remote", "https://files.example.org/overridden.tgz"),
+                Locked(
+                    "regurl",
+                    "1.0.0",
+                    "remote",
+                    "https://registry.npmjs.org/regurl/-/regurl-1.0.0.tgz",
+                ),
+                Locked("tarred", "1.0.0", "remote", "https://files.example.org/tarred-1.0.0.tgz"),
                 Locked(
                     "left-pad",
                     "1.3.0",
@@ -624,14 +656,19 @@ class Npm(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertNotIn("@scope/private", err)
-            self.assertIn("tarred: tarball URL https://files.example.org/tarred-1.0.0.tgz", err)
+            self.assertIn(
+                "tarred@1.0.0: tarball URL https://files.example.org/tarred-1.0.0.tgz", err
+            )
+            self.assertIn("overridden@4.0.0: tarball URL", err)
+            self.assertIn("hosted@1.0.0: git source", err)
+            self.assertNotIn("github.com to typescript.sources.allow-registry", err)
             self.assertIn("somepkg@4.0.0: git source", err)
             self.assertIn(
                 "add https://git.example.org/example/somepkg to typescript.sources.allow-git", err
             )
             Path(tmp, "a.toml").write_text(
-                '[typescript.sources]\nallow-git = ["https://git.example.org/example/somepkg"]\n'
-                'allow-registry = ["https://files.example.org"]\n'
+                '[typescript.sources]\nallow-git = ["https://git.example.org/example/somepkg", "https://github.com/o/hosted"]\n'
+                'allow-registry = ["https://files.example.org", "https://registry.npmjs.org/regurl/"]\n'
             )
             code, _, err = self.run_main(
                 [

@@ -6,6 +6,9 @@ Local run, from the repo root, with the private-name list kept outside the check
     python3 scanner/scan.py --names-file <path to your private-name list>
 
 The list may come from the environment variable REPO_GUARDS_PRIVATE_NAMES instead.
+It scans the tracked files and the messages and author and committer emails of the
+commits in `--commits` (default origin/main..HEAD); `--pr-from-env` adds the PR title
+and body from PR_TITLE and PR_BODY.
 `--public` prints counts only; the default output gives a position for every hit
 but never the matched text. Leak-class hits in files are reported by the file's
 1-based index in `git ls-files`, never by its path. Exit 0 clean, 1 hits or list
@@ -254,11 +257,46 @@ def scan_files(report: Report, finders: dict[Check, Finder], files: list[Tracked
             scan_text(report, finders, f.text, Where(f.path, f.index))
 
 
+@dataclass(frozen=True)
+class Commit:
+    sha: str
+    author: str
+    committer: str
+    message: str
+
+
+def commits(top: str, revisions: str) -> list[Commit]:
+    out = git(top, "log", "-z", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", revisions)
+    fields = out.decode("utf-8", "replace").split("\0")
+    if fields and not fields[-1]:
+        fields.pop()
+    return [Commit(*fields[i : i + 4]) for i in range(0, len(fields) - 3, 4)]
+
+
+def scan_commits(report: Report, finders: dict[Check, Finder], log: list[Commit]) -> None:
+    email = next((c for c in finders if c.name == "email"), None)
+    for c in log:
+        scan_text(report, finders, c.message, Where(sha=c.sha))
+        for field, address in (("author", c.author), ("committer", c.committer)):
+            if email and not email_allowed(address):
+                report.add(email, Where(sha=c.sha, field=field))
+
+
+def scan_pull_request(report: Report, finders: dict[Check, Finder]) -> None:
+    # Title and body arrive through the environment, never through argv or shell text.
+    for field, var in (("title", "PR_TITLE"), ("body", "PR_BODY")):
+        scan_text(report, finders, os.environ.get(var, ""), Where(field=field))
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=".", help="git checkout to scan (default: current directory)")
     parser.add_argument("--checks", default=",".join(CHECKS), help="comma-separated checks (default: all): %(default)s")
     parser.add_argument("--names-file", help="private-name list, one literal per line; must be outside the checkout")
+    parser.add_argument("--commits", default="origin/main..HEAD",
+                        help="revision range whose commit messages and emails are scanned (default: %(default)s)")
+    parser.add_argument("--pr-from-env", action="store_true",
+                        help="also scan the PR title and body from the PR_TITLE and PR_BODY variables")
     parser.add_argument("--public", action="store_true", help="print counts only, for public CI logs")
     return parser.parse_args(argv)
 
@@ -284,7 +322,12 @@ def run(argv: list[str]) -> tuple[int, str]:
         else:
             finders[check] = TEXT_FINDERS[check.name]
 
-    scan_files(report, finders, tracked_files(top))
+    if finders:
+        log = commits(top, args.commits)
+        scan_files(report, finders, tracked_files(top))
+        scan_commits(report, finders, log)
+        if args.pr_from_env:
+            scan_pull_request(report, finders)
     return (1 if report.failed() else 0), report.render(args.public)
 
 

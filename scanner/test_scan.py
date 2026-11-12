@@ -334,5 +334,115 @@ class PrivateNames(unittest.TestCase):
         self.assertIn("file #%d path: email" % repo.index("docs/" + BOB_MAIL + ".md"), out)
 
 
+class Commits(unittest.TestCase):
+    def test_s2_commit_message_hit(self):
+        repo = Repo(self)
+        sha = repo.commit("first " + EM + " line\n\nbody")
+        code, out = repo.scan(*PUBLIC)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: em-dash" % sha, out)
+
+    def test_s4_push_range_reports_the_new_head(self):
+        repo = Repo(self)
+        before = repo.git("rev-parse", "HEAD")
+        sha = repo.commit("squash " + EM)
+        code, out = repo.scan(*PUBLIC, "--commits", before + ".." + sha)
+        self.assertEqual(code, 1, out)
+        self.assertIn(sha, out)
+
+    def test_commits_outside_the_range_are_not_scanned(self):
+        repo = Repo(self)
+        repo.commit("old " + EM)
+        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        repo.commit("clean")
+        self.assertEqual(repo.scan(*PUBLIC)[0], 0)
+
+    def test_s10_author_email(self):
+        repo = Repo(self)
+        sha = repo.commit("clean", email=BOB_MAIL)
+        code, out = repo.scan(*PUBLIC)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s author: email" % sha, out)
+        self.assertNotIn(BOB_MAIL, out)
+
+    def test_fr13_committer_email(self):
+        repo = Repo(self)
+        env = git_env()
+        env["GIT_COMMITTER_EMAIL"] = BOB_MAIL
+        repo.git("commit", "-q", "--allow-empty", "-m", "clean", env=env)
+        sha = repo.git("rev-parse", "HEAD")
+        code, out = repo.scan(*PUBLIC)
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s committer: email" % sha, out)
+
+    def test_allowed_commit_emails_pass(self):
+        repo = Repo(self)
+        repo.commit("clean", email="1+bot" + AT + "users.noreply.github.com")
+        self.assertEqual(repo.scan(*PUBLIC)[0], 0)
+
+    def test_s34_local_run_checks_unpushed_commits(self):
+        repo = Repo(self)
+        sha = repo.commit("see " + HOME_BOB, email=BOB_MAIL)
+        code, out = repo.scan("--names-file", repo.names_file(NAME))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s author: email" % sha, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
+    def test_private_names_in_commit_messages(self):
+        repo = Repo(self)
+        sha = repo.commit("x\n\nabout " + NAME)
+        code, out = repo.scan("--checks", "private-name", "--names-file", repo.names_file(NAME))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 3: private-name" % sha, out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_bad_range_is_a_usage_error(self):
+        repo = Repo(self)
+        code, out = repo.scan(*PUBLIC, "--commits", "nope..HEAD")
+        self.assertEqual(code, 2, out)
+        self.assertNotIn("total hits", out)
+
+    def test_public_output_hides_shas(self):
+        repo = Repo(self)
+        sha = repo.commit("x " + EM, email=BOB_MAIL)
+        code, out = repo.scan(*PUBLIC, "--public")
+        self.assertEqual(code, 1, out)
+        self.assertNotIn(sha, out)
+        self.assertIn("total hits: 2", out)
+
+
+class PullRequest(unittest.TestCase):
+    def test_s3_body_line(self):
+        repo = Repo(self)
+        body = "first\n" + "/" + "Users/someone/x\n"
+        code, out = repo.scan(*PUBLIC, "--pr-from-env", env={"PR_TITLE": "t", "PR_BODY": body})
+        self.assertEqual(code, 1, out)
+        self.assertIn("body line 2: local-path", out)
+        self.assertNotIn("someone", out)
+
+    def test_s29_title_private_name(self):
+        repo = Repo(self)
+        code, out = repo.scan(
+            "--checks", "private-name", "--pr-from-env", "--names-file", repo.names_file(NAME),
+            env={"PR_TITLE": "fix " + NAME, "PR_BODY": ""},
+        )
+        self.assertEqual(code, 1, out)
+        self.assertIn("title line 1: private-name", out)
+        self.assertNotIn(NAME, out.lower())
+
+    def test_s28_shell_text_in_the_title_is_data(self):
+        repo = Repo(self, {"a.md": NAME + "\n"})
+        code, out = repo.scan(
+            "--checks", "private-name", "--pr-from-env", "--names-file", repo.names_file(NAME),
+            env={"PR_TITLE": '"; exit 0; #', "PR_BODY": "$(true)"},
+        )
+        self.assertEqual(code, 1, out)
+
+    def test_pr_fields_not_read_without_the_flag(self):
+        repo = Repo(self)
+        code, out = repo.scan(*PUBLIC, env={"PR_TITLE": EM, "PR_BODY": EM})
+        self.assertEqual(code, 0, out)
+
+
 if __name__ == "__main__":
     unittest.main()

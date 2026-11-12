@@ -93,11 +93,10 @@ class PrePushHook(unittest.TestCase):
         self.assertNotIn(HOME_BOB, result.stdout + result.stderr)
         self.assertNotIn("notes.txt", result.stdout + result.stderr)
 
-    def test_author_email_and_private_name_in_the_branch_name_are_refused(self):
-        self.p.git("checkout", "-q", "-b", NAME)
-        self.p.git("commit", "-q", "--allow-empty", "-m", "x", "--author", "t <%s>" % BOB_MAIL)
-        result = self.p.push(NAME)
-        self.assertRefused(result, "author: email", "pushed ref #1 line 1: private-name", tip="")
+    def test_author_email_and_private_name_in_the_message_are_refused(self):
+        self.p.git("commit", "-q", "--allow-empty", "-m", "about " + NAME, "--author", "t <%s>" % BOB_MAIL)
+        result = self.p.push()
+        self.assertRefused(result, "author: email", "line 1: private-name")
         self.assertNotIn(NAME, (result.stdout + result.stderr).lower())
 
     def test_merge_brings_in_a_side_commit_with_a_hit(self):

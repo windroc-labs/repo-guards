@@ -647,21 +647,13 @@ ZERO = "0" * 40
 
 
 class PrePush(unittest.TestCase):
-    """`--pre-push` with git's hook input on stdin, against a bare remote holding the Repo's first commit."""
+    """`--pre-push origin` with git's hook input on stdin; the Repo's origin/main is what the remote has."""
 
-    def remote(self, repo, *refspecs):
-        bare = repo.tmp / "remote.git"
-        if not bare.exists():
-            subprocess.run(["git", "init", "-q", "--bare", str(bare)], env=git_env(), check=True)
-        for refspec in refspecs or ("refs/remotes/origin/main:refs/heads/main",):
-            repo.git("push", "-q", "-f", str(bare), refspec)
-        return str(bare)
-
-    def push(self, repo, *updates, names=(NAME,), checks=None, url=None):
+    def push(self, repo, *updates, names=(NAME,), checks=None):
         stdin = "".join(" ".join(u) + "\n" for u in updates)
         env = {SECRET_ENV: "\n".join(names)} if names else None
         args = ("--checks", checks) if checks else ()
-        return repo.scan(*args, "--pre-push", url or self.remote(repo), env=env, stdin=stdin)
+        return repo.scan(*args, "--pre-push", "origin", env=env, stdin=stdin)
 
     def main_update(self, repo, ref="refs/heads/main"):
         return ("refs/heads/main", repo.git("rev-parse", "HEAD"), ref, repo.git("rev-parse", "origin/main"))
@@ -735,24 +727,15 @@ class PrePush(unittest.TestCase):
         self.assertIn("commit %s author: email" % sha, out)
         self.assertNotIn(NAME, out.lower())
 
-    def test_new_branch_skips_what_the_remote_has(self):
+    def test_new_branch_skips_what_the_remote_tracking_refs_reach(self):
         repo = Repo(self)
         repo.commit("old " + HOME_BOB)
-        url = self.remote(repo, "HEAD:refs/heads/main")
+        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
         sha = repo.commit("new " + HOME_BOB)
-        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/topic", ZERO), url=url)
+        code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/topic", ZERO))
         self.assertEqual(code, 1, out)
         self.assertIn("total hits: 1", out)
         self.assertIn("commit %s line 1: local-path" % sha, out)
-
-    def test_history_the_remote_lost_is_scanned_despite_remote_tracking_refs(self):
-        repo = Repo(self)
-        old = repo.commit("old " + HOME_BOB)
-        repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
-        url = self.remote(repo, "%s:refs/heads/main" % repo.git("rev-parse", "HEAD~1"))
-        code, out = self.push(repo, ("refs/heads/main", old, "refs/heads/topic", ZERO), url=url)
-        self.assertEqual(code, 1, out)
-        self.assertIn("commit %s line 1: local-path" % old, out)
 
     def test_remote_sha_missing_here_is_ignored(self):
         repo = Repo(self)
@@ -760,13 +743,6 @@ class PrePush(unittest.TestCase):
         code, out = self.push(repo, ("refs/heads/main", sha, "refs/heads/main", "1" * 40))
         self.assertEqual(code, 1, out)
         self.assertIn("commit %s line 1: local-path" % sha, out)
-
-    def test_unreachable_destination_is_a_usage_error_without_the_url(self):
-        repo = Repo(self)
-        url = str(repo.tmp / "nope.git")
-        code, out = self.push(repo, self.main_update(repo), url=url)
-        self.assertEqual(code, 2, out)
-        self.assertNotIn(url, out)
 
     def test_local_ref_with_spaces(self):
         repo = Repo(self)
@@ -786,34 +762,13 @@ class PrePush(unittest.TestCase):
         self.assertIn("commit %s line 1: local-path" % leak, out)
         self.assertIn("total hits: 1", out)
 
-    def test_pushed_ref_name(self):
+    def test_annotated_tag_push_scans_the_tagged_commits(self):
         repo = Repo(self)
-        code, out = self.push(repo, self.main_update(repo, "refs/heads/" + NAME))
+        sha = repo.commit("see " + HOME_BOB)
+        repo.git("tag", "-a", "v1", "-m", "release")
+        code, out = self.push(repo, ("refs/tags/v1", repo.git("rev-parse", "v1"), "refs/tags/v1", ZERO))
         self.assertEqual(code, 1, out)
-        self.assertIn("pushed ref #1 line 1: private-name", out)
-        self.assertNotIn(NAME, out.lower())
-
-    def test_annotated_tag_name_message_and_tagger(self):
-        repo = Repo(self)
-        env = git_env()
-        env["GIT_COMMITTER_EMAIL"] = BOB_MAIL
-        repo.git("tag", "-a", "rel-" + NAME, "-m", "release " + NAME, env=env)
-        tag = repo.git("rev-parse", "rel-" + NAME)
-        code, out = self.push(repo, ("refs/tags/v1", tag, "refs/tags/v1", ZERO))
-        self.assertEqual(code, 1, out)
-        self.assertIn("tag %s name line 1: private-name" % tag, out)
-        self.assertIn("tag %s message line 1: private-name" % tag, out)
-        self.assertIn("tag %s tagger line 1: email" % tag, out)
-
-    def test_nested_tags_are_all_scanned(self):
-        repo = Repo(self)
-        repo.git("tag", "-a", "inner", "-m", "about " + NAME)
-        inner = repo.git("rev-parse", "inner")
-        repo.git("tag", "-a", "outer", "-m", "clean", "inner")
-        outer = repo.git("rev-parse", "outer")
-        code, out = self.push(repo, ("refs/tags/outer", outer, "refs/tags/outer", ZERO))
-        self.assertEqual(code, 1, out)
-        self.assertIn("tag %s message line 1: private-name" % inner, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
 
     def test_ref_naming_a_tree_or_blob_is_a_usage_error(self):
         repo = Repo(self)
@@ -824,7 +779,6 @@ class PrePush(unittest.TestCase):
             with self.subTest(sha=sha):
                 code, out = self.push(repo, ("refs/tags/t", sha, "refs/tags/t", ZERO))
                 self.assertEqual(code, 2, out)
-                self.assertIn("which the scan cannot check", out)
 
     def test_delete_only_push_passes(self):
         repo = Repo(self)
@@ -853,7 +807,7 @@ class PrePush(unittest.TestCase):
 
     def test_malformed_input_is_a_usage_error(self):
         repo = Repo(self)
-        code, out = repo.scan("--pre-push", self.remote(repo), stdin="garbage\n", env={SECRET_ENV: NAME})
+        code, out = repo.scan("--pre-push", "origin", stdin="garbage\n", env={SECRET_ENV: NAME})
         self.assertEqual(code, 2, out)
 
 if __name__ == "__main__":

@@ -23,11 +23,10 @@ private-name 名单从环境变量 `REPO_GUARDS_PRIVATE_NAMES` 读，每行一�
 
 ## 扫什么
 
-- 只扫 push 新发布的内容：push 的 commit 里，目标 repo 现在没有的那些。目标有什么由 `git ls-remote <push 的 URL>` 当场查，不信本地的 remote-tracking ref：目标换过 repo 或删过分支时，它们会指向目标已经没有的历史。
-- 每个这样的 commit：message，author 和 committer 的 email，它新增或改动的每个文件的路径和内容（后来又删掉的也扫）。非 UTF-8 文件跳过并计数，和 `scan.py` 扫 tracked 文件一样。
-- annotated tag 的名字、message 和 tagger email（tag 套 tag 时每层都扫）；push 的 ref 名。
+- 只扫 push 的 commit 里，这个 remote 的 remote-tracking ref（`refs/remotes/<remote>/*`）和 git 给出的目标 ref 原值都到不了的那些，不联网查目标。目标换过 repo 或删过分支而本地没 `git fetch --prune` 时，过时的 remote-tracking ref 可能让目标已经没有的 commit 漏扫；CI 的 private-names 检查兜底。
+- 每个这样的 commit：message，author 和 committer 的 email，它新增或改动的每个文件的路径和内容。中间 commit 里的泄漏即使后面的 commit 删掉了，push 后也公开，所以也扫。非 UTF-8 文件跳过并计数，和 `scan.py` 扫 tracked 文件一样。
 - 检查项：`scan.py` 的 leak 类检查（private-name、local-path、email），即 `--pre-push` 的默认检查。
-- 不查 tracker ID：public repo 里允许出现。
+- 不查 tracker ID：public repo 里允许出现。也不扫 tag 的名字、message、tagger 和 ref 名。
 - 每个启用了 hook 的 clone 的每次 push 都扫，不查目标 repo 是否 public。
 - 不代替 [AGENTS.md](../AGENTS.md) 要求的 push 前检查：hygiene 类检查（em-dash、link）和 PR 标题、正文还是由 `scan.py` 和 CI 查。CI 的 private-names 检查继续作为后备。
 
@@ -39,4 +38,4 @@ private-name 名单从环境变量 `REPO_GUARDS_PRIVATE_NAMES` 读，每行一�
 |---|---|
 | 有 hit | 在本地 amend 或 rebase 去掉，再 push。内容还没发布，改本地 commit 就够了 |
 | 名单不可用 | 设置 `REPO_GUARDS_PRIVATE_NAMES` 后重新 push，commit 不用改 |
-| 用法错误（退出码 2） | 输出给出原因，例如 ref 指向的不是 commit，或 `git ls-remote` 连不上目标。修好前 push 一直被拒 |
+| 用法错误（退出码 2） | 输出给出原因，例如 ref 指向的不是 commit。修好前 push 一直被拒 |

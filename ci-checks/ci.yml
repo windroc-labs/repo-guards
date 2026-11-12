@@ -21,11 +21,10 @@ jobs:
     uses: windroc-labs/repo-guards/.github/workflows/python.yml@main
     with:
       runs-on: '["self-hosted","linux"]'
-      source-dirs: src
   typescript:
     uses: windroc-labs/repo-guards/.github/workflows/typescript.yml@main
     with:
-      knip-entry: '["src/index.ts!"]'
+      working-directory: .
   go:
     uses: windroc-labs/repo-guards/.github/workflows/go.yml@main
     with:

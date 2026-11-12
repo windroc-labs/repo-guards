@@ -172,14 +172,7 @@ jobs:
             exit 1
           fi
           if [[ $MODE == merge ]]; then
-            # Each shard's targets are its words before --; cargo-llvm-cov rejects a flag such as --lib given twice.
-            UNIT_TESTS=$(uv run --no-project --python 3.12 python -I -c '
-          import json, os
-          targets = []
-          for shard in json.loads(os.environ["SHARDS"]):
-              words = shard.split()
-              targets += words[: words.index("--")] if "--" in words else words
-          print(*dict.fromkeys(targets))')
+            UNIT_TESTS=$(uv run --no-project --python 3.12 "$RG/rust/shard-targets/shard_targets.py" "$SHARDS")
           fi
           # -d '' reads past newlines, so a multi-line value is read whole; read then returns 1 at its end.
           read -ra targets -d '' <<< "$UNIT_TESTS" || true

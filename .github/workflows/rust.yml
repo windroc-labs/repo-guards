@@ -15,6 +15,10 @@ on:
         description: The repo's cargo-deny allowlist, merged into the shared deny.toml
         type: string
         default: .github/checks/deny-allowlist.toml
+      unit-tests:
+        description: The unit-test targets coverage measures, space-separated --lib, --bins, --bin=<name> or --test=<name>
+        type: string
+        default: --lib --bins
 
 permissions:
   contents: read
@@ -101,17 +105,35 @@ jobs:
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
-      # The coverage steps run the PR's tests, so they come after every static check.
+      # The test and coverage steps run the PR's code, so they come after every static check.
+      # Coverage runs only the unit-test targets, so this step runs every test target.
+      - name: Tests
+        if: ${{ !cancelled() }}
+        run: cargo test --workspace --all-features --locked --tests
       - name: Coverage
         id: coverage
         if: ${{ !cancelled() }}
         env:
           PROJECT_DIR: ${{ inputs.working-directory }}
+          UNIT_TESTS: ${{ inputs.unit-tests }}
         run: |
+          # Target selectors only: any other cargo-llvm-cov option could loosen the locked coverage config.
+          # -d '' reads past newlines, so a multi-line value is checked whole; read then returns 1 at its end.
+          read -ra targets -d '' <<< "$UNIT_TESTS" || true
+          for target in "${targets[@]}"; do
+            if [[ ! $target =~ ^--(lib|bins|(bin|test)=[A-Za-z0-9_-]+)$ ]]; then
+              echo "::error::unit-tests: $target is not --lib, --bins, --bin=<name> or --test=<name>"
+              exit 1
+            fi
+          done
+          if (( ${#targets[@]} == 0 )); then
+            echo "::error::unit-tests names no test target"
+            exit 1
+          fi
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
           export RUSTUP_TOOLCHAIN=$COVERAGE_TOOLCHAIN
           measure() {
-            (cd "$1" && cargo llvm-cov --workspace --all-features --locked --branch --ignore-filename-regex "$regex" --cobertura --output-path "$2")
+            (cd "$1" && cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$2")
           }
           # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
           git worktree prune

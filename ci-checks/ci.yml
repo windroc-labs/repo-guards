@@ -16,6 +16,7 @@ jobs:
     with:
       runs-on: '"ubuntu-latest"'
       working-directory: .
+      unit-tests: --lib --bins
   python:
     uses: windroc-labs/repo-guards/.github/workflows/python.yml@0000000000000000000000000000000000000000
     with:

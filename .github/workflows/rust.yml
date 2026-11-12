@@ -105,11 +105,7 @@ jobs:
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
-      # The test and coverage steps run the PR's code, so they come after every static check.
-      # Coverage runs only the unit-test targets, so this step runs every test target.
-      - name: Tests
-        if: ${{ !cancelled() }}
-        run: cargo test --workspace --all-features --locked --tests
+      # The coverage steps run the PR's tests, so they come after every static check.
       - name: Coverage
         id: coverage
         if: ${{ !cancelled() }}

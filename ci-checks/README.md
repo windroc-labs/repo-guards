@@ -213,9 +213,9 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | Rust | Python | TypeScript |
 |---|---|---|
 | [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
-| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`；Tests 步另跑全部测试目标，不量覆盖率 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
+| `rust.yml` 的 `unit-tests` 输入选 cargo 测试目标，默认 `--lib --bins`：Coverage 步只跑这些目标 | repo 自己的 pytest 配置（`testpaths`、`addopts`）：Coverage 步跑不带参数的 `pytest` | repo 自己的 vitest 配置（`test.include`、`test.exclude`）：Coverage 步跑 `vitest run` |
 
-覆盖率只算单元测试：改动行、总覆盖率和 merge-base 的比较、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。集成测试照样跑，但不进覆盖率；Python 和 TypeScript 的 workflow 只跑配置选中的测试，集成测试由 repo 自己的 job 跑。
+覆盖率只算单元测试：改动行、总覆盖率和 merge-base 的比较、第 9 项 CRAP 分数的覆盖率，都只来自单元测试。哪些是单元测试由各 repo 自己说（上表最后一行）。单元测试只跑一遍，就在 Coverage 步里。集成测试是 repo 自己的，由 repo 自己的 job 跑，不进覆盖率，三个 workflow 都不跑。
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 

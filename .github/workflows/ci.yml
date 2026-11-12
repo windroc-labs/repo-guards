@@ -120,36 +120,7 @@ jobs:
               exit 1
             fi
           done
-          python3 - "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP" <<'PY'
-          import json, os, subprocess, sys
-          top, tmp = sys.argv[1], sys.argv[2]
-          indexes = {}
-
-          def index_of(path, commit):
-              # FR-21: a file is named by its 1-based place in the scanned commit's file list, never by its path.
-              if commit not in indexes:
-                  cmd = ["ls-files", "-z"] if commit == "HEAD" else ["ls-tree", "-r", "-z", "--name-only", commit]
-                  listed = subprocess.run(["git", "-C", top, *cmd], capture_output=True, check=True).stdout
-                  indexes[commit] = {os.fsdecode(p): n for n, p in enumerate(dict.fromkeys(listed.split(b"\0")[:-1]), 1)}
-              return indexes[commit].get(path)
-
-          hits = 0
-          for scan in ("files", "commits", "messages"):
-              for f in json.load(open(os.path.join(tmp, "gitleaks-%s.json" % scan))):
-                  hits += 1
-                  line, col = f["StartLine"], f["StartColumn"]
-                  if scan == "messages":
-                      where = "commit %s line %d" % (os.path.basename(f["File"]), line)
-                  else:
-                      commit = f["Commit"] if scan == "commits" else "HEAD"
-                      n = index_of(os.path.relpath(f["File"], top) if scan == "files" else f["File"], commit)
-                      where = "file #%d:%d:%d" % (n, line, col) if n else "line %d" % line
-                      if scan == "commits":
-                          where = "commit %s %s" % (commit, where)
-                  print("%s: gitleaks (leak) rule %s" % (where, f["RuleID"]))
-          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
-              out.write("hits=%d\n" % hits)
-          PY
+          python3 "$GITHUB_WORKSPACE/tree/repo/scanner/gitleaks_report.py" "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP"
       - name: actionlint
         id: actionlint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -215,6 +186,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/python/comment-budget
         run: python3 -m unittest comment_budget_test
+      - name: Python pyproject config tests
+        id: pyproject-config
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/pyproject-config
+        run: python3 -m unittest pyproject_config_test
       - name: TypeScript comment budget tests
         id: typescript
         if: ${{ !cancelled() }}
@@ -222,6 +198,11 @@ jobs:
         run: |
           npm ci --no-audit --no-fund --ignore-scripts
           npm test
+      - name: TypeScript workflow config tests
+        id: workflow-config
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/workflow-config
+        run: node --test workflow-config.test.ts
       - name: Dependency allowlist tests
         id: dependency-allowlist
         if: ${{ !cancelled() }}
@@ -232,6 +213,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/deny-merge
         run: python3 -m unittest deny_merge_test
+      - name: shard-targets tests
+        id: shard-targets
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/shard-targets
+        run: python3 -m unittest shard_targets_test
       - name: Rust comment budget tests
         id: rust
         if: ${{ !cancelled() }}
@@ -258,9 +244,12 @@ jobs:
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
           GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
+          SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
+          PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
+          WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

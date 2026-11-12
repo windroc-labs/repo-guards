@@ -79,3 +79,15 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 | [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
 `python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile 或 `requirements.txt`，没装 pytest 的 `requirements.txt` 项目用共用 `dev` 组固定的版本；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
+
+## 读 pyproject.toml（pyproject-config）
+
+[`pyproject-config/`](pyproject-config/) 是 `python.yml` 读 TOML 用的脚本，只用标准库，要 Python 3.11 及以上。
+
+| 项 | 内容 |
+|---|---|
+| `pin PYPROJECT PREFIX` | 打印 `dev` 组里第一个以 `PREFIX` 开头的条目，如 `pytest==`；Unused dependencies 步和 Coverage 步用它取 deptry、coverage.py、pytest 的固定版本 |
+| `project-name PYPROJECT` | 打印 `project.name`，没有就打印空行；Licenses 步用它跳过项目自己 |
+| `pyright-config PYPROJECT OUTPUT [DIR ...]` | 把 `[tool.pyright]` 写成 JSON，`extraPaths` 换成各 `DIR` 的绝对路径；Type check 步用它 |
+| 退出码 | 0 成功；2 出错（参数不对、文件缺失、TOML 不对、缺键、`pin` 找不到） |
+| 测试 | 在该目录跑 `python3 -m unittest pyproject_config_test` |

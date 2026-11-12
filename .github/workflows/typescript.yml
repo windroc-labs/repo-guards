@@ -100,7 +100,7 @@ jobs:
       - name: Type check
         if: ${{ !cancelled() }}
         run: |
-          mapfile -t flags < <(node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).compilerOptions)) console.log(`--${k}\n${v}`)' "$RG/typescript/tsconfig.json")
+          mapfile -t flags < <(node "$RG/typescript/workflow-config/workflow-config.ts" tsc-flags "$RG/typescript/tsconfig.json")
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format tsc -- tsc --project tsconfig.json --noEmit --pretty false "${flags[@]}"
       - name: Dead code and unused dependencies
         if: ${{ !cancelled() }}
@@ -108,7 +108,7 @@ jobs:
           ENTRY: ${{ inputs.knip-entry }}
           PROJECT: ${{ inputs.knip-project }}
         run: |
-          node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
+          node "$RG/typescript/workflow-config/workflow-config.ts" knip-config "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format knip -- knip --production --config "$RUNNER_TEMP/knip.json" --reporter json
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
@@ -127,7 +127,7 @@ jobs:
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
-          allowed=$(node -e 'const { parse } = require(require.resolve("smol-toml", { paths: [process.argv[1]] })); console.log(parse(require("fs").readFileSync(process.argv[2], "utf8")).allow.join(";"))' "$RG/typescript/comment-budget" "$RG/licenses.toml")
+          allowed=$(node "$RG/typescript/workflow-config/workflow-config.ts" license-allow "$RG/typescript/comment-budget" "$RG/licenses.toml")
           args=(--onlyAllow "$allowed" --excludePrivatePackages)
           if [[ -f "$EXCEPTIONS" ]]; then
             args+=(--excludePackages "$({ grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true; } | paste -sd ';' -)")
@@ -178,15 +178,15 @@ jobs:
             exit 1
           fi
           flags=(--coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura)
-          mapfile -t include < <(node -e 'for (const g of JSON.parse(process.argv[1])) if (g.endsWith("!")) console.log(g.slice(0, -1))' "$PROJECT")
-          mapfile -t exclude < <(node -e 'for (const g of require(process.argv[1]).exclude) console.log(g)' "$RG/typescript/coverage.json")
+          mapfile -t include < <(node "$RG/typescript/workflow-config/workflow-config.ts" coverage-include "$PROJECT")
+          mapfile -t exclude < <(node "$RG/typescript/workflow-config/workflow-config.ts" coverage-exclude "$RG/typescript/coverage.json")
           for glob in "${include[@]}"; do flags+=("--coverage.include=$glob"); done
           for glob in "${exclude[@]}"; do flags+=("--coverage.exclude=$glob"); done
           report=--coverage.reportsDirectory="$RUNNER_TEMP/coverage-head"
           # Blob reports hold absolute paths and runners may check out to different directories:
           # shards store a placeholder for the checkout root, and merge puts its own back.
           root=/__repo_guards_checkout__
-          swap() { node -e 'const fs = require("fs"); const [file, from, to] = process.argv.slice(1); fs.writeFileSync(file, fs.readFileSync(file, "utf8").split(from).join(to))' "$@"; }
+          swap() { node "$RG/typescript/workflow-config/workflow-config.ts" replace "$@"; }
           case $MODE in
             whole)
               npx --no-install vitest run "${flags[@]}" "$report" ;;

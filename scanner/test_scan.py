@@ -737,6 +737,22 @@ class PrePush(unittest.TestCase):
         self.assertIn("total hits: 1", out)
         self.assertIn("commit %s line 1: local-path" % sha, out)
 
+    def test_remote_sha_from_the_input_excludes_its_history(self):
+        repo = Repo(self)
+        old = repo.commit("old " + HOME_BOB)
+        new = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/topic", new, "refs/heads/topic", old))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % new, out)
+        self.assertIn("total hits: 1", out)
+
+    def test_ref_names_with_unicode_line_separators(self):
+        repo = Repo(self)
+        sha = repo.commit("new " + HOME_BOB)
+        code, out = self.push(repo, ("refs/heads/a\u0085b", sha, "refs/heads/a\u2028b", ZERO))
+        self.assertEqual(code, 1, out)
+        self.assertIn("commit %s line 1: local-path" % sha, out)
+
     def test_remote_sha_missing_here_is_ignored(self):
         repo = Repo(self)
         sha = repo.commit("new " + HOME_BOB)

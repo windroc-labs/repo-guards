@@ -320,7 +320,10 @@ def lines(items: Iterable[str]) -> bytes:
 def pushed_revisions(top: str, remote: str, text: str) -> list[str]:
     """`git log` revisions of the commits a push publishes, from git's pre-push input lines."""
     heads, known = [], []
-    for number, line in enumerate(text.splitlines(), 1):
+    # Ref names may hold characters str.splitlines() breaks on; git ends each line with "\n".
+    for number, line in enumerate(text.split("\n"), 1):
+        if not line:
+            continue
         fields = line.rsplit(" ", 3)
         if len(fields) != 4 or not (SHA.fullmatch(fields[1]) and SHA.fullmatch(fields[3])):
             raise Usage("unexpected pre-push input line %d" % number)

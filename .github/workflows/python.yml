@@ -70,6 +70,9 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      - &apply-overrides
+        name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - name: Install the shared dev group
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
@@ -172,6 +175,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
       - &install-python
         name: Install Python 3.12
@@ -273,6 +277,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-python
       - *coverage
       - name: Upload shard data

@@ -68,6 +68,9 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      - &apply-overrides
+        name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - &install-node
         name: Install Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -151,6 +154,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-node
       - *npmrc
       - name: Install diff-cover
@@ -236,6 +240,8 @@ jobs:
     steps:
       - *checkout
       - *checkout-repo-guards
+      - *install-uv
+      - *apply-overrides
       - *install-node
       - *npmrc
       - *install-project

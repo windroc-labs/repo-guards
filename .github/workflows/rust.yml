@@ -39,6 +39,7 @@ jobs:
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       CARGO_TERM_COLOR: always
       TOOLCHAIN: rust-toolchain.toml
+      TOOLCHAIN_KEY: toolchain channel
       COMPONENTS: rustfmt,clippy
     defaults: &defaults
       run:
@@ -67,11 +68,15 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
-      # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain; COMPONENTS adds to it.
+      - &apply-overrides
+        name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+      # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain at TOOLCHAIN_KEY; COMPONENTS adds to it.
       - &install-rust
         name: Install Rust
         run: |
-          toolchain=$(sed -n -E 's/^(channel|toolchain) = "(.*)"$/\2/p' "$RG/rust/$TOOLCHAIN")
+          read -ra key <<< "$TOOLCHAIN_KEY"
+          toolchain=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/rust/$TOOLCHAIN" "${key[@]}")
           if ! command -v rustup >/dev/null; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path
             echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
@@ -133,6 +138,7 @@ jobs:
       BASE_REF: *base-ref
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
+      TOOLCHAIN_KEY: toolchain
       COMPONENTS: llvm-tools-preview
       MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
       SHARDS_RESULT: ${{ needs.coverage-shard.result }}
@@ -143,6 +149,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-rust
       - *cache
       - &install-llvm-cov
@@ -176,7 +183,7 @@ jobs:
           fi
           # -d '' reads past newlines, so a multi-line value is read whole; read then returns 1 at its end.
           read -ra targets -d '' <<< "$UNIT_TESTS" || true
-          regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
+          regex=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/rust/coverage.toml" ignore-filename-regex)
           llvm_cov=(cargo llvm-cov --workspace --all-features --locked --branch)
           # The targets go last, so the test-name filters after their -- reach the test binaries.
           if [[ $MODE == whole ]]; then
@@ -233,6 +240,7 @@ jobs:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
+      TOOLCHAIN_KEY: toolchain
       COMPONENTS: llvm-tools-preview
       MODE: shard
       SHARD: ${{ strategy.job-index }}
@@ -243,6 +251,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-rust
       - *cache
       - *install-llvm-cov

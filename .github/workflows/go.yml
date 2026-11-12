@@ -72,6 +72,9 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      - &apply-overrides
+        name: Apply caller overrides
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - &install-go
         name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -185,6 +188,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-go
       - *go-caches
       - name: Install gocover-cobertura
@@ -281,6 +285,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - *install-go
       - *go-caches
       - *coverage

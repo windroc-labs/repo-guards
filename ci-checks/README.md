@@ -40,7 +40,7 @@
 
 ## 语言级
 
-现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。表下每项一节，列出细节和 Rust、Python、TypeScript、Go 默认选用的工具；每种语言的模板配置和跑它的步见各语言 README。"模板"一列：✅ 四种语言的模板和 workflow 都有了，⚠️ 只做了一部分，空着是还没开始。
+现成工具加配置：一行一类工具，对应一份锁住的配置；没有现成工具的（注释预算）用自己的检查器。每项的细节和 Rust、Python、TypeScript、Go 默认选用的工具见[附录：语言级各项](#语言级各项)；每种语言的模板配置和跑它的步见各语言 README。"模板"一列：✅ 四种语言的模板和 workflow 都有了，⚠️ 只做了一部分，空着是还没开始。
 
 | # | 项 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 模板 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -57,7 +57,52 @@
 | 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |  |
 | 12 | [文档测试](#文档测试)（按项目需要） | 文档里的示例能跑，结果和文档一致 | 文档 | 文档和代码脱节 | 每个 PR |  |
 
-### 只查改动行
+## 流程级
+
+本 repo 只定要求（第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
+
+状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
+
+| # | 检查 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 状态 |
+|---|---|---|---|---|---|---|
+| 13 | [行内豁免](#行内豁免) | 每一处豁免都要在豁免白名单里登记，登记和代码对不上就失败 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR |  |
+| 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |  |
+| 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |  |
+| 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |  |
+| 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开 | 检查工具清单 | PR 的依赖换掉检查工具；工具升级让检查悄悄变松 | 每个 PR | ⚠️ |
+| 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |  |
+| 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |  |
+| 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |  |
+| 21 | [`.github/` 改动单独成 PR](#github-改动单独成-pr) | 改了 `.github/` 下任何文件的 PR，不能改别的文件 | `.github/` 里的 CI 文件 | 改 CI 的 PR 只经过旧版或它自己改过的检查，夹带的别的改动也就没经过新版检查 | 每个 PR | ✅ |
+
+## CODEOWNERS
+
+本页启用的检查，"标准答案"一列里的东西都进 CODEOWNERS，改它要 owner 批准；不锁的话，检查形同虚设。实现文件不锁，worker 才能自由改。
+
+| 锁什么 | 包括 | 写法 | 防什么 |
+|---|---|---|---|
+| 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
+| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；重复基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
+| 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
+| 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
+| 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |
+| git 配置 | `.gitignore`、`.gitattributes` | 文件名 | 把文件藏进被忽略的路径；改文件属性躲过 diff |
+| 不锁 | 实现文件；lockfile 由 repo 自己定，它的变动由依赖检查管 | | |
+
+各语言的配置文件名：
+
+| 语言 | 进 CODEOWNERS 的配置文件名 |
+|---|---|
+| Rust | `rustfmt.toml`, `.rustfmt.toml`, `clippy.toml`, `.clippy.toml`, `**/.cargo/config.toml`, `**/.cargo/config`, `**/.cargo/mutants.toml`, `mutants.toml`, `deny.toml`, `rust-toolchain.toml`, `rust-toolchain`, `**/.config/nextest.toml`, `build.rs` |
+| Python | `pyproject.toml`, `setup.py`, `ruff.toml`, `.ruff.toml`, `setup.cfg`, `tox.ini`, `pytest.ini`, `conftest.py`, `.coveragerc`, `mypy.ini`, `.mypy.ini`, `pyrightconfig.json`, `sitecustomize.py`, `usercustomize.py` |
+| TypeScript | `package.json`, `.prettierignore`, `.eslintignore`, `tsconfig*.json`, `jsconfig*.json`, `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `prettier.config.*`, `vitest.config.*`, `vite.config.*`, `jest.config.*`, `.c8rc*`, `.nycrc*`, `stryker.conf.*`, `knip.json`, `.knip.json*`, `.npmrc` |
+| Go | `go.mod`, `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`, `go.work` |
+
+## 附录
+
+### 语言级各项
+
+#### 只查改动行
 
 第 1、2、4、5 项只挡新问题，接入时不用改现有代码。工具照旧查整个项目，再由 [`diff-filter/diff_filter.py`](diff-filter/diff_filter.py)（只用标准库）只留 PR 改动行上的问题：
 
@@ -76,13 +121,13 @@
 | 退出码 | 0 通过，1 改动行上有问题，2 出错 |
 | 测试 | 在该目录跑 `python3 -m unittest diff_filter_test` |
 
-### formatter
+#### formatter
 
 | Rust | Python | TypeScript | Go |
 |---|---|---|---|
 | [rustfmt](rust/README.md#formatterrustfmt) | [ruff format](python/README.md#formatterruff-format) | [prettier](typescript/README.md#formatterprettier) | [gofmt](go/README.md#formattergofmt) |
 
-### linter 规则
+#### linter 规则
 
 所有规则都开在 error 级，改动行上的 warning 也让 CI 失败（Rust 由[只查改动行](#只查改动行)的脚本判，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别，golangci-lint 报的都算）。linter 配置至少开着这些规则。后四列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`、Go `forbidigo`（禁用的函数）和 `depguard`（禁用的包）；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint），Go 用 [golangci-lint](go/README.md#lintergolangci-lint)。
 
@@ -137,7 +182,7 @@
 | 测试质量 | 测试里没有宽泛的 catch | 吞掉失败 | `clippy::disallowed_methods`（`disallowed-methods`：`std::panic::catch_unwind`） | `BLE001`、`PT011` | `no-restricted-syntax`（`CatchClause`） | `forbidigo`（`recover`） |
 | 测试质量 | 测试里没有行内覆盖超时、随机种子、样例数 | 在测试里局部放宽 | 无现成规则 | `TID251`（`banned-api`：`hypothesis.settings`、`random.seed`） | `no-restricted-syntax` | `forbidigo`（`rand.Seed`、`quick.Config`） |
 
-#### 测试标记变量
+##### 测试标记变量
 
 "发布代码不按名字读 CI 或测试标记变量"一条的细节。标记变量指 `CI`、`TEST`、`NODE_ENV`、`VITEST`、`VITEST_*`、`GITHUB_*`、`RUNNER_*`、`PYTEST_*`。变量名必须是字符串字面量，动态拼名字躲不过。漏网的由流程级[隔离再跑](#流程级)（第 16 项）抓。
 
@@ -148,7 +193,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 - 非字面量下标：`MemberExpression[object.object.name="process"][object.property.name="env"][computed=true][property.type!="Literal"]`
 - 不是直接 `.NAME` 或 `["NAME"]` 成员访问的 `process.env`，如别名 `const e = process.env; e.CI`、解构、整个传出去：`MemberExpression[object.name="process"][property.name="env"]:not(MemberExpression > .object)`
 
-### 注释预算
+#### 注释预算
 
 代码自己说明自己。没有现成 linter 能查，每种语言用该语言写一个自己的检查器，放在 `ci-checks/<语言>/comment-budget/`。怎么量、上限多少，见各语言 README 的"注释预算"一节：
 
@@ -156,7 +201,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 |---|---|---|---|
 | [comment-budget](rust/README.md#注释预算) | [comment-budget](python/README.md#注释预算) | [comment-budget](typescript/README.md#注释预算) | [comment-budget](go/README.md#注释预算) |
 
-### 类型检查规则
+#### 类型检查规则
 
 工具：Rust 用[编译器](rust/README.md#类型检查编译器)，Python 用 [pyright](python/README.md#类型检查pyright)，TypeScript 用 [tsc](typescript/README.md#类型检查tsc)，Go 用编译器和 [go vet](go/README.md#类型检查go-vet)。
 
@@ -173,7 +218,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 | 屏蔽类型检查的注释写明规则，多余的报错 | 整片屏蔽 | 不适用（类型错误无法屏蔽） | `reportUnnecessaryTypeIgnoreComment`；写明规则见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则) | 不适用（类型错误无法屏蔽） |
 | 不用已废弃的 API | 用上将删的接口 | `deprecated` | `reportDeprecated`（strict） | 见 [linter 规则](#linter-规则) | 见 [linter 规则](#linter-规则)（`go vet` 不查） |
 
-### 死代码
+#### 死代码
 
 文件内的由 linter 或编译器查；公开了但没人调用的要专门工具。模板见各语言 README：[Rust](rust/README.md#死代码编译器cargo-machete)、[Python](python/README.md#死代码vulturedeptry)、[TypeScript](typescript/README.md#死代码knip)、[Go](go/README.md#死代码unuseddeadcode)。
 
@@ -181,7 +226,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 |---|---|---|---|
 | 非测试构建下的编译器 `dead_code`：`#[cfg(test)]` 的代码不参与编译；不查 crate 导出的 `pub` 项 | ruff；vulture 只扫发布代码目录，不扫测试 | tsc；knip `--production`：入口只取标 `!` 的发布代码 | golangci-lint `unused`（`--tests=false`，不看测试文件）；有 `main` 包的模块再跑 `deadcode`（不带 `-test`）；只有库的模块不查导出的函数，同 Rust 不查 `pub` 项 |
 
-### 重复代码
+#### 重复代码
 
 四种语言都用 jscpd，版本锁在 [`jscpd-requirements.in`](jscpd-requirements.in)（Rust 引擎；4.x 的 Node 引擎没有 `--baseline`），由 [`jscpd.yml`](../.github/workflows/jscpd.yml) 跑，配置是共用的 [`.jscpd.json`](.jscpd.json)：`minTokens`、`minLines` 是门槛，短于它的重复不算；`ignore` 排除测试文件；`gitignore` 为 false：不读 PR 的 `.gitignore`，排除只认 `.jscpd.json`；`failOnNewClones` 为 0：不在基线里的重复都失败。基线是 `jscpd.yml` 的 `baseline` 输入，不存在时直接失败。接入时生成基线，之后只能变小：
 
@@ -191,7 +236,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 `ignorePattern` 算行内豁免。
 
-### 依赖检查规则
+#### 依赖检查规则
 
 依赖检查至少开着这些规则。Rust 的配置模板见 [Rust README](rust/README.md#依赖检查cargo-deny)。"脚本"指各 repo 自己写的检查；标"项目白名单"的，名单内容由各项目定，放进锁住的依赖白名单。
 
@@ -207,7 +252,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外由项目定 | [`license-check`](go/README.md#许可证license-check) 认出 build list 里每个模块的许可证文件，对共用名单（[`licenses.toml`](licenses.toml)）判定；例外由项目定 |
 | 没有用不到的依赖 | 没用的依赖 | [cargo-machete](rust/README.md#死代码编译器cargo-machete) | [deptry](python/README.md#死代码vulturedeptry)（`DEP002`） | [knip](typescript/README.md#死代码knip) | [`go mod tidy -diff`](go/README.md#依赖检查go-mod-tidygovulncheck) |
 
-### 依赖白名单
+#### 依赖白名单
 
 一份项目依赖白名单管四种语言：`rust.yml`、`python.yml`、`typescript.yml`、`go.yml` 的 `deny-allowlist` 输入，默认 `.github/checks/deny-allowlist.toml`，写法同 cargo-deny。各 workflow 的 Dependency allowlist 步用 [`dependency-allowlist/dependency_allowlist.py`](dependency-allowlist/dependency_allowlist.py)（只用标准库）拿 PR 的 lockfile 和 merge-base 的比：新增的包和版本变了的包要在 `bans.allow` 里，否则失败。没变的和删掉的不查，接入时不用列现有依赖；修法总是加一条。
 
@@ -218,7 +263,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 - `bans.allow` 不交给 cargo-deny：名单不空时，cargo-deny 会禁掉名单外的所有 crate。
 - 测试：在该目录跑 `python3 -m unittest dependency_allowlist_test`。
 
-### 覆盖率
+#### 覆盖率
 
 四种语言各自只跑单元测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
 
@@ -242,7 +287,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 
-### CRAP 分数
+#### CRAP 分数
 
 只报告，不强制。各 workflow 最后一步 CRAP report 用同一个脚本 [`crap/crap_report.py`](crap/crap_report.py)（只用标准库）算，把分数最高的 20 个函数写成表格放进 job summary（文件、函数、复杂度、覆盖率、分数），不留文件、不发 PR 评论。
 
@@ -255,50 +300,34 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 
 测试：在 `crap/` 跑 `python3 -m unittest crap_report_test`。
 
-### 变异测试
+#### 变异测试
 
 | Rust | Python | TypeScript | Go |
 |---|---|---|---|
 | cargo-mutants | mutmut | Stryker | gremlins |
 
-### sanitizer
+#### sanitizer
 
 | Rust | Python | TypeScript | Go |
 |---|---|---|---|
 | ASan、TSan、Miri | 不适用 | 不适用 | `-race`（竞态检测） |
 
-### 文档测试
+#### 文档测试
 
 | Rust | Python | TypeScript | Go |
 |---|---|---|---|
 | `cargo test --doc` | doctest | 无标准工具 | `Example` 函数（带 `// Output:`，由 `go test` 跑） |
 
-## 流程级
+### 流程级各项
 
-本 repo 只定要求（第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。表下几节是要求较长的检查的细节。
-
-状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
-
-| # | 检查 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 状态 |
-|---|---|---|---|---|---|---|
-| 13 | [行内豁免](#行内豁免) | 每一处豁免都要在豁免白名单里登记，登记和代码对不上就失败 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR |  |
-| 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |  |
-| 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |  |
-| 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |  |
-| 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开 | 检查工具清单 | PR 的依赖换掉检查工具；工具升级让检查悄悄变松 | 每个 PR | ⚠️ |
-| 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |  |
-| 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |  |
-| 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |  |
-| 21 | [`.github/` 改动单独成 PR](#github-改动单独成-pr) | 改了 `.github/` 下任何文件的 PR，不能改别的文件 | `.github/` 里的 CI 文件 | 改 CI 的 PR 只经过旧版或它自己改过的检查，夹带的别的改动也就没经过新版检查 | 每个 PR | ✅ |
-
-### 行内豁免
+#### 行内豁免
 
 - 各工具的豁免都算：lint、类型检查、覆盖率排除、跳过标记、死代码和重复代码的忽略、sanitizer 抑制、"生成文件"头。
 - 登记的内容：工具、文件、规则编号、所在函数、次数、原因。
 - 没登记的、次数对不上的、登记了但代码里已经没有的，都失败。
 - 例外：Rust 加在 `#[cfg(test)] mod tests` 上的 `coverage(off)` 不用登记（见[第 8 项](#覆盖率)），加在别处的照样登记。
 
-### 测试结果状态门
+#### 测试结果状态门
 
 - 结果文件存在，且是这次运行生成的。
 - skipped、expected-fail、重试过、flaky 的数量为 0，状态白名单里的除外。
@@ -306,38 +335,15 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 - 测试 ID 和 merge-base 比，删掉或改名的 ID 让检查失败，删除名单里的除外。
 - 这些也抓 focus 或禁用的测试、行内覆盖的重试次数，所以 linter 规则里不再单列这几条。
 
-### 生成内容
+#### 生成内容
 
 - 生成文件用锁住的生成器重新生成，逐字节相同。
 - 带"生成"头的文件必须在生成路径名单里。
 - 二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里。
 - golden 和快照文件锁住，测试从不以更新模式运行。
 
-### `.github/` 改动单独成 PR
+#### `.github/` 改动单独成 PR
 
 实现：[`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml)，用 `git -c core.quotePath=false diff --name-only --no-renames -z "$BASE_REF"...HEAD` 列出改动：改名拆成删和增，旧路径也算；文件名按 NUL 分隔、不转义。只在 `pull_request` 上跑（merge queue 的 diff 是整组改动）；它由 main 上的 `ci.yml` 调用，PR 删不掉它。
 
 为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
-
-## CODEOWNERS
-
-本页启用的检查，"标准答案"一列里的东西都进 CODEOWNERS，改它要 owner 批准；不锁的话，检查形同虚设。实现文件不锁，worker 才能自由改。
-
-| 锁什么 | 包括 | 写法 | 防什么 |
-|---|---|---|---|
-| 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
-| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；重复基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
-| 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
-| 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
-| 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |
-| git 配置 | `.gitignore`、`.gitattributes` | 文件名 | 把文件藏进被忽略的路径；改文件属性躲过 diff |
-| 不锁 | 实现文件；lockfile 由 repo 自己定，它的变动由依赖检查管 | | |
-
-各语言的配置文件名：
-
-| 语言 | 进 CODEOWNERS 的配置文件名 |
-|---|---|
-| Rust | `rustfmt.toml`, `.rustfmt.toml`, `clippy.toml`, `.clippy.toml`, `**/.cargo/config.toml`, `**/.cargo/config`, `**/.cargo/mutants.toml`, `mutants.toml`, `deny.toml`, `rust-toolchain.toml`, `rust-toolchain`, `**/.config/nextest.toml`, `build.rs` |
-| Python | `pyproject.toml`, `setup.py`, `ruff.toml`, `.ruff.toml`, `setup.cfg`, `tox.ini`, `pytest.ini`, `conftest.py`, `.coveragerc`, `mypy.ini`, `.mypy.ini`, `pyrightconfig.json`, `sitecustomize.py`, `usercustomize.py` |
-| TypeScript | `package.json`, `.prettierignore`, `.eslintignore`, `tsconfig*.json`, `jsconfig*.json`, `.eslintrc*`, `eslint.config.*`, `.prettierrc*`, `prettier.config.*`, `vitest.config.*`, `vite.config.*`, `jest.config.*`, `.c8rc*`, `.nycrc*`, `stryker.conf.*`, `knip.json`, `.knip.json*`, `.npmrc` |
-| Go | `go.mod`, `.golangci.yml`, `.golangci.yaml`, `.golangci.toml`, `.golangci.json`, `go.work` |

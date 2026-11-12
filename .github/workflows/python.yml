@@ -20,62 +20,31 @@ on:
         type: string
         default: .github/checks/license-exceptions.txt
       jobs:
-        description: "The jobs to run, one per line: '<job name>: <check> ...'; unlisted checks do not run. Empty: 'Checks: <every check but coverage>' and 'Coverage: coverage'"
+        description: The static-check jobs as JSON, [{"name", "checks"}]; a check in no job does not run
         type: string
-        default: ""
+        default: '[{"name":"Checks","checks":["format","lint","comment-budget","type-check","dead-code","unused-dependencies","vulnerabilities","licenses"]}]'
+      coverage:
+        description: Run coverage
+        type: boolean
+        default: true
       coverage-shards:
-        description: Coverage shards, one per line of space-separated pytest -k names; one more shard runs the tests no line matches. Empty measures in one job
+        description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; empty measures in one job
         type: string
         default: ""
 
 permissions:
   contents: read
 
-# Plan lays out the jobs from the caller's jobs and coverage-shards inputs; by default the fast checks share one job
-# and coverage, which runs the tests, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
-  plan:
-    name: Plan
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 5
-    outputs:
-      jobs: ${{ steps.plan.outputs.jobs }}
-      coverage: ${{ steps.plan.outputs.coverage }}
-      shards: ${{ steps.plan.outputs.shards }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-    steps:
-      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - &checkout-repo-guards
-        name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
-          path: repo-guards
-          persist-credentials: false
-      - &install-uv
-        name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.7"
-          enable-cache: false
-      - name: Plan
-        id: plan
-        shell: bash
-        env:
-          JOBS: ${{ inputs.jobs }}
-          SHARDS: ${{ inputs.coverage-shards }}
-        run: uv run --no-project --python 3.12 repo-guards/ci-checks/job-plan/job_plan.py --language python
-
   checks:
     name: ${{ matrix.job.name }}
-    needs: plan
-    if: ${{ needs.plan.outputs.jobs != '[]' }}
+    if: ${{ inputs.jobs != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
+        job: ${{ fromJSON(inputs.jobs) }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -95,8 +64,21 @@ jobs:
           path: repo
           fetch-depth: 0
           persist-credentials: false
-      - *checkout-repo-guards
-      - *install-uv
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - &install-uv
+        name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       - name: Install the shared dev group
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
@@ -144,24 +126,20 @@ jobs:
           pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
           python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
 
-  # The coverage steps run the PR's tests, so they get jobs of their own.
-  coverage-shard:
-    name: ${{ needs.plan.outputs.coverage }} shard ${{ matrix.shard.name }}
-    needs: plan
-    if: ${{ needs.plan.outputs.shards != '[]' }}
+  # The coverage steps run the PR's tests, so they get a job of their own.
+  coverage:
+    name: Coverage
+    needs: coverage-shard
+    if: ${{ !cancelled() && inputs.coverage }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
       SOURCE_DIRS: ${{ inputs.source-dirs }}
       UV_NO_BUILD: "1"
-      MODE: shard
-      SHARD: ${{ matrix.shard.name }}
-      K: ${{ matrix.shard.k }}
+      MODE: ${{ inputs.coverage-shards != '' && 'merge' || 'whole' }}
+      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
     defaults: *defaults
     steps:
       - *checkout
@@ -173,68 +151,6 @@ jobs:
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
-      # MODE: whole measures and reports here; shard runs only the tests its K selects and keeps the data file;
-      # merge combines every shard's data file and reports.
-      - &coverage
-        name: Coverage
-        id: coverage
-        if: ${{ !cancelled() }}
-        env:
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-        run: |
-          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
-            echo "::error::coverage shards did not all succeed ($SHARDS_RESULT)"
-            exit 1
-          fi
-          coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
-          read -ra dirs <<< "$SOURCE_DIRS"
-          sources=$(IFS=,; echo "${dirs[*]}")
-          # Every mode uses the project's environment: the Python version decides which lines and branches count.
-          uv sync --locked
-          cov=(uv run --locked --with "$coverage" coverage)
-          rc=(--rcfile "$RG/python/pyproject.toml")
-          case $MODE in
-            whole)
-              "${cov[@]}" run "${rc[@]}" --source "$sources" -m pytest ;;
-            shard)
-              mkdir -p "$RUNNER_TEMP/shard"
-              # pytest exits 5 when -k selects no test, which a shard may.
-              status=0
-              "${cov[@]}" run "${rc[@]}" --source "$sources" --data-file "$RUNNER_TEMP/shard/$SHARD.coverage" -m pytest -k "$K" || status=$?
-              (( status == 0 || status == 5 )) || exit "$status"
-              exit ;;
-            merge)
-              "${cov[@]}" combine "${rc[@]}" "$RUNNER_TEMP"/shards/*.coverage ;;
-          esac
-          "${cov[@]}" xml "${rc[@]}" -o "$RUNNER_TEMP/coverage-head.xml"
-      - name: Upload shard data
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ needs.plan.outputs.artifact }}-${{ matrix.shard.name }}
-          path: ${{ runner.temp }}/shard
-          if-no-files-found: error
-          retention-days: 1
-
-  # Without shards, measures in one job; with them, combines the shards' data. Fails when a shard did.
-  coverage:
-    name: ${{ needs.plan.outputs.coverage }}
-    needs: [plan, coverage-shard]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.coverage != '' }}
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 40
-    env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
-      SOURCE_DIRS: ${{ inputs.source-dirs }}
-      UV_NO_BUILD: "1"
-      MODE: ${{ needs.plan.outputs.shards != '[]' && 'merge' || 'whole' }}
-      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
-    defaults: *defaults
-    steps:
-      - *checkout
-      - *checkout-repo-guards
-      - *install-uv
-      - *install-python
       - name: Install diff-cover
         working-directory: ${{ runner.temp }}
         run: |
@@ -244,10 +160,39 @@ jobs:
         if: ${{ needs.coverage-shard.result == 'success' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: ${{ needs.plan.outputs.artifact }}-*
+          pattern: python-coverage-*
           path: ${{ runner.temp }}/shards
           merge-multiple: true
-      - *coverage
+      # MODE whole measures and reports; shard runs its TESTS and keeps the data file; merge combines every shard's data and reports.
+      - &coverage
+        name: Coverage
+        id: coverage
+        if: ${{ !cancelled() }}
+        env:
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
+        run: |
+          coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
+          read -ra dirs <<< "$SOURCE_DIRS"
+          sources=$(IFS=,; echo "${dirs[*]}")
+          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
+            echo "::error::a coverage shard failed ($SHARDS_RESULT)"
+            exit 1
+          fi
+          uv sync --locked
+          cov=(uv run --locked --with "$coverage" coverage)
+          rc=(--rcfile "$RG/python/pyproject.toml")
+          case $MODE in
+            whole)
+              "${cov[@]}" run "${rc[@]}" --source "$sources" -m pytest ;;
+            shard)
+              read -ra tests <<< "$TESTS"
+              mkdir -p "$RUNNER_TEMP/shard"
+              "${cov[@]}" run "${rc[@]}" --source "$sources" --data-file "$RUNNER_TEMP/shard/$SHARD.coverage" -m pytest "${tests[@]}"
+              exit ;;
+            merge)
+              "${cov[@]}" combine "${rc[@]}" "$RUNNER_TEMP"/shards/*.coverage ;;
+          esac
+          "${cov[@]}" xml "${rc[@]}" -o "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |
@@ -264,3 +209,35 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+  # One job per coverage-shards item, running only its test paths; Coverage combines their data.
+  coverage-shard:
+    name: Coverage shard ${{ matrix.tests }}
+    if: ${{ inputs.coverage && inputs.coverage-shards != '' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        tests: ${{ fromJSON(inputs.coverage-shards) }}
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      UV_NO_BUILD: "1"
+      MODE: shard
+      SHARD: ${{ strategy.job-index }}
+      TESTS: ${{ matrix.tests }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - *install-python
+      - *coverage
+      - name: Upload shard data
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-coverage-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard
+          if-no-files-found: error
+          retention-days: 1

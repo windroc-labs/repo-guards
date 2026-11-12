@@ -85,19 +85,4 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 
 覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，只收 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`；别的写法（包括 `--tests` 和会放宽锁住配置的 cargo-llvm-cov 选项）让 Coverage 步失败。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。
 
-单元测试只在 Coverage 步里跑一遍（分片时在各片里），有测试失败这一步就失败；`rust.yml` 不另跑测试。集成测试（没写进 `unit-tests` 的测试目标）、doctest 和 example 由 repo 自己的 job 跑。
-
-### 覆盖率分片
-
-`coverage-shards` 输入把单元测试分片（分片怎么跑见[覆盖率分片](../README.md#覆盖率分片)）。每行一片，写空格分开的测试名过滤词，比如按测试模块分：
-
-```yaml
-      coverage-shards: |
-        driver::
-        input:: session::
-```
-
-- 每片跑名字含任一过滤词的测试（libtest 的子串匹配）。最后另加一片 `rest`，用 `--skip` 跳过所有过滤词，跑剩下的测试。所以每个测试都至少跑一次，漏写的测试也不会被跳过。
-- 过滤词只收字母、数字、`_` 和 `:`，别的写法（包括 `--ignored` 这类 libtest 选项）让 Plan 失败。
-- 各片都用 `unit-tests` 选的同一组测试目标，只是过滤的测试不同。
-- 各片用 `cargo llvm-cov --no-report` 跑测试，上传 `.profraw`。Coverage job 再编译一遍同样的测试二进制（跑 `-- --list`，不跑测试），把各片的 `.profraw` 放进去，用 `cargo llvm-cov report` 出报告。
+单元测试只在 Coverage 步里跑一遍，有测试失败这一步就失败；`rust.yml` 不另跑测试。集成测试（没写进 `unit-tests` 的测试目标）、doctest 和 example 由 repo 自己的 job 跑。

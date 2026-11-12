@@ -64,11 +64,3 @@
 只算发布代码：`include` 取 `knip-project` 输入里结尾带 `!` 的 glob（去掉 `!`），和死代码用同一份"发布代码"的定义；没被测试 import 的文件也进分母。
 
 repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的 `@vitest/coverage-v8`，版本由 repo 自己的 lockfile 固定。`typescript.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 `vitest run`，不选测试文件：repo 自己的 vitest 配置（`test.include`、`test.exclude`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 用另一份配置另跑（如 `vitest run --config vitest.integration.config.ts`）。覆盖率设置全用命令行参数给（provider `v8`、Cobertura 报告、`include`、`exclude`），命令行优先于 repo 的 vitest 配置；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`/* v8 ignore */` 注释算行内豁免。
-
-### 覆盖率分片
-
-`coverage-shards` 输入写片数，2 到 256（分片怎么跑见[覆盖率分片](../README.md#覆盖率分片)），如 `coverage-shards: "3"`。
-
-- 第 i 片跑 `vitest run --shard=i/<片数>`，vitest 按测试文件分，每个文件正好跑一次。片数多于测试文件时 vitest 报错，Coverage shard 失败。
-- 各片存下 vitest 的 blob 报告，Coverage job 用 `vitest run --merge-reports` 合起来再出覆盖率报告。blob 报告里是绝对路径，runner 的检出目录可能不一样，所以各片把检出目录换成占位符，合并时再换回 Coverage job 自己的。
-- 要 vitest 支持 `--shard`、blob 报告和 `--merge-reports`（vitest 2 起都有）。

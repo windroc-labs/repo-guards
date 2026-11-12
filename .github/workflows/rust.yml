@@ -20,62 +20,31 @@ on:
         type: string
         default: --lib --bins
       jobs:
-        description: "The jobs to run, one per line: '<job name>: <check> ...'; unlisted checks do not run. Empty: 'Checks: <every check but coverage>' and 'Coverage: coverage'"
+        description: The static-check jobs as JSON, [{"name", "checks"}]; a check in no job does not run
         type: string
-        default: ""
+        default: '[{"name":"Checks","checks":["format","lint","comment-budget","type-check","unused-dependencies","dependency-rules"]}]'
+      coverage:
+        description: Run coverage
+        type: boolean
+        default: true
       coverage-shards:
-        description: Coverage shards, one per line of space-separated test-name filters; one more shard runs the tests no line matches. Empty measures in one job
+        description: Coverage shards as a JSON list, each one parallel job's unit-tests value; empty measures in one job
         type: string
         default: ""
 
 permissions:
   contents: read
 
-# Plan lays out the jobs from the caller's jobs and coverage-shards inputs; by default the fast checks share one job
-# and coverage, which runs the tests, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
-  plan:
-    name: Plan
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 5
-    outputs:
-      jobs: ${{ steps.plan.outputs.jobs }}
-      coverage: ${{ steps.plan.outputs.coverage }}
-      shards: ${{ steps.plan.outputs.shards }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-    steps:
-      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - &checkout-repo-guards
-        name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
-          path: repo-guards
-          persist-credentials: false
-      - &install-uv
-        name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.7"
-          enable-cache: false
-      - name: Plan
-        id: plan
-        shell: bash
-        env:
-          JOBS: ${{ inputs.jobs }}
-          SHARDS: ${{ inputs.coverage-shards }}
-        run: uv run --no-project --python 3.12 repo-guards/ci-checks/job-plan/job_plan.py --language rust
-
   checks:
     name: ${{ matrix.job.name }}
-    needs: plan
-    if: ${{ needs.plan.outputs.jobs != '[]' }}
+    if: ${{ inputs.jobs != '[]' }}
     strategy:
       fail-fast: false
       matrix:
-        job: ${{ fromJSON(needs.plan.outputs.jobs) }}
+        job: ${{ fromJSON(inputs.jobs) }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
@@ -96,8 +65,21 @@ jobs:
           path: repo
           fetch-depth: 0
           persist-credentials: false
-      - *checkout-repo-guards
-      - *install-uv
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - &install-uv
+        name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain; COMPONENTS adds to it.
       - &install-rust
         name: Install Rust
@@ -117,7 +99,6 @@ jobs:
           workspaces: repo/${{ inputs.working-directory }}
           save-if: ${{ github.event_name == 'push' }}
       - name: Install cargo-machete and cargo-deny
-        if: ${{ contains(matrix.job.checks, 'unused-dependencies') || contains(matrix.job.checks, 'dependency-rules') }}
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-machete@0.9.2,cargo-deny@0.20.2
@@ -144,29 +125,27 @@ jobs:
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
 
-  # The coverage steps run the PR's tests, so they get jobs of their own.
-  coverage-shard:
-    name: ${{ needs.plan.outputs.coverage }} shard ${{ matrix.shard.name }}
-    needs: plan
-    if: ${{ needs.plan.outputs.shards != '[]' }}
+  # The coverage steps run the PR's tests, so they get a job of their own.
+  coverage:
+    name: Coverage
+    needs: coverage-shard
+    if: ${{ !cancelled() && inputs.coverage }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
+      BASE_REF: *base-ref
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
       COMPONENTS: llvm-tools-preview
-      MODE: shard
-      SHARD: ${{ matrix.shard.name }}
-      FILTERS: ${{ matrix.shard.filters }}
+      MODE: ${{ inputs.coverage-shards != '' && 'merge' || 'whole' }}
+      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
+      UNIT_TESTS: ${{ inputs.coverage-shards != '' && join(fromJSON(inputs.coverage-shards), ' ') || inputs.unit-tests }}
     defaults: *defaults
     steps:
       - *checkout
       - *checkout-repo-guards
+      - *install-uv
       - *install-rust
       - *cache
       - &install-llvm-cov
@@ -174,14 +153,23 @@ jobs:
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov@0.9.1
-      # MODE: whole measures and reports here; shard runs only its FILTERS and keeps the raw profiles;
-      # merge rebuilds the same test binaries and reports on every shard's profiles.
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
+      - name: Download shard profiles
+        if: ${{ needs.coverage-shard.result == 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: rust-coverage-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+      # MODE whole measures and reports; shard keeps its raw profiles; merge rebuilds the test binaries and reports on every shard's profiles.
       - &coverage
         name: Coverage
         id: coverage
         if: ${{ !cancelled() }}
-        env:
-          UNIT_TESTS: ${{ inputs.unit-tests }}
         run: |
           # Target selectors only: any other cargo-llvm-cov option could loosen the locked coverage config.
           # -d '' reads past newlines, so a multi-line value is checked whole; read then returns 1 at its end.
@@ -198,73 +186,27 @@ jobs:
           fi
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
           llvm_cov=(cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}")
-          if [[ $MODE == whole ]]; then
-            "${llvm_cov[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
-            exit
-          fi
-          if [[ $MODE == merge && $SHARDS_RESULT != success ]]; then
-            echo "::error::coverage shards did not all succeed ($SHARDS_RESULT)"
-            exit 1
-          fi
+          case $MODE in
+            whole)
+              "${llvm_cov[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
+              exit ;;
+            merge)
+              [[ $SHARDS_RESULT == success ]] || { echo "::error::a coverage shard failed ($SHARDS_RESULT)"; exit 1; } ;;
+          esac
           profiles=$(cargo metadata --format-version 1 --no-deps | sed -E 's/.*"target_directory":"([^"]*)".*/\1/')/llvm-cov-target
           # --no-report keeps earlier runs' profiles, which a self-hosted runner's target directory may hold.
           rm -f "$profiles"/*.profraw
           if [[ $MODE == shard ]]; then
-            read -ra filters <<< "$FILTERS"
-            "${llvm_cov[@]}" --no-report -- "${filters[@]}"
+            "${llvm_cov[@]}" --no-report
             mkdir -p "$RUNNER_TEMP/shard"
             # Shards share profile file names, so each prefixes its own.
             for profile in "$profiles"/*.profraw; do cp "$profile" "$RUNNER_TEMP/shard/$SHARD-${profile##*/}"; done
             exit
           fi
-          # --list builds the binaries and runs no test; its profiles add no coverage.
+          # --list builds every shard's test binaries and runs no test.
           "${llvm_cov[@]}" --no-report -- --list > /dev/null
           cp "$RUNNER_TEMP"/shards/*.profraw "$profiles/"
           cargo llvm-cov report --branch --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
-      - name: Upload shard profiles
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: ${{ needs.plan.outputs.artifact }}-${{ matrix.shard.name }}
-          path: ${{ runner.temp }}/shard
-          if-no-files-found: error
-          retention-days: 1
-
-  # Without shards, measures in one job; with them, merges the shards' profiles. Fails when a shard did.
-  coverage:
-    name: ${{ needs.plan.outputs.coverage }}
-    needs: [plan, coverage-shard]
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.coverage != '' }}
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 60
-    env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
-      CARGO_TERM_COLOR: always
-      TOOLCHAIN: coverage.toml
-      COMPONENTS: llvm-tools-preview
-      MODE: ${{ needs.plan.outputs.shards != '[]' && 'merge' || 'whole' }}
-      SHARDS_RESULT: ${{ needs.coverage-shard.result }}
-    defaults: *defaults
-    steps:
-      - *checkout
-      - *checkout-repo-guards
-      - *install-uv
-      - *install-rust
-      - *cache
-      - *install-llvm-cov
-      - name: Install diff-cover
-        working-directory: ${{ runner.temp }}
-        run: |
-          uv venv --python 3.12 coverage-venv
-          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
-      - name: Download shard profiles
-        if: ${{ needs.coverage-shard.result == 'success' }}
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          pattern: ${{ needs.plan.outputs.artifact }}-*
-          path: ${{ runner.temp }}/shards
-          merge-multiple: true
-      - *coverage
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |
@@ -281,3 +223,37 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+
+  # One job per coverage-shards item, running only its unit-tests targets; Coverage merges their profiles.
+  coverage-shard:
+    name: Coverage shard ${{ matrix.unit-tests }}
+    if: ${{ inputs.coverage && inputs.coverage-shards != '' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        unit-tests: ${{ fromJSON(inputs.coverage-shards) }}
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      CARGO_TERM_COLOR: always
+      TOOLCHAIN: coverage.toml
+      COMPONENTS: llvm-tools-preview
+      MODE: shard
+      SHARD: ${{ strategy.job-index }}
+      UNIT_TESTS: ${{ matrix.unit-tests }}
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-rust
+      - *cache
+      - *install-llvm-cov
+      - *coverage
+      - name: Upload shard profiles
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rust-coverage-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/shard
+          if-no-files-found: error
+          retention-days: 1

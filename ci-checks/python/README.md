@@ -75,18 +75,3 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 | [`pyproject.toml`](pyproject.toml) | `[tool.coverage.run]`：`branch = true` 算分支；`relative_files = true` 让报告里的路径相对项目目录（`working-directory`），diff-cover 也在那里跑，才对得上；`omit` 排除测试文件和 protobuf 生成文件。`source` 由 `source-dirs` 输入代替，没被 import 的发布文件也进分母。coverage.py 的版本固定在 `dev` 组 |
 
 `python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
-
-### 覆盖率分片
-
-`coverage-shards` 输入把单元测试分片（分片怎么跑见[覆盖率分片](../README.md#覆盖率分片)）。每行一片，写空格分开的名字，比如按测试文件或模块分：
-
-```yaml
-      coverage-shards: |
-        api
-        models views
-```
-
-- 每片跑 `pytest -k "<名字> or <名字>"`，匹配规则就是 pytest 的 `-k`（测试名、所在模块和类名里的子串，不分大小写）。最后另加一片 `rest`，跑 `-k "not (<所有名字>)"`。所以每个测试都至少跑一次，漏写的测试也不会被跳过。
-- 名字只收标识符（字母、数字、`_`，不以数字开头），`and`、`or`、`not` 不行；别的写法让 Plan 失败。repo 的 `addopts` 里不要写 `-k`：命令行的 `-k` 会换掉它。
-- 一片一个测试都没选中（pytest 退出码 5）不算失败，`rest` 常常这样。
-- 各片用 `coverage run --data-file` 存下数据，Coverage job 用 `coverage combine` 合起来再出报告。合并时也用项目自己的环境：Python 版本决定哪些行和分支算数。

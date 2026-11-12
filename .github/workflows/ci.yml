@@ -34,14 +34,16 @@ jobs:
       - name: Scan
         env:
           EVENT: ${{ github.event_name }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           scanner=default/scanner/scan.py
           # The PR that adds this workflow lands before the default branch has a scanner.
           [[ -f $scanner ]] || scanner=repo/scanner/scan.py
           args=()
           if [[ $EVENT == pull_request ]]; then
+            # Read from the event file: the log echoes a step's env: block, which would publish hits in the title or body.
+            PR_TITLE=$(jq -r '.pull_request.title // ""' "$GITHUB_EVENT_PATH")
+            PR_BODY=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+            export PR_TITLE PR_BODY
             args+=(--pr-from-env)
           elif ! git -C repo cat-file -e "${RANGE%..HEAD}^{commit}" 2>/dev/null; then
             # A new branch (all-zero before) or an unknown before: scan the pushed head.

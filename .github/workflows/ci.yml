@@ -215,6 +215,11 @@ jobs:
         run: |
           npm ci --no-audit --no-fund --ignore-scripts
           npm test
+      - name: Dependency allowlist tests
+        id: dependency-allowlist
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/dependency-allowlist
+        run: python3 -m unittest dependency_allowlist_test
       - name: deny-merge tests
         id: deny-merge
         if: ${{ !cancelled() }}
@@ -233,9 +238,10 @@ jobs:
           TYPESCRIPT: ${{ steps.typescript.outcome }}
           RUST: ${{ steps.rust.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
+          DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

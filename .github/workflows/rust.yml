@@ -12,7 +12,7 @@ on:
         type: string
         default: .
       deny-allowlist:
-        description: The repo's cargo-deny allowlist, merged into the shared deny.toml
+        description: The repo's dependency allowlist (shared by rust.yml, python.yml and typescript.yml), merged into the shared deny.toml
         type: string
         default: .github/checks/deny-allowlist.toml
       unit-tests:
@@ -107,6 +107,15 @@ jobs:
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
+      - name: Dependency allowlist
+        if: ${{ !cancelled() }}
+        env:
+          ALLOWLIST: ${{ inputs.deny-allowlist }}
+        run: |
+          base=$(git merge-base "$BASE_REF" HEAD)
+          # No lock at the merge-base (a new project) leaves the base file absent: every crate counts as new.
+          if git cat-file -e "$base:./Cargo.lock" 2>/dev/null; then git show "$base:./Cargo.lock" > "$RUNNER_TEMP/base-Cargo.lock"; fi
+          uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" cargo "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/base-Cargo.lock" Cargo.lock
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:

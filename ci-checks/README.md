@@ -47,7 +47,7 @@
 | 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | ✅ |
 | 7 | [依赖检查](#依赖检查规则) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | ⚠️ |
 | 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | ✅ |
-| 9 | [CRAP 分数](#crap-分数) | 只报告，不强制：每个函数的 CRAP 分数（圈复杂度和覆盖率合算），最高的 20 个写进 job summary；这一步永远不失败 | 无 | 复杂的函数不测（只提示，不拦） | 每个 PR | ✅ |
+| 9 | [CRAP 分数](#crap-分数) | 只报告，不强制：每个函数的 CRAP 分数（圈复杂度和覆盖率合算），最高的 20 个写进 job summary；这一步永远不失败 | 无 | 复杂的函数不测（只提示，不拦） | 每个 PR | ⚠️ |
 | 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |  |
 | 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |  |
 | 12 | [文档测试](#文档测试)（按项目需要） | 文档里的示例能跑，结果和文档一致 | 文档 | 文档和代码脱节 | 每个 PR |  |
@@ -196,7 +196,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 不准 path、git、URL 依赖 | 引入改过的包 | git 和别的 registry：cargo-deny `[sources]` `unknown-git = "deny"`、`unknown-registry = "deny"`，要开的源写进 `allow-git`、`allow-registry`（项目白名单）；path：无现成规则（脚本查 `Cargo.lock` 里没有 `source` 的包都是 workspace 成员） | git 和别的 registry：Dependency rules 查 `uv.lock`（没有就查解析结果），registry 只准 PyPI 和 `allow-registry`，git 源只准 `allow-git`（项目白名单）；URL、path：无现成规则（uv `no-sources` 只忽略 `[tool.uv.sources]`，挡不住直接写在依赖里的 URL） | git 和别的 registry：Dependency rules 查 `package-lock.json`，规则同 Python 列，registry 只准 npmjs；[`.npmrc`](typescript/.npmrc) `allow-git=none`，`allow-git` 有条目时设成 `all`（npm 只有 `all`、`none`、`root`，逐个 URL 由 Dependency rules 判）。URL、file：`.npmrc` `allow-remote=none`、`allow-file=none`，没有白名单项；`allow-directory` 不设：`none` 让 npm workspaces 装不上（npm 11.19 实测报 `EALLOWDIRECTORY`），directory 依赖无现成规则 |
 | 不准 override 或 patch | 改掉依赖解析结果 | 无现成规则（脚本查 `Cargo.toml` 和 `.cargo/config.toml` 里没有 `[patch]`、`[replace]`） | 无现成规则（脚本查 `pyproject.toml` 里没有 `[tool.uv]` `override-dependencies`） | 无现成规则（脚本查 `package.json` 里没有 `overrides`） |
 | 不准 submodule、不准新的 vendor 目录 | 绕开 lockfile 引入代码 | 无现成规则（三种语言共用的脚本：没有 `.gitmodules`，和 base 比没有新的 vendor 目录） | 同 Rust 列的共用脚本 | 同 Rust 列的共用脚本 |
-| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`（项目白名单） | 只装 wheel：`uv sync` 用 `UV_NO_BUILD`，`uv pip` 用 `--only-binary :all:`（项目自己的包和 editable 依赖照样构建）；`allow-build-scripts` 里的包从源码构建（项目白名单） | `.npmrc` `ignore-scripts=true`；`allow-build-scripts` 里的包在 `npm ci` 后用 `npm rebuild` 跑安装脚本（项目白名单） |
+| 关掉安装脚本 | 在安装时改结果 | `build.rs` 关不掉；cargo-deny `[bans.build]` `allow-build-scripts`：基础 crate 写在共用名单（[`deny.toml`](rust/deny.toml)），其余由项目定（项目白名单） | 只装 wheel：`uv sync` 用 `UV_NO_BUILD`，`uv pip` 用 `--only-binary :all:`（项目自己的包和 editable 依赖照样构建）；`allow-build-scripts` 里的包从源码构建（项目白名单） | `.npmrc` `ignore-scripts=true`；`allow-build-scripts` 里的包在 `npm ci` 后用 `npm rebuild` 跑安装脚本（项目白名单） |
 | 关掉测试插件自动加载 | 在测试时改结果的插件 | 不适用 | 环境变量 `PYTEST_DISABLE_PLUGIN_AUTOLOAD` 或 `--disable-plugin-autoload`（pytest 8.4 起），要用的插件用 `-p` 列出 | 不适用 |
 | 漏洞扫描 | 有漏洞的包 | cargo-deny `[advisories]` | pip-audit（2.10.1 实测不读 `uv.lock`）：Dependency rules 把 registry 上的包写成 `name==version`，再 `pip-audit -r --no-deps`；git 等别处来的包没有公告可查 | `npm audit` |
 | 许可证在准用名单里 | 许可证不合的包 | cargo-deny `[licenses]`：共用名单（[`licenses.toml`](licenses.toml)）；例外写进 `licenses.exceptions`（项目白名单） | pip-licenses 列出包，[`license-check`](python/README.md#许可证pip-licenses) 按 SPDX 表达式对共用名单（[`licenses.toml`](licenses.toml)）判定；例外同 Rust 列 | license-checker-rseidelsohn：共用名单（[`licenses.toml`](licenses.toml)）；例外同 Rust 列 |
@@ -209,7 +209,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 | 键 | 放行什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|
 | `bans.allow` | 非空时只准名单里的包 | cargo-deny | Dependency rules | Dependency rules |
-| `bans.build.allow-build-scripts` | 安装时跑构建代码的包 | 带 `build.rs` 的 crate（cargo-deny） | 从源码构建（sdist、git 依赖）；其余只装 wheel | `npm ci` 后用 `npm rebuild` 跑它的安装脚本；其余不跑 |
+| `bans.build.allow-build-scripts` | 安装时跑构建代码的包 | 带 `build.rs` 的 crate（cargo-deny）；基础 crate 已在共用名单 | 从源码构建（sdist、git 依赖）；其余只装 wheel | `npm ci` 后用 `npm rebuild` 跑它的安装脚本；其余不跑 |
 | `sources.allow-git` | git 仓库 | cargo-deny | Dependency rules | Dependency rules；有条目时 npm `allow-git=all` |
 | `sources.allow-registry` | 别的 registry（Python 叫 index） | cargo-deny；默认只有 crates.io | Dependency rules；默认只有 `https://pypi.org/simple` | Dependency rules，按 URL 前缀比；默认只有 `https://registry.npmjs.org` |
 | `licenses.exceptions` | 某个包另外准用的许可证 | cargo-deny | `license-check` | license-checker 对这个包单独跑一遍 |

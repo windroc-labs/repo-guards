@@ -51,10 +51,12 @@
 
 | 文件 | 作用 |
 |---|---|
-| [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；没有 crate 能带 `build.rs`；许可证只准 [`licenses.toml`](../licenses.toml) 的 `allow`；漏洞和 yanked 的版本都失败 |
+| [`deny.toml`](deny.toml) | 共用规则：只准 crates.io，未知的 git 和 registry 都拒；带 `build.rs` 的 crate 只准共用白名单 `bans.build.allow-build-scripts` 里的（见下）；许可证只准 [`licenses.toml`](../licenses.toml) 的 `allow`；漏洞和 yanked 的版本都失败 |
 | [`deny-merge/`](deny-merge/) | 把 [`licenses.toml`](../licenses.toml) 的 `allow` 和 repo 自己的白名单并进 `deny.toml`；白名单由 [`allowlist.py`](../allowlist/allowlist.py) 读和校验，只准往[依赖白名单](../README.md#依赖白名单)的五个列表里加，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
 repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`），Python 和 TypeScript 读同一个文件，见[依赖白名单](../README.md#依赖白名单)；文件可以不存在，等于空。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 用 `name@version` 写死版本；它为空时 cargo-deny 不限制包名。
+
+`allow-build-scripts` 的共用白名单只收基础 crate：大多数项目的依赖树里都有（crates.io 近 90 天下载量约 1.5 亿以上，或 `syn` 1、`generic-array` 0.14 这类仍被大量锁住的旧版本），`build.rs` 只探测编译器和目标平台、设 cfg 或链接路径，不编译原生代码（没有 `cc`、`cmake`、`bindgen` 这类构建依赖）。名单按包名匹配所有版本。`ring`、`openssl-sys` 这类要编译原生代码的，和只在某类项目里出现的（如 `httparse`、`wasm-bindgen`），由项目写进自己的白名单；项目白名单接在共用名单后面，重复写共用名单里的包也不报错。
 
 ## 覆盖率（cargo-llvm-cov）
 

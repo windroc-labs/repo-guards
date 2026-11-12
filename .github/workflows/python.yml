@@ -87,7 +87,7 @@ jobs:
           python=$PWD/.venv/bin/python
           export_lock() {
             if [[ -f $1/uv.lock ]]; then
-              (cd "$1" && uv export -q --frozen --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
+              (cd "$1" && uv export -q --frozen --all-extras --all-groups --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
             elif [[ -f $1/requirements.txt ]]; then
               (cd "$1" && uv pip compile -q requirements.txt --python "$python" --format pylock.toml -o "$2/pylock.toml")
             fi
@@ -178,19 +178,23 @@ jobs:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
-          coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
+          pin() { python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith(sys.argv[2])))' "$RG/python/pyproject.toml" "$1"; }
+          coverage=$(pin "coverage[toml]==")
+          pytest=$(pin "pytest==")
           read -ra dirs <<< "$SOURCE_DIRS"
           sources=$(IFS=,; echo "${dirs[*]}")
+          # A uv project's pytest comes from its lock; a requirements.txt project gets the shared dev group's.
           install() {
             if [[ -f uv.lock ]]; then
               uv sync --locked
             else
+              tools+=(--with "$pytest")
               uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
             fi
           }
-          cov() { uv run --no-project --python .venv/bin/python --with "$coverage" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
+          cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
           measure() {
-            (cd "$1" && install && cov run --source "$sources" -m pytest && cov xml -o "$2")
+            (tools=(--with "$coverage") && cd "$1" && install && cov run --source "$sources" -m pytest && cov xml -o "$2")
           }
           # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
           git worktree prune

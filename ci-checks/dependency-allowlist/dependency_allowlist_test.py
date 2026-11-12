@@ -127,6 +127,14 @@ class Check(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(flagged, ["@scope/util@2.0.0", "left-pad@1.2.0", "real-shim@3.1.0"])
 
+    def test_scoped_npm_packages_match_by_name_and_by_name_and_version(self):
+        for allowlist in (
+            '[bans]\nallow = ["@scope/util", "left-pad@1.2.0", "real-shim"]\n',
+            '[bans]\nallow = ["@scope/util@2.0.0", "left-pad@1.2.0", { crate = "real-shim@3.1.0" }]\n',
+        ):
+            code, flagged = self.run_main("npm", json.dumps(NPM_BASE), json.dumps(NPM_HEAD), allowlist)
+            self.assertEqual((code, flagged), (0, []), allowlist)
+
     def test_unchanged_and_removed_packages_pass(self):
         code, flagged = self.run_main("pylock", PYLOCK_HEAD, PYLOCK_BASE, "")
         self.assertEqual((code, flagged), (0, []))

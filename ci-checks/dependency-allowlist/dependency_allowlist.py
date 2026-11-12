@@ -34,8 +34,9 @@ def entry(item: str | dict[str, str]) -> tuple[str, str | None]:
         if "crate" not in item:
             return item["name"], item.get("version")
         item = item["crate"]
-    name, _, version = item.partition("@")
-    return name, version or None
+    # rpartition keeps a scoped npm name (@scope/pkg) whole.
+    name, _, version = item.rpartition("@")
+    return (name, version) if name else (item, None)
 
 
 def spec(package: Package) -> str:

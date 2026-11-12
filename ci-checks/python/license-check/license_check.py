@@ -5,6 +5,8 @@ import tomllib
 from collections.abc import Callable
 from pathlib import Path
 
+UNKNOWN = "UNKNOWN"
+
 
 class Malformed(Exception):
     pass
@@ -69,6 +71,15 @@ def satisfied(expression: str, allowed: set[str]) -> bool:
     return value and pos == len(tokens)
 
 
+def alternatives(row: dict[str, str]) -> list[str]:
+    """pip-licenses --from mixed's pick: the expression, else any one classifier, else the metadata whole."""
+    if row["License-Expression"] != UNKNOWN:
+        return [row["License-Expression"]]
+    if row["License-Classifier"] != UNKNOWN:
+        return row["License-Classifier"].split("; ")
+    return [row["License-Metadata"]]
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: license_check.py LICENSES_TOML PIP_LICENSES_JSON", file=sys.stderr)
@@ -78,13 +89,11 @@ def main(argv: list[str]) -> int:
         allowed: set[str] = set(config["allow"])
         classifiers: dict[str, str] = config["python-classifiers"]
         rows: list[dict[str, str]] = json.loads(Path(argv[1]).read_text())
-        denied = [
-            f"{row['Name']} {row['Version']}: {row['License']}"
-            for row in rows
-            if not any(
-                satisfied(classifiers.get(alt, alt), allowed) for alt in row["License"].split("; ")
-            )
-        ]
+        denied: list[str] = []
+        for row in rows:
+            licenses = alternatives(row)
+            if not any(satisfied(classifiers.get(alt, alt), allowed) for alt in licenses):
+                denied.append(f"{row['Name']} {row['Version']}: {'; '.join(licenses)}")
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         print(f"license_check: {error!r}", file=sys.stderr)
         return 2

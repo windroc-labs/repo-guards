@@ -55,39 +55,91 @@ class Expressions(unittest.TestCase):
                 self.assertFalse(satisfied(text, ALLOWED))
 
 
+CONFIG = """\
+allow = ["MIT", "Apache-2.0"]
+
+[python-classifiers]
+"MIT License" = "MIT"
+"Apache Software License" = "Apache-2.0"
+"GNU General Public License v3 (GPLv3)" = "GPL-3.0-only"
+"""
+
+
+def row(
+    name: str, expression: str = "UNKNOWN", classifier: str = "UNKNOWN", metadata: str = "UNKNOWN"
+) -> dict[str, str]:
+    return {
+        "Name": name,
+        "Version": "1.0",
+        "License-Expression": expression,
+        "License-Classifier": classifier,
+        "License-Metadata": metadata,
+    }
+
+
 class Report(unittest.TestCase):
-    def run_main(self, rows: list[dict[str, str]]) -> tuple[int, str]:
+    def run_main(self, rows: list[dict[str, str]], config: Path | None = None) -> tuple[int, str]:
         with tempfile.TemporaryDirectory() as tmp:
+            if config is None:
+                config = Path(tmp, "licenses.toml")
+                config.write_text(CONFIG)
             report = Path(tmp, "licenses.json")
             report.write_text(json.dumps(rows))
             err = StringIO()
             with redirect_stderr(err):
-                code = main([str(LICENSES), str(report)])
+                code = main([str(config), str(report)])
             return code, err.getvalue()
 
-    def row(self, name: str, license: str) -> dict[str, str]:
-        return {"Name": name, "Version": "1.0", "License": license}
-
-    def test_live_or_expression_passes(self):
-        code, err = self.run_main(
-            [{"Name": "packaging", "Version": "26.3", "License": "Apache-2.0 OR BSD-2-Clause"}]
+    def test_live_or_expression_passes_the_shared_allowlist(self):
+        packaging = row(
+            "packaging",
+            expression="Apache-2.0 OR BSD-2-Clause",
+            metadata="Apache-2.0 OR BSD-2-Clause",
         )
-        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.run_main([packaging], LICENSES), (0, ""))
+
+    def test_expression_wins_over_classifiers_and_metadata(self):
+        rows = [
+            row(
+                "a",
+                expression="MIT",
+                classifier="GNU General Public License v3 (GPLv3)",
+                metadata="GPL-3.0",
+            ),
+            row("b", expression="GPL-3.0", classifier="MIT License", metadata="MIT"),
+        ]
+        code, err = self.run_main(rows)
+        self.assertEqual(code, 1)
+        self.assertNotIn("a 1.0", err)
+        self.assertIn("b 1.0: GPL-3.0", err)
 
     def test_classifiers_map_to_spdx_and_any_one_suffices(self):
         rows = [
-            self.row("six", "MIT License"),
-            self.row("dual", "Apache Software License; GNU General Public License v3 (GPLv3)"),
+            row("six", classifier="MIT License", metadata="GPL-3.0"),
+            row(
+                "dual", classifier="Apache Software License; GNU General Public License v3 (GPLv3)"
+            ),
         ]
         self.assertEqual(self.run_main(rows), (0, ""))
 
+    def test_metadata_is_one_license_text_never_split(self):
+        rows = [
+            row("plain", metadata="MIT"),
+            row("bundled", metadata="MIT; bundled parser is GPL-3.0-only"),
+        ]
+        code, err = self.run_main(rows)
+        self.assertEqual(code, 1)
+        self.assertNotIn("plain 1.0", err)
+        self.assertIn("bundled 1.0: MIT; bundled parser is GPL-3.0-only", err)
+
     def test_denied_packages_are_all_listed(self):
         rows = [
-            self.row("ok", "MIT"),
-            self.row("gnu", "GPL-3.0 OR LGPL-3.0"),
-            self.row("mixed", "MIT AND GPL-3.0"),
-            self.row("certifi", "Mozilla Public License 2.0 (MPL 2.0)"),
-            self.row("bare", "UNKNOWN"),
+            row("ok", expression="MIT"),
+            row("gnu", expression="GPL-3.0 OR LGPL-3.0"),
+            row("mixed", expression="MIT AND GPL-3.0"),
+            row("gpl", classifier="GNU General Public License v3 (GPLv3)", metadata="MIT"),
+            row("free", classifier="Mozilla Public License 2.0 (MPL 2.0)"),
+            row("bare"),
         ]
         code, err = self.run_main(rows)
         self.assertEqual(code, 1)
@@ -95,7 +147,8 @@ class Report(unittest.TestCase):
         for line in [
             "gnu 1.0: GPL-3.0 OR LGPL-3.0",
             "mixed 1.0: MIT AND GPL-3.0",
-            "certifi 1.0: Mozilla Public License 2.0 (MPL 2.0)",
+            "gpl 1.0: GNU General Public License v3 (GPLv3)",
+            "free 1.0: Mozilla Public License 2.0 (MPL 2.0)",
             "bare 1.0: UNKNOWN",
         ]:
             self.assertIn(line, err)
@@ -109,7 +162,9 @@ class Report(unittest.TestCase):
                 self.assertEqual(main([str(LICENSES), str(report)]), 2)
                 self.assertEqual(main([str(LICENSES), str(Path(tmp, "missing.json"))]), 2)
                 self.assertEqual(main([str(LICENSES)]), 2)
-        self.assertEqual(self.run_main([{"Name": "x"}])[0], 2)
+        self.assertEqual(
+            self.run_main([{"Name": "x", "Version": "1", "License-Expression": "UNKNOWN"}])[0], 2
+        )
 
 
 if __name__ == "__main__":

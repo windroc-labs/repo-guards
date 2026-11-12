@@ -101,5 +101,5 @@ jobs:
           if [[ -f "$GITHUB_WORKSPACE/repo/$EXCEPTIONS" ]]; then
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
-          pip-licenses --python .venv/bin/python --from mixed --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
+          pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
           python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"

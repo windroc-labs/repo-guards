@@ -55,3 +55,28 @@
 | [`deny-merge/`](deny-merge/) | 把 [`licenses.toml`](../licenses.toml) 的 `allow` 和 repo 自己的白名单并进 `deny.toml`；只准往这几个列表里加：`bans.allow`、`bans.build.allow-build-scripts`、`sources.allow-git`、`sources.allow-registry`、`licenses.exceptions`，写别的键就失败。测试：在该目录跑 `python3 -m unittest deny_merge_test` |
 
 repo 自己的白名单是 `rust.yml` 的 `deny-allowlist` 输入（默认 `.github/checks/deny-allowlist.toml`，必须存在，可以是空文件）。Dependency rules 步合并后跑 cargo-deny 0.20.2。`bans.allow` 用 `name@version` 写死版本；它为空时 cargo-deny 不限制包名。
+
+## 覆盖率（cargo-llvm-cov）
+
+| 文件 | 作用 |
+|---|---|
+| [`coverage.toml`](coverage.toml) | `toolchain`：分支覆盖率（`--branch`）只有 nightly 支持，覆盖率几步用这个固定的 nightly，带 `llvm-tools-preview`，其余步仍用 [`rust-toolchain.toml`](rust-toolchain.toml)；`ignore-filename-regex`：排除 `tests/`、`benches/`、`examples/` 和 `*_test.rs`（cargo-llvm-cov 没有配置文件，`rust.yml` 把它传给 `--ignore-filename-regex`） |
+
+`src` 里的测试模块正则排除不了，每个都要加 `coverage(off)`，crate 根也要开这个 nightly 特性，还要在 `Cargo.toml` 里声明 `coverage_nightly` 这个 cfg，否则 stable 下的 Lint 步报 `unexpected_cfgs`：
+
+```rust
+// lib.rs 或 main.rs 开头
+#![cfg_attr(coverage_nightly, feature(coverage_attribute))]
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests { /* … */ }
+```
+
+```toml
+# Cargo.toml
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
+```
+
+`rust.yml` 最后两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`），Coverage gate 判定。加在测试模块之外的 `coverage(off)` 算行内豁免。

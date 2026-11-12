@@ -54,3 +54,13 @@
 | [`package.json`](package.json) | `devDependencies` 固定 knip 的版本 |
 
 `typescript.yml` 的 Dead code and unused dependencies 步跑 `knip --production`，同一步也查没用的依赖（第 7 项）。`@public` JSDoc 标记和 `knip.json` 里的 `ignore*` 算行内豁免。
+
+## 覆盖率（vitest v8）
+
+| 文件 | 作用 |
+|---|---|
+| [`coverage.json`](coverage.json) | `exclude`：测试文件、`.d.ts` 和 `generated/` 目录，不进分母 |
+
+只算发布代码：`include` 取 `knip-project` 输入里结尾带 `!` 的 glob（去掉 `!`），和死代码用同一份"发布代码"的定义；没被测试 import 的文件也进分母。
+
+repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的 `@vitest/coverage-v8`，版本由 repo 自己的 lockfile 固定。`typescript.yml` 最后两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 先在 merge-base 的副本、再在 PR 上跑 `vitest run`，覆盖率设置全用命令行参数给（provider `v8`、Cobertura 报告、`include`、`exclude`），命令行优先于 repo 的 vitest 配置；Coverage gate 判定。`/* v8 ignore */` 注释算行内豁免。

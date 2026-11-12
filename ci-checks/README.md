@@ -38,7 +38,7 @@
 | 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | ✅ |
 | 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | ✅ |
 | 7 | [依赖检查](#依赖检查规则) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | ⚠️ |
-| 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR |  |
+| 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | ✅ |
 | 9 | [CRAP 分数](#crap-分数)（按项目需要） | 每个函数的 CRAP 分数（圈复杂度和覆盖率合算）不超过上限；现在超标的记进 CRAP 基线，基线只能变小 | CRAP 基线 | 复杂的函数不测 | 每个 PR |  |
 | 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |  |
 | 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |  |
@@ -177,11 +177,23 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 ### 覆盖率
 
-PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在锁住的覆盖率配置里。第 9 项用同一份报告和配置。
+三种语言各自跑测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
+
+| 项 | 内容 |
+|---|---|
+| 总覆盖率 | (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，取 Cobertura 报告根节点的总数。不低于门槛，也不低于 merge-base 上同样跑出来的值 |
+| 改动行 | diff-cover 对 merge-base 算 PR 改动行的覆盖率，不低于门槛 |
+| 门槛 | [`coverage/coverage.toml`](coverage/coverage.toml)：`total-min`、`diff-min`，0 到 100，两个键都必须写 |
+| merge-base | workflow 在 merge-base 的副本里再跑一遍测试。这一步失败（比如刚接入时 base 还没配好覆盖率）只跳过"不低于 merge-base"这一条，并给 warning；base 上没有发布代码也跳过 |
+| 退出码 | 0 通过，1 不达标，2 出错（配置不对、报告读不了、一行发布代码都没量到、找不到 diff-cover） |
+
+diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`](coverage/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.12` 生成）。测试：在 `coverage/` 跑 `python3 -m unittest coverage_gate_test`。
+
+不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步排在各 workflow 的静态检查之后。
 
 | Rust | Python | TypeScript |
 |---|---|---|
-| cargo-llvm-cov：分支要 `--branch`（只支持 nightly）；排除用 `--ignore-filename-regex`（没有配置文件，写在 CI 命令里）；`src` 里的 `#[cfg(test)] mod tests` 正则排除不了，要给它加 `#[cfg_attr(coverage_nightly, coverage(off))]` | coverage.py：`[run] branch = true`、`[run] omit` | vitest 的 v8 coverage（报分支）：`coverage.include` 写发布源码的 glob（默认只算测试 import 过的文件，没测的文件不进分母）、`coverage.exclude` |
+| [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 

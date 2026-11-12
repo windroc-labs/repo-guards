@@ -24,17 +24,44 @@ from allowlist import (
 PYPI = "https://pypi.org/simple"
 
 
-def load_text(text: str) -> Allowlist:
+def load_text(text: str, language: str = "rust") -> Allowlist:
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp, "allowlist.toml")
         path.write_text(text)
-        return load(path)
+        return load(path, language)
 
 
 class Loading(unittest.TestCase):
     def test_absent_file_is_an_empty_allowlist(self):
         with tempfile.TemporaryDirectory() as tmp:
-            self.assertEqual(load(Path(tmp, "missing.toml")), Allowlist())
+            self.assertEqual(load(Path(tmp, "missing.toml"), "python"), Allowlist())
+
+    def test_each_language_reads_only_its_own_entries(self):
+        text = (
+            '[bans]\nallow = ["serde@1.0.228"]\n'
+            '[bans.build]\nallow-build-scripts = ["blake3"]\n'
+            '[sources]\nallow-git = ["https://git.example.org/o/crate"]\n'
+            '[python.bans.build]\nallow-build-scripts = ["somepkg"]\n'
+            '[typescript.sources]\nallow-git = ["https://git.example.org/o/js"]\n'
+        )
+        rust, python, typescript = (
+            load_text(text, lang) for lang in ("rust", "python", "typescript")
+        )
+        self.assertEqual(rust.packages, (Spec("serde", "1.0.228"),))
+        self.assertEqual(rust.build, (Spec("blake3"),))
+        self.assertNotIn("python", rust.raw)
+        self.assertNotIn("typescript", rust.raw)
+        self.assertEqual(python, Allowlist(build=(Spec("somepkg"),)))
+        self.assertEqual(typescript, Allowlist(git=("https://git.example.org/o/js",)))
+
+    def test_every_section_is_validated_whichever_language_loads(self):
+        for text in (
+            '[python.bans]\nallow = "x"\n',
+            "[typescript.sources]\nallow-gti = []\n",
+            'python = ["x"]\n',
+        ):
+            with self.assertRaisesRegex(Error, r"^(python|typescript)", msg=text):
+                load_text(text, "rust")
 
     def test_every_kind_is_read(self):
         allowlist = load_text(
@@ -139,52 +166,48 @@ class GitUrls(unittest.TestCase):
 
 class Violations(unittest.TestCase):
     def check(self, locked: list[Locked], allowlist: Allowlist | None = None) -> list[str]:
-        return violations(locked, allowlist or Allowlist(), PYPI)
+        return violations(locked, allowlist or Allowlist(), "python.")
 
-    def test_default_registry_and_local_packages_pass(self):
+    def test_registries_and_local_packages_have_no_rule(self):
         self.assertEqual(
             self.check(
-                [Locked("six", "1.17.0", "registry", PYPI + "/"), Locked("me", "0", "local", "")]
+                [
+                    Locked("six", "1.17.0", "registry", PYPI),
+                    Locked("mirrored", "1.0", "registry", "https://mirror.example.org/simple"),
+                    Locked("me", "0", "local", ""),
+                ]
             ),
             [],
         )
 
-    def test_other_registry_needs_an_entry(self):
-        locked = [Locked("six", "1.17.0", "registry", "https://example.org/simple")]
-        (message,) = self.check(locked)
-        self.assertIn("sources.allow-registry", message)
-        self.assertIn("https://example.org/simple", message)
+    def test_remote_tarball_needs_a_prefix_entry_naming_its_origin(self):
+        locked = [Locked("pkg", "", "remote", "https://files.example.org/pkg/pkg-1.0.0.tgz")]
+        (message,) = violations(locked, Allowlist(), "typescript.")
+        self.assertIn("add https://files.example.org to typescript.sources.allow-registry", message)
         self.assertEqual(
-            self.check(locked, Allowlist(registries=("https://example.org/simple/",))), []
-        )
-
-    def test_registry_entry_matches_a_url_prefix(self):
-        locked = [Locked("pkg", "1.0.0", "registry", "https://npm.example.org/pkg/-/pkg-1.0.0.tgz")]
-        self.assertEqual(
-            violations(
-                locked,
-                Allowlist(registries=("https://npm.example.org",)),
-                "https://registry.npmjs.org",
-            ),
+            violations(locked, Allowlist(registries=("https://files.example.org",)), "typescript."),
             [],
         )
         self.assertEqual(
             len(
-                violations(
-                    locked,
-                    Allowlist(registries=("https://npm.example",)),
-                    "https://registry.npmjs.org",
-                )
+                violations(locked, Allowlist(registries=("https://files.example",)), "typescript.")
             ),
             1,
         )
+
+    def test_remote_request_line_is_not_held_to_bans_allow(self):
+        allowlist = Allowlist(
+            packages=(Spec("pkg", "1.0.0"),), registries=("https://files.example.org",)
+        )
+        locked = [Locked("pkg", "", "remote", "https://files.example.org/pkg-1.0.0.tgz")]
+        self.assertEqual(violations(locked, allowlist, "typescript."), [])
 
     def test_git_source_needs_an_entry(self):
         locked = [
             Locked("somepkg", "1.0.0", "git", "git+https://github.com/example/somepkg?rev=abc#abc")
         ]
         (message,) = self.check(locked)
-        self.assertIn("sources.allow-git", message)
+        self.assertIn("python.sources.allow-git", message)
         self.assertIn("https://github.com/example/somepkg", message)
         self.assertEqual(
             self.check(locked, Allowlist(git=("https://github.com/example/somepkg.git",))), []
@@ -202,7 +225,7 @@ class Violations(unittest.TestCase):
         ]
         (message,) = self.check(locked, allowlist)
         self.assertIn("idna@3.10", message)
-        self.assertIn("bans.allow", message)
+        self.assertIn("python.bans.allow", message)
 
     def test_url_and_local_sources_have_no_rule(self):
         self.assertEqual(
@@ -244,6 +267,18 @@ source = { editable = "packages/member" }
 name = "wheel-url"
 version = "1.0"
 source = { url = "https://example.org/wheel_url-1.0-py3-none-any.whl" }
+
+[[package]]
+name = "numpy"
+version = "2.0.2"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version < '3.10'"]
+
+[[package]]
+name = "numpy"
+version = "2.2.6"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = ["python_full_version >= '3.11'", "python_full_version == '3.10.*'"]
 """
 
 REQUIREMENTS = """\
@@ -290,6 +325,14 @@ class Readers(unittest.TestCase):
                 Locked("member", "0.2.0", "local", ""),
                 Locked(
                     "wheel-url", "1.0", "url", "https://example.org/wheel_url-1.0-py3-none-any.whl"
+                ),
+                Locked("numpy", "2.0.2", "registry", PYPI, "(python_full_version < '3.10')"),
+                Locked(
+                    "numpy",
+                    "2.2.6",
+                    "registry",
+                    PYPI,
+                    "(python_full_version >= '3.11') or (python_full_version == '3.10.*')",
                 ),
             ],
         )
@@ -342,20 +385,41 @@ class Cli(unittest.TestCase):
                 ]
             )
             self.assertEqual(code, 1)
-            self.assertIn("private-pkg@2.0.0: registry https://pypi.example.org/simple", err)
+            self.assertNotIn("private-pkg", err)
             self.assertIn("somepkg@4.0.0: git source", err)
             self.assertIn(
-                "somepkg@4.0.0: a git dependency builds from source; add somepkg to bans.build.allow-build-scripts",
+                "somepkg@4.0.0: a git dependency builds from source; "
+                "add somepkg to python.bans.build.allow-build-scripts",
                 err,
             )
-            self.assertEqual(pinned.read_text(), "six==1.17.0\nprivate-pkg==2.0.0\n")
+            self.assertEqual(
+                pinned.read_text(),
+                "six==1.17.0\nprivate-pkg==2.0.0\n"
+                "numpy==2.0.2 ; (python_full_version < '3.10')\n"
+                "numpy==2.2.6 ; (python_full_version >= '3.11') or (python_full_version == '3.10.*')\n",
+            )
+
+    def test_check_python_ignores_other_languages_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.toml").write_text('[bans]\nallow = ["serde@1.0.228"]\n')
+            Path(tmp, "r.txt").write_text("six==1.17.0\n    # from https://pypi.org/simple\n")
+            code, _, err = self.run_main(
+                [
+                    "check",
+                    "python",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--requirements",
+                    str(Path(tmp, "r.txt")),
+                ]
+            )
+        self.assertEqual((code, err), (0, ""))
 
     def test_check_python_passes_with_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "a.toml").write_text(
-                '[bans.build]\nallow-build-scripts = ["SomePkg"]\n'
-                '[sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
-                'allow-registry = ["https://pypi.example.org/simple"]\n'
+                '[python.bans.build]\nallow-build-scripts = ["SomePkg"]\n'
+                '[python.sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
             )
             Path(tmp, "r.txt").write_text(REQUIREMENTS)
             code, _, err = self.run_main(
@@ -405,12 +469,22 @@ class Cli(unittest.TestCase):
     def test_env_python_lists_build_names(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "a.toml").write_text(
-                '[bans.build]\nallow-build-scripts = ["somepkg", "other@1.0"]\n'
+                '[bans.build]\nallow-build-scripts = ["blake3"]\n'
+                '[python.bans.build]\nallow-build-scripts = ["somepkg", "other@1.0"]\n'
+                '[typescript.bans.build]\nallow-build-scripts = ["@parcel/watcher"]\n'
             )
             self.assertEqual(
                 self.run_main(["env", "python", "--allowlist", str(Path(tmp, "a.toml"))]),
                 (0, "UV_NO_BINARY_PACKAGE=somepkg other\n", ""),
             )
+            Path(tmp, "bad.toml").write_text(
+                '[python.bans.build]\nallow-build-scripts = ["@parcel/watcher"]\n'
+            )
+            code, out, err = self.run_main(
+                ["env", "python", "--allowlist", str(Path(tmp, "bad.toml"))]
+            )
+            self.assertEqual((code, out), (2, ""))
+            self.assertIn("not a Python package name", err)
             self.assertEqual(
                 self.run_main(["env", "python", "--allowlist", str(Path(tmp, "none.toml"))]),
                 (0, "", ""),
@@ -421,7 +495,19 @@ PACKAGE_LOCK = {
     "name": "app",
     "lockfileVersion": 3,
     "packages": {
-        "": {"name": "app", "version": "1.0.0", "workspaces": ["packages/*"]},
+        "": {
+            "name": "app",
+            "version": "1.0.0",
+            "workspaces": ["packages/*"],
+            "dependencies": {
+                "left-pad": "^1.3.0",
+                "tarred": "https://files.example.org/tarred-1.0.0.tgz",
+            },
+        },
+        "node_modules/tarred": {
+            "version": "1.0.0",
+            "resolved": "https://files.example.org/tarred-1.0.0.tgz",
+        },
         "node_modules/left-pad": {
             "version": "1.3.0",
             "resolved": "https://registry.npmjs.org/left-pad/-/left-pad-1.3.0.tgz",
@@ -466,6 +552,8 @@ class Npm(unittest.TestCase):
         self.assertEqual(
             locked,
             [
+                Locked("tarred", "", "remote", "https://files.example.org/tarred-1.0.0.tgz"),
+                Locked("tarred", "1.0.0", "registry", "https://files.example.org/tarred-1.0.0.tgz"),
                 Locked(
                     "left-pad",
                     "1.3.0",
@@ -508,7 +596,14 @@ class Npm(unittest.TestCase):
             lock = Path(tmp, "package-lock.json")
             lock.write_text(json.dumps({"lockfileVersion": 1, "dependencies": {}}))
             code, _, err = self.run_main(
-                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+                [
+                    "check",
+                    "typescript",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--lock",
+                    str(lock),
+                ]
             )
         self.assertEqual(code, 2)
         self.assertIn("lockfileVersion", err)
@@ -518,43 +613,75 @@ class Npm(unittest.TestCase):
             lock = Path(tmp, "package-lock.json")
             lock.write_text(json.dumps(PACKAGE_LOCK))
             code, _, err = self.run_main(
-                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+                [
+                    "check",
+                    "typescript",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--lock",
+                    str(lock),
+                ]
             )
             self.assertEqual(code, 1)
-            self.assertIn("@scope/private@2.0.0: registry https://npm.example.org/", err)
+            self.assertNotIn("@scope/private", err)
+            self.assertIn("tarred: tarball URL https://files.example.org/tarred-1.0.0.tgz", err)
             self.assertIn("somepkg@4.0.0: git source", err)
-            self.assertIn("add https://git.example.org/example/somepkg to sources.allow-git", err)
+            self.assertIn(
+                "add https://git.example.org/example/somepkg to typescript.sources.allow-git", err
+            )
             Path(tmp, "a.toml").write_text(
-                '[sources]\nallow-git = ["https://git.example.org/example/somepkg"]\nallow-registry = ["https://npm.example.org"]\n'
+                '[typescript.sources]\nallow-git = ["https://git.example.org/example/somepkg"]\n'
+                'allow-registry = ["https://files.example.org"]\n'
             )
             code, _, err = self.run_main(
-                ["check", "npm", "--allowlist", str(Path(tmp, "a.toml")), "--lock", str(lock)]
+                [
+                    "check",
+                    "typescript",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--lock",
+                    str(lock),
+                ]
             )
         self.assertEqual((code, err), (0, ""))
 
-    def test_env_npm(self):
+    def test_env_typescript(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "a.toml").write_text(
-                '[bans.build]\nallow-build-scripts = ["esbuild", "@scope/native@1.2.3"]\n'
-                '[sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
+                '[sources]\nallow-git = ["https://git.example.org/o/crate"]\n'
+                '[typescript.bans.build]\nallow-build-scripts = ["esbuild", "@scope/native@1.2.3"]\n'
+                '[typescript.sources]\nallow-git = ["https://github.com/example/somepkg"]\n'
+                'allow-registry = ["https://files.example.org"]\n'
             )
             self.assertEqual(
-                self.run_main(["env", "npm", "--allowlist", str(Path(tmp, "a.toml"))]),
-                (0, "npm_config_allow_git=all\nALLOW_BUILD=esbuild @scope/native@1.2.3\n", ""),
+                self.run_main(["env", "typescript", "--allowlist", str(Path(tmp, "a.toml"))]),
+                (
+                    0,
+                    (
+                        "npm_config_allow_git=all\nnpm_config_allow_remote=all\n"
+                        "ALLOW_BUILD=esbuild @scope/native@1.2.3\n"
+                    ),
+                    "",
+                ),
             )
-            self.assertEqual(
-                self.run_main(["env", "npm", "--allowlist", str(Path(tmp, "none.toml"))]),
-                (0, "", ""),
+            Path(tmp, "rust.toml").write_text(
+                '[sources]\nallow-git = ["https://git.example.org/o/crate"]\n'
             )
+            for name in ("none.toml", "rust.toml"):
+                self.assertEqual(
+                    self.run_main(["env", "typescript", "--allowlist", str(Path(tmp, name))]),
+                    (0, "", ""),
+                )
 
     def test_licenses_lists_each_exception(self):
         with tempfile.TemporaryDirectory() as tmp:
             Path(tmp, "a.toml").write_text(
-                '[[licenses.exceptions]]\ncrate = "pkg"\nallow = ["MPL-2.0", "Unlicense"]\n'
-                '[[licenses.exceptions]]\nname = "@scope/other"\nversion = "1.0.0"\nallow = ["CC0-1.0"]\n'
+                '[[licenses.exceptions]]\ncrate = "ring"\nallow = ["OpenSSL"]\n'
+                '[[typescript.licenses.exceptions]]\ncrate = "pkg"\nallow = ["MPL-2.0", "Unlicense"]\n'
+                '[[typescript.licenses.exceptions]]\nname = "@scope/other"\nversion = "1.0.0"\nallow = ["CC0-1.0"]\n'
             )
             self.assertEqual(
-                self.run_main(["licenses", "--allowlist", str(Path(tmp, "a.toml"))]),
+                self.run_main(["licenses", "typescript", "--allowlist", str(Path(tmp, "a.toml"))]),
                 (0, "pkg\tMPL-2.0;Unlicense\n@scope/other@1.0.0\tCC0-1.0\n", ""),
             )
 

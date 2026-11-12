@@ -16,6 +16,10 @@ KEYS = {
     ("sources", "allow-registry"),
     ("licenses", "exceptions"),
 }
+# Rust's entries sit at the top level, where cargo-deny reads them; each other language has its own table of the same keys.
+LANGUAGES = ("rust", "python", "typescript")
+SECTIONS = LANGUAGES[1:]
+PEP_508_NAME = re.compile(r"[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?")
 
 
 class Error(Exception):
@@ -51,6 +55,7 @@ class Locked(NamedTuple):
     version: str
     kind: str
     url: str
+    marker: str = ""
 
     def __str__(self) -> str:
         return f"{self.name}@{self.version}" if self.version else self.name
@@ -82,7 +87,11 @@ def parse_spec(text: str, where: str) -> Spec:
     name = scope + name
     if name in ("", "@") or (at and not version):
         raise Error(f"{where}: {text!r} is not a name or name@version")
-    return Spec(name, None if version in ("", "*") else version)
+    return spec(name, version)
+
+
+def spec(name: str, version: str | None) -> Spec:
+    return Spec(name, None if version in (None, "", "*") else version)
 
 
 def to_spec(entry: Any, where: str) -> Spec:
@@ -93,7 +102,7 @@ def to_spec(entry: Any, where: str) -> Spec:
             return parse_spec(crate, where)
         name, version = entry.get("name"), entry.get("version")
         if isinstance(name, str) and name and (version is None or isinstance(version, str)):
-            return Spec(name, None if version in (None, "*") else version)
+            return spec(name, version)
     raise Error(f'{where}: {entry!r} needs a name: "name", "name@version" or {{ crate = ... }}')
 
 
@@ -112,20 +121,34 @@ def license_exception(entry: Any, where: str) -> LicenseException:
     return LicenseException(to_spec(entry, where), strings(allow, where))
 
 
-def load(path: Path) -> Allowlist:
-    """Absent file: no exceptions, the strictest rules."""
+def load(path: Path, language: str) -> Allowlist:
+    """The language's entries; every language's entries are validated. Absent file: no exceptions, the strictest rules."""
     try:
         raw = tomllib.loads(path.read_text())
     except FileNotFoundError:
         return Allowlist()
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise Error(f"{path}: {error}") from error
+    tables = {"rust": {k: v for k, v in raw.items() if k not in SECTIONS}}
+    for section in SECTIONS:
+        table = raw.get(section, {})
+        if not isinstance(table, dict):
+            raise Error(f"{section}: must be a table of allowlist keys")
+        tables[section] = table
+    parsed = {
+        lang: parse(table, "" if lang == "rust" else f"{lang}.") for lang, table in tables.items()
+    }
+    return parsed[language]
+
+
+def parse(raw: dict[str, Any], prefix: str) -> Allowlist:
     found: dict[tuple[str, ...], list[Any]] = {}
     for key, value in leaves(raw):
-        name = ".".join(key)
+        name = prefix + ".".join(key)
         if key not in KEYS:
             raise Error(
                 f"{name}: not an allowlist key; allowed: {', '.join(sorted('.'.join(k) for k in KEYS))}"
+                f", at the top level (Rust) or under [{'], ['.join(SECTIONS)}]"
             )
         if not isinstance(value, list):
             raise Error(f"{name}: must be an array")
@@ -135,15 +158,16 @@ def load(path: Path) -> Allowlist:
         return found.get(key, [])
 
     return Allowlist(
-        packages=tuple(to_spec(e, "bans.allow") for e in entries("bans", "allow")),
+        packages=tuple(to_spec(e, prefix + "bans.allow") for e in entries("bans", "allow")),
         build=tuple(
-            to_spec(e, "bans.build.allow-build-scripts")
+            to_spec(e, prefix + "bans.build.allow-build-scripts")
             for e in entries("bans", "build", "allow-build-scripts")
         ),
-        git=strings(entries("sources", "allow-git"), "sources.allow-git"),
-        registries=strings(entries("sources", "allow-registry"), "sources.allow-registry"),
+        git=strings(entries("sources", "allow-git"), prefix + "sources.allow-git"),
+        registries=strings(entries("sources", "allow-registry"), prefix + "sources.allow-registry"),
         licenses=tuple(
-            license_exception(e, "licenses.exceptions") for e in entries("licenses", "exceptions")
+            license_exception(e, prefix + "licenses.exceptions")
+            for e in entries("licenses", "exceptions")
         ),
         raw=raw,
     )
@@ -172,36 +196,43 @@ def under(url: str, prefixes: Iterable[str]) -> bool:
 def violations(
     locked: Iterable[Locked],
     allowlist: Allowlist,
-    default_registry: str,
+    prefix: str,
     canonical: Callable[[str], str] = same,
 ) -> list[str]:
-    """One line per package the rules reject, naming the allowlist entry that would admit it."""
+    """One line per package the rules reject, naming the allowlist entry (under prefix) that would admit it.
+
+    Registries are not checked: python.yml and typescript.yml never limited them. A remote package is an npm
+    tarball URL dependency, which npm's allow-remote=none rejects unless sources.allow-registry holds its prefix.
+    """
     git = {normalize_git(u) for u in allowlist.git}
     found: list[str] = []
     for package in locked:
         if package.kind == "local":
             continue
         label = str(package)
-        if package.kind == "registry" and not under(
-            package.url, [default_registry, *allowlist.registries]
-        ):
+        if package.kind == "remote" and not under(package.url, allowlist.registries):
+            origin = urllib.parse.urlsplit(package.url)
             found.append(
-                f"{label}: registry {package.url} is not allowed; add it to sources.allow-registry"
+                f"{label}: tarball URL {package.url} is not allowed; "
+                f"add {origin.scheme}://{origin.netloc} to {prefix}sources.allow-registry"
             )
         if package.kind == "git" and normalize_git(package.url) not in git:
             found.append(
                 f"{label}: git source {package.url} is not allowed; "
-                f"add https://{normalize_git(package.url)} to sources.allow-git"
+                f"add https://{normalize_git(package.url)} to {prefix}sources.allow-git"
             )
-        if allowlist.packages and not any(
-            s.matches(package.name, package.version, canonical) for s in allowlist.packages
+        # The remote line is the package.json request; the installed package has its own line.
+        if (
+            package.kind != "remote"
+            and allowlist.packages
+            and not any(
+                s.matches(package.name, package.version, canonical) for s in allowlist.packages
+            )
         ):
-            found.append(f'{label}: not in bans.allow; add "{label}"')
+            found.append(f'{label}: not in {prefix}bans.allow; add "{label}"')
     return found
 
 
-PYPI = "https://pypi.org/simple"
-NPM = "https://registry.npmjs.org"
 REQUIREMENT = re.compile(
     r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*(?:==\s*([^\s;\\]+)|@\s*(\S+))"
 )
@@ -212,8 +243,10 @@ def read_uv_lock(path: Path) -> list[Locked]:
     for package in tomllib.loads(path.read_text()).get("package", []):
         source: dict[str, str] = package.get("source", {})
         kind = next((k for k in ("registry", "git", "url") if k in source), "local")
+        # A forked resolution locks one version per environment; its markers tell pip-audit which applies.
+        marker = " or ".join(f"({m})" for m in package.get("resolution-markers", []))
         locked.append(
-            Locked(package["name"], package.get("version", ""), kind, source.get(kind, ""))
+            Locked(package["name"], package.get("version", ""), kind, source.get(kind, ""), marker)
         )
     return locked
 
@@ -248,23 +281,28 @@ def read_requirements(path: Path) -> list[Locked]:
     return locked
 
 
+DEPENDENCY_FIELDS = ("dependencies", "devDependencies", "optionalDependencies", "peerDependencies")
+
+
 def read_package_lock(path: Path) -> list[Locked]:
+    """Git packages by where they resolved; remote packages by the tarball URL some package.json asks for."""
     packages = json.loads(path.read_text()).get("packages")
     if not isinstance(packages, dict):
         raise Error(f"{path}: no packages map; npm 7 or later writes it (lockfileVersion 2 or 3)")
     locked: list[Locked] = []
     for key, entry in packages.items():
+        for field_name in DEPENDENCY_FIELDS:
+            for name, wanted in entry.get(field_name, {}).items():
+                if wanted.startswith(("https:", "http:")):
+                    locked.append(Locked(name, "", "remote", wanted))
         if not key:
             continue
         name = entry.get("name") or key.rpartition("node_modules/")[2]
         resolved: str = (
             "" if entry.get("link") or "node_modules/" not in key else entry.get("resolved", "")
         )
-        if resolved.startswith(("git+", "git:", "github:")):
-            kind = "git"
-        elif resolved.startswith(("https:", "http:")):
-            kind = "registry"
-        else:
+        kind = "git" if resolved.startswith(("git+", "git:", "github:")) else "registry"
+        if kind == "registry" and not resolved.startswith(("https:", "http:")):
             kind, resolved = "local", ""
         locked.append(Locked(name, entry.get("version", ""), kind, resolved))
     return locked
@@ -282,44 +320,58 @@ def report(found: list[str]) -> int:
     return 0
 
 
+def pin(package: Locked) -> str:
+    return f"{package.name}=={package.version}" + (f" ; {package.marker}" if package.marker else "")
+
+
 def check_python(args: argparse.Namespace) -> int:
-    allowlist = load(args.allowlist)
+    allowlist = load(args.allowlist, "python")
     locked = read_uv_lock(args.uv_lock) if args.uv_lock else read_requirements(args.requirements)
     if args.pinned_out:
-        pins = (f"{p.name}=={p.version}\n" for p in locked if p.kind == "registry" and p.version)
+        pins = (pin(p) + "\n" for p in locked if p.kind == "registry" and p.version)
         args.pinned_out.write_text("".join(pins))
-    found = violations(locked, allowlist, PYPI, pep503)
+    found = violations(locked, allowlist, "python.", pep503)
     for package in locked:
         if package.kind == "git" and not any(
             pep503(s.name) == pep503(package.name) for s in allowlist.build
         ):
             found.append(
-                f"{package}: a git dependency builds from source; add {package.name} to bans.build.allow-build-scripts"
+                f"{package}: a git dependency builds from source; "
+                f"add {package.name} to python.bans.build.allow-build-scripts"
             )
     return report(found)
 
 
-def check_npm(args: argparse.Namespace) -> int:
-    return report(violations(read_package_lock(args.lock), load(args.allowlist), NPM))
+def check_typescript(args: argparse.Namespace) -> int:
+    allowlist = load(args.allowlist, "typescript")
+    return report(violations(read_package_lock(args.lock), allowlist, "typescript."))
 
 
-def env_npm(args: argparse.Namespace) -> int:
-    allowlist = load(args.allowlist)
+def env_typescript(args: argparse.Namespace) -> int:
+    """npm's allow-git and allow-remote are all or nothing; Dependency rules checks each URL before npm ci."""
+    allowlist = load(args.allowlist, "typescript")
     if allowlist.git:
         print("npm_config_allow_git=all")
+    if allowlist.registries:
+        print("npm_config_allow_remote=all")
     if allowlist.build:
         print(f"ALLOW_BUILD={' '.join(dict.fromkeys(str(spec) for spec in allowlist.build))}")
     return 0
 
 
 def licenses(args: argparse.Namespace) -> int:
-    for exception in load(args.allowlist).licenses:
+    for exception in load(args.allowlist, args.language).licenses:
         print(f"{exception.spec}\t{';'.join(exception.allow)}")
     return 0
 
 
 def env_python(args: argparse.Namespace) -> int:
-    names = dict.fromkeys(spec.name for spec in load(args.allowlist).build)
+    names = dict.fromkeys(spec.name for spec in load(args.allowlist, "python").build)
+    for name in names:
+        if not PEP_508_NAME.fullmatch(name):
+            raise Error(
+                f"python.bans.build.allow-build-scripts: {name!r} is not a Python package name"
+            )
     if names:
         print(f"UV_NO_BINARY_PACKAGE={' '.join(names)}")
     return 0
@@ -344,22 +396,23 @@ def parser() -> argparse.ArgumentParser:
         "--pinned-out", type=Path, help="write the registry packages as name==version lines"
     )
     python.set_defaults(run=check_python)
-    npm = check.add_parser("npm")
-    npm.add_argument("--allowlist", type=Path, required=True)
-    npm.add_argument("--lock", type=Path, required=True, help="package-lock.json")
-    npm.set_defaults(run=check_npm)
+    typescript = check.add_parser("typescript")
+    typescript.add_argument("--allowlist", type=Path, required=True)
+    typescript.add_argument("--lock", type=Path, required=True, help="package-lock.json")
+    typescript.set_defaults(run=check_typescript)
     env = commands.add_parser("env", help="print KEY=VALUE lines for $GITHUB_ENV").add_subparsers(
         required=True
     )
     env_py = env.add_parser("python")
     env_py.add_argument("--allowlist", type=Path, required=True)
     env_py.set_defaults(run=env_python)
-    env_js = env.add_parser("npm")
-    env_js.add_argument("--allowlist", type=Path, required=True)
-    env_js.set_defaults(run=env_npm)
+    env_ts = env.add_parser("typescript")
+    env_ts.add_argument("--allowlist", type=Path, required=True)
+    env_ts.set_defaults(run=env_typescript)
     license_lines = commands.add_parser(
         "licenses", help="print each licenses.exceptions entry as SPEC<TAB>LICENSE;..."
     )
+    license_lines.add_argument("language", choices=LANGUAGES)
     license_lines.add_argument("--allowlist", type=Path, required=True)
     license_lines.set_defaults(run=licenses)
     return root

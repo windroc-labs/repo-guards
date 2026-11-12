@@ -62,6 +62,15 @@ class Merging(unittest.TestCase):
         expected["licenses"]["allow"] = tomllib.loads(LICENSES.read_text())["allow"]
         self.assertEqual(merged, expected)
 
+    def test_other_languages_sections_stay_out_of_deny_toml(self):
+        code, merged = self.run_main(
+            PROJECT + '[python.bans]\nallow = ["six"]\n[typescript.sources]\nallow-git = ["https://git.example.org/o/js"]\n'
+        )
+        self.assertEqual(code, 0)
+        self.assertNotIn("python", merged)
+        self.assertNotIn("typescript", merged)
+        self.assertEqual(merged["sources"]["allow-git"], ["https://github.com/example/repo"])
+
     def test_rule_keys_cannot_be_loosened(self):
         for project in (
             '[licenses]\nallow = ["GPL-3.0"]\n',

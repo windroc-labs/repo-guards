@@ -97,7 +97,7 @@ class Report(unittest.TestCase):
             return code, err.getvalue()
 
     def test_allowlist_exception_adds_licenses_for_its_package_only(self):
-        allowlist = '[[licenses.exceptions]]\ncrate = "Some_Pkg"\nallow = ["MPL-2.0"]\n'
+        allowlist = '[[python.licenses.exceptions]]\ncrate = "Some_Pkg"\nallow = ["MPL-2.0"]\n'
         rows = [row("some-pkg", expression="MPL-2.0"), row("other", expression="MPL-2.0")]
         code, err = self.run_main(rows, allowlist=allowlist)
         self.assertEqual(code, 1)
@@ -107,12 +107,17 @@ class Report(unittest.TestCase):
     def test_allowlist_exception_with_a_version_matches_that_version_only(self):
         rows = [row("pkg", expression="MPL-2.0")]
         self.assertEqual(
-            self.run_main(rows, allowlist='[[licenses.exceptions]]\ncrate = "pkg@1.0"\nallow = ["MPL-2.0"]\n'),
+            self.run_main(rows, allowlist='[[python.licenses.exceptions]]\ncrate = "pkg@1.0"\nallow = ["MPL-2.0"]\n'),
             (0, ""),
         )
         self.assertEqual(
-            self.run_main(rows, allowlist='[[licenses.exceptions]]\ncrate = "pkg@2.0"\nallow = ["MPL-2.0"]\n')[0], 1
+            self.run_main(rows, allowlist='[[python.licenses.exceptions]]\ncrate = "pkg@2.0"\nallow = ["MPL-2.0"]\n')[0], 1
         )
+
+    def test_other_languages_exceptions_do_not_apply(self):
+        rows = [row("pkg", expression="MPL-2.0")]
+        allowlist = '[[licenses.exceptions]]\ncrate = "pkg"\nallow = ["MPL-2.0"]\n'
+        self.assertEqual(self.run_main(rows, allowlist=allowlist)[0], 1)
 
     def test_absent_allowlist_file_adds_nothing(self):
         with tempfile.TemporaryDirectory() as tmp:

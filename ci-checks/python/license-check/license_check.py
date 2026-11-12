@@ -102,7 +102,7 @@ def main(argv: list[str]) -> int:
         allowed: set[str] = set(config["allow"])
         classifiers: dict[str, str] = config["python-classifiers"]
         rows: list[dict[str, str]] = json.loads(Path(argv[1]).read_text())
-        allowlist = load(Path(argv[2])) if len(argv) == 3 else Allowlist()
+        allowlist = load(Path(argv[2]), "python") if len(argv) == 3 else Allowlist()
         denied: list[str] = []
         for row in rows:
             licenses = alternatives(row)

@@ -11,7 +11,7 @@
 | `uv.lock` | `uv sync --locked` |
 | 没有 `uv.lock` | `uv pip compile` 解析 `requirements` 输入的文件（默认 `requirements.txt`，空格分开）和存在的 `requirements-dev` 文件（默认 `requirements-dev.txt`，放 pytest 等测试用的包），记下每个包来自哪个 index，再 `uv pip sync` 进 `.venv`。Python 版本取 `.python-version`，没有就用 3.12 |
 
-两种都只装 wheel；[依赖白名单](../README.md#依赖白名单)的 `bans.build.allow-build-scripts` 里的包从源码构建，git 依赖也要写进去。之后各步都用 `.venv`，两种项目跑法一样。只有零散脚本、没有 `src` 的项目把 `source-dirs` 设成 `.`：vulture 跳过 `.venv`，pyright 和 coverage.py 本来就不进去。
+两种都只装 wheel；[依赖白名单](../README.md#依赖白名单)的 `[python]` 表里 `bans.build.allow-build-scripts` 的包从源码构建，git 依赖也要写进去。Dependency rules 步在两步之间：先解析（有 `uv.lock` 就不用），查过再装。之后各步都用 `.venv`，两种项目跑法一样。只有零散脚本、没有 `src` 的项目把 `source-dirs` 设成 `.`：vulture 跳过 `.venv`，pyright 和 coverage.py 本来就不进去。
 
 ## formatter（ruff format）
 
@@ -67,7 +67,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 
 ## 依赖检查
 
-`python.yml` 的 Dependency rules 步用 [`allowlist.py`](../allowlist/allowlist.py) 拿项目的包对[依赖白名单](../README.md#依赖白名单)：有 `uv.lock` 读它，没有就读[项目安装](#项目安装)的解析结果。registry 只准 PyPI 和 `sources.allow-registry`；git 源要在 `sources.allow-git` 里，包名还要在 `bans.build.allow-build-scripts` 里；`bans.allow` 非空时只准名单里的包。同一步把 registry 上的包写成 `name==version`，Vulnerabilities 步交给 pip-audit。
+`python.yml` 的 Dependency rules 步在安装前用 [`allowlist.py`](../allowlist/allowlist.py) 拿项目的包对[依赖白名单](../README.md#依赖白名单)的 `[python]` 表：有 `uv.lock` 读它，没有就读[项目安装](#项目安装)的解析结果。git 源要在 `sources.allow-git` 里，包名还要在 `bans.build.allow-build-scripts` 里；`bans.allow` 非空时只准名单里的包。别的 index 和 URL 依赖不挡。这一步失败时，两个 job 都不装项目。同一步把 registry 上的包写成 `name==version`，Vulnerabilities 步交给 pip-audit。
 
 ## 许可证（pip-licenses）
 
@@ -77,7 +77,7 @@ vulture 的 `# noqa` 和白名单文件、deptry 的 `ignore` 配置算行内豁
 |---|---|
 | 输入 | `pip-licenses --from all --format json` 的输出。每个包按顺序取一种：PEP 639 的 `License-Expression`；没有就取 trove classifier 名（多个用 `; ` 隔开，有一个满足就过）；再没有就取 `License` 元数据，整段当一个许可证，不拆 |
 | 判定 | classifier 名先按 `python-classifiers` 换成 SPDX，再当 SPDX 表达式算：`OR` 有一边在 `allow` 里就过，`AND` 要每边都在，`AND` 比 `OR` 先结合，可加括号；`<id> WITH <exception>` 整体要在 `allow` 里。标识符和运算符不分大小写；解析不了的（如自由文本）不过 |
-| 参数 | `license_check.py LICENSES_TOML PIP_LICENSES_JSON [ALLOWLIST_TOML]`；依赖白名单的 `licenses.exceptions` 给匹配的包加准用的许可证，文件可以不存在 |
+| 参数 | `license_check.py LICENSES_TOML PIP_LICENSES_JSON [ALLOWLIST_TOML]`；依赖白名单 `[python]` 表的 `licenses.exceptions` 给匹配的包加准用的许可证，文件可以不存在 |
 | 输出 | 不过的包逐个列出（名字、版本、许可证）。退出码：0 通过，1 有包不过，2 出错（文件缺失、JSON 或 TOML 不对、缺键） |
 | 测试 | 在该目录跑 `python3 -m unittest license_check_test` |
 

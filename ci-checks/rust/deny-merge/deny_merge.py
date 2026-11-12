@@ -50,7 +50,7 @@ def main(argv: list[str]) -> int:
     try:
         shared = tomllib.loads(shared_path.read_text())
         shared.setdefault("licenses", {})["allow"] = tomllib.loads(licenses_path.read_text())["allow"]
-        output.write_text("\n".join(dump(merge(shared, load(project_path).raw))) + "\n")
+        output.write_text("\n".join(dump(merge(shared, load(project_path, "rust").raw))) + "\n")
     except (OSError, tomllib.TOMLDecodeError, Error) as error:
         print(f"deny_merge: {error}", file=sys.stderr)
         return 2

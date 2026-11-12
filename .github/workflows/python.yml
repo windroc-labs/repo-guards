@@ -86,8 +86,19 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
+      # Before install: an unlisted git source or tarball never gets fetched or built.
+      - &dependency-rules
+        name: Dependency rules
+        id: dependency-rules
+        run: |
+          bash "$RG/python/install-project.sh" resolve "$RUNNER_TEMP/resolved.txt"
+          lock=(--requirements "$RUNNER_TEMP/resolved.txt")
+          if [[ -f uv.lock ]]; then
+            lock=(--uv-lock uv.lock)
+          fi
+          uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST" "${lock[@]}" --pinned-out "$RUNNER_TEMP/pinned.txt"
       - name: Install the project
-        run: bash "$RG/python/install-project.sh" "$RUNNER_TEMP/resolved.txt"
+        run: bash "$RG/python/install-project.sh" sync "$RUNNER_TEMP/resolved.txt"
       - name: Format
         if: ${{ !cancelled() }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .
@@ -115,14 +126,6 @@ jobs:
             files=(--requirements-files "${REQUIREMENTS// /,}" --requirements-files-dev "${REQUIREMENTS_DEV// /,}")
           fi
           uv run --no-project --python .venv/bin/python --with "$deptry" deptry "${files[@]}" $SOURCE_DIRS
-      - name: Dependency rules
-        if: ${{ !cancelled() }}
-        run: |
-          lock=(--requirements "$RUNNER_TEMP/resolved.txt")
-          if [[ -f uv.lock ]]; then
-            lock=(--uv-lock uv.lock)
-          fi
-          python3 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST" "${lock[@]}" --pinned-out "$RUNNER_TEMP/pinned.txt"
       # Only registry packages have advisories; Dependency rules lists them pinned.
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
@@ -158,6 +161,7 @@ jobs:
       - *checkout-repo-guards
       - *install-uv
       - *allowlist
+      - *dependency-rules
       # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
       - name: Install Python 3.12
         run: |
@@ -170,7 +174,7 @@ jobs:
           uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Coverage
         id: coverage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.dependency-rules.outcome == 'success' }}
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
           PROJECT_DIR: ${{ inputs.working-directory }}
@@ -178,16 +182,18 @@ jobs:
           coverage=$(python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith("coverage[toml]==")))' "$RG/python/pyproject.toml")
           read -ra dirs <<< "$SOURCE_DIRS"
           sources=$(IFS=,; echo "${dirs[*]}")
+          # $3: the resolution to install; the PR's is the one Dependency rules checked, the merge-base's is resolved here.
           measure() {
-            (cd "$1" && bash "$RG/python/install-project.sh" "$2.resolved.txt" \
+            (cd "$1" && { [[ -f $3 ]] || bash "$RG/python/install-project.sh" resolve "$3"; } \
+              && bash "$RG/python/install-project.sh" sync "$3" \
               && uv run --no-project --python .venv/bin/python --with "$coverage" coverage run --rcfile "$RG/python/pyproject.toml" --source "$sources" -m pytest \
               && uv run --no-project --python .venv/bin/python --with "$coverage" coverage xml --rcfile "$RG/python/pyproject.toml" -o "$2")
           }
           # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
           git worktree prune
           git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
-          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
-          measure . "$RUNNER_TEMP/coverage-head.xml"
+          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" "$RUNNER_TEMP/resolved-base.txt" || echo "::warning::Tests at the merge-base failed"
+          measure . "$RUNNER_TEMP/coverage-head.xml" "$RUNNER_TEMP/resolved.txt"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |

@@ -57,11 +57,11 @@
 
 ## 依赖检查（npm、license-checker）
 
-`typescript.yml` 的 Dependency rules 步用 [`allowlist.py`](../allowlist/allowlist.py) 拿 `package-lock.json`（lockfileVersion 2 或 3）对[依赖白名单](../README.md#依赖白名单)：registry 只准 npmjs 和 `sources.allow-registry`（按 URL 前缀比），git 源只准 `sources.allow-git`，`bans.allow` 非空时只准名单里的包；workspace 和 file 依赖不查。白名单另外这样用：
+`typescript.yml` 的 Dependency rules 步在 `npm ci` 前用 [`allowlist.py`](../allowlist/allowlist.py) 拿 `package-lock.json`（lockfileVersion 2 或 3）对[依赖白名单](../README.md#依赖白名单)的 `[typescript]` 表：git 源只准 `sources.allow-git`，tarball URL 依赖（某个 `package.json` 写的 `https://…` 地址）只准 `sources.allow-registry` 里的前缀，`bans.allow` 非空时只准名单里的包。别的 registry、workspace、file 和 directory 依赖不查。这一步失败时，两个 job 都不装项目。白名单另外这样用：
 
 | 白名单项 | `typescript.yml` 怎么用 |
 |---|---|
-| `sources.allow-git` 有条目 | Apply the dependency allowlist 步把 npm 的 `allow-git` 设成 `all`，`npm ci` 才装得上 git 依赖；不在名单里的由 Dependency rules 挡 |
+| `sources.allow-git`、`sources.allow-registry` 有条目 | Apply the dependency allowlist 步把 npm 的 `allow-git`、`allow-remote` 设成 `all`，`npm ci` 才装得上；不在名单里的已被 Dependency rules 挡在安装前 |
 | `bans.build.allow-build-scripts` | `npm ci` 照样不跑安装脚本；装完对名单里的包跑 `npm rebuild`，只跑它们的脚本 |
 | `licenses.exceptions` | Licenses 步对每条的包单独跑 license-checker-rseidelsohn，准用共用名单加这条的 `allow`；其余的包对共用名单，`license-exceptions` 里的包不查 |
 

@@ -78,10 +78,10 @@ jobs:
           while IFS='=' read -r key value; do
             [[ -n "$key" ]] && echo "npm_config_${key//-/_}=$value" >> "$GITHUB_ENV"
           done < "$RG/typescript/.npmrc"
-      # Listed git sources open npm's allow-git (Dependency rules checks each URL); listed build entries get their scripts run.
+      # Listed git sources and tarball URLs open npm's allow-git and allow-remote; listed build entries get their scripts run.
       - &allowlist
         name: Apply the dependency allowlist
-        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" env npm --allowlist "$ALLOWLIST" >> "$GITHUB_ENV"
+        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" env typescript --allowlist "$ALLOWLIST" >> "$GITHUB_ENV"
       - name: Install the shared tools
         run: |
           mkdir -p "$RUNNER_TEMP/ts-tools"
@@ -89,6 +89,11 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/ts-tools" --no-audit --no-fund --save-exact license-checker-rseidelsohn@5.0.1
           npm ci --prefix "$RG/typescript/comment-budget" --no-audit --no-fund
           echo "$RUNNER_TEMP/ts-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      # Before npm ci: npm's allow-git and allow-remote are all or nothing, so each URL is checked here first.
+      - &dependency-rules
+        name: Dependency rules
+        id: dependency-rules
+        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check typescript --allowlist "$ALLOWLIST" --lock package-lock.json
       - &install-project
         name: Install the project
         run: |
@@ -116,9 +121,6 @@ jobs:
         run: |
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
           uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format knip -- knip --production --config "$RUNNER_TEMP/knip.json" --reporter json
-      - name: Dependency rules
-        if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check npm --allowlist "$ALLOWLIST" --lock package-lock.json
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit
@@ -133,7 +135,7 @@ jobs:
             mapfile -t excluded < <(grep -v '^[[:space:]]*$' "$EXCEPTIONS" || true)
           fi
           # Each licenses.exceptions entry: its package is checked alone, against the shared list plus its own licenses.
-          exceptions=$(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" licenses --allowlist "$ALLOWLIST")
+          exceptions=$(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" licenses typescript --allowlist "$ALLOWLIST")
           failed=0
           while IFS=$'\t' read -r spec extra; do
             [[ -n $spec ]] || continue
@@ -169,10 +171,11 @@ jobs:
         run: |
           uv venv --python 3.12 coverage-venv
           uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
+      - *dependency-rules
       - *install-project
       - name: Coverage
         id: coverage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && steps.dependency-rules.outcome == 'success' }}
         env:
           PROJECT: ${{ inputs.knip-project }}
         run: |

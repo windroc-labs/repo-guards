@@ -2,18 +2,17 @@
 
 第 3 层：不依赖项目设计的检查，每个 repo 的 `.github/workflows/ci.yml` 都要跑。依赖项目设计的架构检查在第 4 层，见 [`architecture/`](../architecture/README.md)。
 
-每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文 CODEOWNERS）。CI 只比对，不重新生成标准答案。有模板的检查由本 repo 的 reusable workflow 跑：各 repo 的 `ci.yml` 按 commit sha 调用它们，它们从同一个 commit 的 repo-guards 读共用配置。共用配置改动要本 repo 的 owner 批准；`ci.yml` 在 `.github/` 下，换 sha 也要 owner 批准。其余检查每个 repo 在自己的 `ci.yml` 里实现。
+每项检查拿代码和一份"标准答案"比对，标准答案用 CODEOWNERS 锁住，改它要 owner 批准（见下文 CODEOWNERS）。CI 只比对，不重新生成标准答案。有模板的检查由本 repo 的 reusable workflow 跑：各 repo 的 `ci.yml` 用 `@main` 调用它们，它们从同一个 commit 的 repo-guards 读共用配置。共用配置改动要本 repo 的 owner 批准，合进 `main` 后各 repo 下一次运行就用上，不用改各自的 `ci.yml`。其余检查每个 repo 在自己的 `ci.yml` 里实现。
 
 检查按实现方式分两组：语言级（按工具分）、流程级。"频率"一列：每个 PR，或定期。定期结果必须强制，不能只当建议：比如失败自动开 issue，挡住下一次发布。标"按项目需要"的检查适用才加。
 
 ## 每个 repo 自己要做的
 
-1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`0000…` 换成 repo-guards 的 commit sha，`with:` 按下表填。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
-   换 sha 时 owner 先确认它在 repo-guards 的 `main` 上：`gh api repos/<org>/repo-guards/compare/<sha>...main --jq .status` 是 `ahead` 或 `identical`；`fetch_configs.py` 也查这一点。
-2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级 `uses:` 里钉住的版本。
+1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`with:` 按下表填，`uses:` 保持 `@main`。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
+2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级其他 action 在 `uses:` 里钉住的版本；repo-guards 的 workflow 用 `@main`，不用升级。
 3. 自己的白名单和基线放进一个锁住的目录，默认 `.github/checks/`（`.github/` 已由 CODEOWNERS 锁住）。
 4. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
-5. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它从 `ci.yml` 读钉住的 sha，把那个 commit 的 `ci-checks/` 下载到 `.repo-guards/`；这个目录写进 `.gitignore`。测试：在该目录跑 `python3 -m unittest fetch_configs_test`。
+5. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。这个目录写进 `.gitignore`。测试：在该目录跑 `python3 -m unittest fetch_configs_test`。
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|

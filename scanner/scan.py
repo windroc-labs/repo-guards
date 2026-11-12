@@ -81,8 +81,10 @@ CHECKS = {
 }
 
 LOCAL_PATH = re.compile(
-    r"(?<![\w.-])(?:/(?:Users|home)/|[A-Za-z]:[\\/]Users[\\/])(?=[^\s<>/\\\"'`)\]])"
+    r"(?:/(?:Users|home)/|[A-Za-z]:(?:\\{1,2}|/)(?i:users)(?:\\{1,2}|/))(?=[^\s<>/\\\"'`)\]])"
 )
+# A path after a URL's host (https://host/home/x) is part of the URL, not a home directory.
+URL_WITH_HOST = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://[^/\s<>\"'`()\[\]]+[^\s<>\"'`()\[\]]*$")
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"
     r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![A-Za-z0-9-])"
@@ -109,7 +111,7 @@ def find_email(line: str) -> Iterable[int]:
 
 
 def find_local_path(line: str) -> Iterable[int]:
-    return [m.start() for m in LOCAL_PATH.finditer(line)]
+    return [m.start() for m in LOCAL_PATH.finditer(line) if not URL_WITH_HOST.search(line, 0, m.start())]
 
 
 def find_em_dash(line: str) -> Iterable[int]:
@@ -166,7 +168,7 @@ def load_names(names_file: str | None, top: str) -> list[str] | None:
     else:
         return None
     try:
-        text = data.decode("utf-8")
+        text = data.decode("utf-8-sig")
     except UnicodeDecodeError:
         return None
     return [s for s in (line.strip() for line in text.splitlines()) if s] or None
@@ -298,7 +300,7 @@ INLINE_LINK = re.compile(
     r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*(<[^>]*>|[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)"
     r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"
 )
-REFERENCE = re.compile(r"^ {0,3}\[[^\]]+\]:\s*(<[^>]*>|\S+)")
+REFERENCE = re.compile(r"^ {0,3}\[(?!\^)[^\]]+\]:\s*(<[^>]*>|\S+)")
 ATX = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
 SETEXT = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
 SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
@@ -309,7 +311,8 @@ def outside_fences(text: str) -> Iterable[tuple[int, str]]:
     for number, line in enumerate(text.split("\n"), 1):
         m = FENCE.match(line)
         if fence:
-            if m and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
+            closing = m and not line[m.end():].strip()
+            if closing and m.group(1)[0] == fence[0] and len(m.group(1)) >= len(fence):
                 fence = ""
         elif m:
             fence = m.group(1)
@@ -317,11 +320,21 @@ def outside_fences(text: str) -> Iterable[tuple[int, str]]:
             yield number, line
 
 
+def rendered(markdown: str) -> str:
+    """Inline Markdown outside code spans as GitHub renders it to text."""
+    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", markdown)
+    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
+    text = re.sub(r"(?<![^\W_])_+|_+(?![^\W_])", "", text)
+    return html.unescape(re.sub(r"<[^>]+>", "", text))
+
+
 def slug(heading: str) -> str:
     """GitHub's anchor for a heading: rendered text, lowercased, punctuation and symbols dropped."""
-    text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", heading)
-    text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", text)
-    text = html.unescape(re.sub(r"<[^>]+>", "", text)).replace("`", "")
+    parts, pos = [], 0
+    for m in CODE_SPAN.finditer(heading):
+        parts += [rendered(heading[pos : m.start()]), m.group(0).strip("`")]
+        pos = m.end()
+    text = "".join(parts) + rendered(heading[pos:])
     return "".join(
         "-" if ch == " " else ch
         for ch in text.lower()

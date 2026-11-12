@@ -127,6 +127,18 @@ class FileContent(unittest.TestCase):
                 self.assertNotIn(path, out)
                 self.assertNotIn("bob", out)
 
+    def test_local_path_forms_that_must_hit(self):
+        for text in (
+            "路径是" + HOME_BOB + "/x",
+            "-I" + HOME_BOB + "/include",
+            "C:" + "\\\\" + "Users" + "\\\\" + "bob",
+            "c:" + "\\" + "users" + "\\" + "bob",
+            "file://" + USERS_BOB + "/x",
+        ):
+            with self.subTest(text=text):
+                repo = Repo(self, {"a.md": text + "\n"})
+                self.assertEqual(repo.scan(*PUBLIC)[0], 1)
+
     def test_local_path_inside_a_url_is_not_a_hit(self):
         repo = Repo(self, {"a.md": "https://example.com" + HOME_BOB + "\n"})
         self.assertEqual(repo.scan(*PUBLIC)[0], 0)
@@ -241,6 +253,18 @@ class PrivateNames(unittest.TestCase):
 
     def test_entries_are_trimmed_and_blank_lines_ignored(self):
         self.assertEqual(self.scan_names("hi " + NAME, "", "  " + NAME + "  ", "")[0], 1)
+
+    def test_content_hit_is_reported_by_file_index(self):
+        repo = Repo(self, {"a.md": "see " + NAME + "\n"})
+        code, out = repo.scan("--checks", "private-name", "--names-file", repo.names_file(NAME))
+        self.assertEqual(code, 1, out)
+        self.assertIn("file #%d:1:5: private-name (leak)" % repo.index("a.md"), out)
+        self.assertNotIn("a.md", out)
+
+    def test_list_with_a_byte_order_mark(self):
+        repo = Repo(self, {"a.md": "see " + NAME + "\n"})
+        names = repo.names_file(raw=b"\xef\xbb\xbf" + NAME.encode() + b"\n")
+        self.assertEqual(repo.scan("--checks", "private-name", "--names-file", names)[0], 1)
 
     def test_list_from_environment(self):
         repo = Repo(self, {"a.md": NAME + "\n"})
@@ -438,6 +462,18 @@ class PullRequest(unittest.TestCase):
         )
         self.assertEqual(code, 1, out)
 
+    def test_public_output_hides_pr_fields_and_commits(self):
+        repo = Repo(self)
+        sha = repo.commit("x " + EM)
+        code, out = repo.scan(
+            "--names-file", repo.names_file(NAME), "--pr-from-env", "--public",
+            env={"PR_TITLE": NAME, "PR_BODY": "a\n" + HOME_BOB},
+        )
+        self.assertEqual(code, 1, out)
+        for hidden in (sha, "title", "body", "line", NAME, "bob"):
+            self.assertNotIn(hidden, out)
+        self.assertIn("total hits: 3", out)
+
     def test_pr_fields_not_read_without_the_flag(self):
         repo = Repo(self)
         code, out = repo.scan(*PUBLIC, env={"PR_TITLE": EM, "PR_BODY": EM})
@@ -477,7 +513,7 @@ class Links(unittest.TestCase):
         doc = (
             "# Top\n## 1. 设置\n## 死代码（knip）\n## `.github/` 改动单独成 PR\n"
             "## Dup\n## Dup\n## [Linked](x.md) *em*\nSetext Title\n---\n"
-            "```\n## Not a heading\n```\n"
+            "```\n## Not a heading\n```\n## `Vec<T>`\n## _italic_\n"
         )
         for anchor, fails in (
             ("top", False),
@@ -493,6 +529,8 @@ class Links(unittest.TestCase):
             ("%E8%AE%BE%E7%BD%AE", True),
             ("1-%E8%AE%BE%E7%BD%AE", False),
             ("Top", True),
+            ("vect", False),
+            ("italic", False),
         ):
             with self.subTest(anchor=anchor):
                 code, out = self.links({"x.md": doc, "a.md": "see [x](x.md#%s)\n" % anchor})
@@ -528,6 +566,8 @@ class Links(unittest.TestCase):
             ("[ref]: missing.md", True),
             ("[ref]: b.md", False),
             ("`[x](missing.md)`", False),
+            ("[^1]: See the notes", False),
+            ("```\n```python\n[x](missing.md)\n```", False),
             ("```\n[x](missing.md)\n```", False),
             ("~~~\n[x](missing.md)\n~~~", False),
             ("text [x](b.md) and [y](missing.md)", True),

@@ -83,8 +83,6 @@ CHECKS = {
 LOCAL_PATH = re.compile(
     r"(?:/(?:Users|home)/|[A-Za-z]:(?:\\{1,2}|/)(?i:users)(?:\\{1,2}|/))(?=[^\s<>/\\\"'`)\]])"
 )
-# What can introduce a path value: a short option (-I/home/<user>), a lone dash, a shell default (${X:-/home/<user>}).
-VALUE_PREFIX = re.compile(r"(?:\$\{\w+:?[-=?+]|-[A-Za-z]?)$")
 EMAIL = re.compile(
     r"(?<![A-Za-z0-9._%+-])[A-Za-z0-9._%+-]+@"
     r"([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,})(?![A-Za-z0-9-])"
@@ -110,17 +108,9 @@ def find_email(line: str) -> Iterable[int]:
     return [m.start() for m in EMAIL.finditer(line) if not email_allowed(m.group(0))]
 
 
-def starts_a_path(line: str, i: int) -> bool:
-    """False inside a longer path or URL (src/home/<user>, https://host/home/<user>)."""
-    prefix = VALUE_PREFIX.search(line, 0, i)
-    start = prefix.start() if prefix else i
-    before = line[start - 1] if start else " "
-    joiners = "./-" if prefix else ".-"
-    return not (before.isascii() and (before.isalnum() or before in joiners))
-
-
 def find_local_path(line: str) -> Iterable[int]:
-    return [m.start() for m in LOCAL_PATH.finditer(line) if starts_a_path(line, m.start())]
+    # Any occurrence hits, whatever precedes it: over-reporting is acceptable, a miss is not.
+    return [m.start() for m in LOCAL_PATH.finditer(line)]
 
 
 def find_em_dash(line: str) -> Iterable[int]:

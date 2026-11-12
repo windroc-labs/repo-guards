@@ -149,7 +149,7 @@ class FileContent(unittest.TestCase):
                 repo = Repo(self, {"a.md": text + "\n"})
                 self.assertEqual(repo.scan(*PUBLIC)[0], 1)
 
-    def test_home_segments_inside_urls_and_relative_paths_are_not_hits(self):
+    def test_home_segments_anywhere_hit(self):
         for text in (
             "https://example.com" + HOME_BOB,
             "src" + HOME_BOB + "/page.tsx",
@@ -158,14 +158,27 @@ class FileContent(unittest.TestCase):
             "." + HOME_BOB,
             "https://h.com/a/-v" + HOME_BOB,
             "name-" + HOME_BOB,
+            "ssh://devbox" + HOME_BOB + "/repo",
+            "https://[::1]" + HOME_BOB + "/x",
+            "a${X=" + HOME_BOB + "}",
+            "x${X:-C:" + "\\" + "Users" + "\\" + "bob}",
+            "xC:" + "\\" + "Users" + "\\" + "bob",
         ):
             with self.subTest(text=text):
                 repo = Repo(self, {"a.md": text + "\n"})
-                self.assertEqual(repo.scan(*PUBLIC)[0], 0)
+                self.assertEqual(repo.scan(*PUBLIC)[0], 1)
 
-    def test_relative_tracked_path_with_a_home_segment_is_not_a_hit(self):
+    def test_tracked_path_with_a_home_segment_hits(self):
         repo = Repo(self, {"web" + HOME_BOB + ".md": "x\n"})
-        self.assertEqual(repo.scan(*PUBLIC)[0], 0)
+        code, out = repo.scan(*PUBLIC)
+        self.assertEqual(code, 1, out)
+        self.assertIn("file #%d path: local-path" % repo.index("web" + HOME_BOB + ".md"), out)
+
+    def test_placeholder_names_never_hit(self):
+        for text in ("src/home/<user>/x", "https://host/Users/<name>", "-I/home/<user>", "C:" + "\\" + "Users" + "\\" + "<user>"):
+            with self.subTest(text=text):
+                repo = Repo(self, {"a.md": text + "\n"})
+                self.assertEqual(repo.scan(*PUBLIC)[0], 0)
 
     def test_s9_email_allowlist(self):
         for email, fails in (

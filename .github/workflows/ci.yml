@@ -228,6 +228,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/go/comment-budget
         run: go test ./...
+      - name: Go coverage profile tests
+        id: go-coverage-profile
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/go/coverage-profile
+        run: python3 -m unittest coverage_profile_test
       - name: Go license check tests
         id: go-license-check
         if: ${{ !cancelled() }}
@@ -244,12 +249,13 @@ jobs:
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
           GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
+          GO_COVERAGE_PROFILE: ${{ steps.go-coverage-profile.outcome }}
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

@@ -236,23 +236,7 @@ jobs:
           fi
           # Whole and merged profiles take one path: each test binary's blocks, of one run or of every shard, are merged
           # (set mode: covered by any; count modes: summed) and the files coverage.toml ignores dropped.
-          uv run --no-project --python 3.12 python -I -c '
-          import re, sys, tomllib
-          ignore = re.compile(tomllib.load(open(sys.argv[1], "rb"))["ignore-filename-regex"])
-          mode, blocks = "", {}
-          for name in sys.argv[3:]:
-              for line in open(name):
-                  if line.startswith("mode:"):
-                      mode = line
-                      continue
-                  block, _, count = line.strip().rpartition(" ")
-                  if block and not ignore.search(block.rpartition(":")[0]):
-                      old = blocks.get(block, 0)
-                      blocks[block] = max(old, int(count)) if mode.strip() == "mode: set" else old + int(count)
-          with open(sys.argv[2], "w") as out:
-              out.write(mode)
-              out.writelines(f"{block} {count}\n" for block, count in blocks.items())' \
-            "$RG/go/coverage.toml" "$RUNNER_TEMP/coverage-merged.out" "${profiles[@]}"
+          uv run --no-project --python 3.12 "$RG/go/coverage-profile/coverage_profile.py" "$RG/go/coverage.toml" "$RUNNER_TEMP/coverage-merged.out" "${profiles[@]}"
           gocover-cobertura < "$RUNNER_TEMP/coverage-merged.out" > "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}

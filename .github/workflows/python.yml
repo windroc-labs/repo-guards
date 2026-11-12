@@ -66,10 +66,10 @@ jobs:
         run: uv sync --locked
       - name: Format
         if: ${{ !cancelled() }}
-        run: ruff format --check --config "$RG/python/pyproject.toml" .
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Lint
         if: ${{ !cancelled() }}
-        run: ruff check --config "$RG/python/pyproject.toml" .
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff -- ruff check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
@@ -78,10 +78,10 @@ jobs:
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
-          pyright --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
+          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() }}
-        run: vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
       - name: Unused dependencies
         if: ${{ !cancelled() }}
         run: |

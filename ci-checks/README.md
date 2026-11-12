@@ -22,15 +22,32 @@
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | `baseline`（`.github/checks/jscpd-baseline.json`） |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
-每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，`coverage-shards` 把覆盖率分片，都见[覆盖率](#覆盖率)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
+每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，`coverage-shards` 把覆盖率分片，都见[覆盖率](#覆盖率)。`jobs` 排 job，见下文。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
-三个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。设了 `coverage-shards` 时，Coverage 前面还有 Coverage plan 和每片一个 Coverage shard job，见[覆盖率分片](#覆盖率分片)。
+三个语言 workflow 默认各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。它们前面先跑一个 Plan job，按 `jobs` 和 `coverage-shards` 输入排出要跑的 job。设了 `coverage-shards` 时，Coverage 前面还有每片一个 Coverage shard job，见[覆盖率分片](#覆盖率分片)。
 
 | workflow | job（里面的步） |
 |---|---|
 | `rust.yml` | Checks（Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules）、Coverage（Coverage、Coverage gate、CRAP report） |
 | `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
 | `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
+
+`jobs` 输入让 caller 自己排 job：每行一个 job，写 `<job 名>: <检查> …`。同一行的检查在同一个 job 里依次跑，各行的 job 并行跑，没写进去的检查不跑。`coverage` 跑的是 PR 的测试，只能单独一行。不写 `jobs` 就是上表的默认。Plan 发现写法不对（检查名不认识、一个检查写了两次、`coverage` 和别的检查同行）就失败，别的 job 都不跑。例：
+
+```yaml
+      jobs: |
+        Fast: format lint comment-budget
+        Deps: type-check unused-dependencies dependency-rules
+        Coverage: coverage
+```
+
+| workflow | 检查（括号里是步名） |
+|---|---|
+| `rust.yml` | `format`、`lint`、`comment-budget`、`type-check`（Type check and dead code）、`unused-dependencies`、`dependency-rules`、`coverage`（Coverage、Coverage gate、CRAP report） |
+| `python.yml` | `format`、`lint`、`comment-budget`、`type-check`、`dead-code`、`unused-dependencies`、`vulnerabilities`、`licenses`、`coverage` |
+| `typescript.yml` | `format`、`comment-budget`、`type-check`、`dead-code`（Dead code and unused dependencies）、`vulnerabilities`、`licenses`、`coverage` |
+
+只有覆盖率能分片。在实测的 caller 上，Checks 里每项最多 5 秒，而每开一个 job 光检出、装工具链、恢复缓存就要 20 多秒，静态检查再切开只会更慢。
 
 ## 语言级
 
@@ -225,13 +242,13 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 
 #### 覆盖率分片
 
-覆盖率慢时，caller 在自己的 `ci.yml` 里用 `coverage-shards` 输入把单元测试分成几片。Coverage plan 先检查分法、列出各片；每片一个 Coverage shard job，并行跑测试，只上传原始覆盖率数据；最后的 Coverage job 用工具自己的合并命令把各片数据合成一份报告，再判门槛、出 CRAP 报告。有一片失败，Coverage 就失败。不写 `coverage-shards` 就不分片，只有一个 Coverage job，和以前一样。
+覆盖率慢时，caller 在自己的 `ci.yml` 里用 `coverage-shards` 输入把单元测试分成几片。Plan 先检查分法、列出各片；每片一个 Coverage shard job，并行跑测试，只上传原始覆盖率数据；最后的 Coverage job 用工具自己的合并命令把各片数据合成一份报告，再判门槛、出 CRAP 报告。有一片失败，Coverage 就失败。不写 `coverage-shards` 就不分片，只有一个 Coverage job，和以前一样。`jobs` 里没有 `coverage` 时不能分片。
 
 合并后的报告和不分片时一样：在样例项目上，各片放在不同目录里跑，合并出的 Cobertura 报告和不分片的逐文件、逐行、逐分支一致。各片要各自编译、安装依赖，分片省的是跑测试的时间。
 
 | Rust | Python | TypeScript |
 |---|---|---|
-| 每行一片，写空格分开的测试名过滤词；另加一片 `rest`，跑哪行都没匹配上的测试。见 [Rust 的分片](rust/README.md#覆盖率分片) | 不支持 | 不支持 |
+| 每行一片，写空格分开的测试名过滤词；另加一片 `rest`，跑哪行都没匹配上的测试。见 [Rust 的分片](rust/README.md#覆盖率分片) | 每行一片，写空格分开的名字，拼成 pytest 的 `-k`；另加一片 `rest`，跑哪行都没匹配上的测试。见 [Python 的分片](python/README.md#覆盖率分片) | 写片数，由 vitest 的 `--shard` 按测试文件分。见 [TypeScript 的分片](typescript/README.md#覆盖率分片) |
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 

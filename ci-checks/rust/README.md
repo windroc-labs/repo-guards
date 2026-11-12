@@ -98,6 +98,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 ```
 
 - 每片跑名字含任一过滤词的测试（libtest 的子串匹配）。最后另加一片 `rest`，用 `--skip` 跳过所有过滤词，跑剩下的测试。所以每个测试都至少跑一次，漏写的测试也不会被跳过。
-- 过滤词只收字母、数字、`_` 和 `:`，别的写法（包括 `--ignored` 这类 libtest 选项）让 Coverage plan 失败。
+- 过滤词只收字母、数字、`_` 和 `:`，别的写法（包括 `--ignored` 这类 libtest 选项）让 Plan 失败。
 - 各片都用 `unit-tests` 选的同一组测试目标，只是过滤的测试不同。
 - 各片用 `cargo llvm-cov --no-report` 跑测试，上传 `.profraw`。Coverage job 再编译一遍同样的测试二进制（跑 `-- --list`，不跑测试），把各片的 `.profraw` 放进去，用 `cargo llvm-cov report` 出报告。

@@ -7,10 +7,6 @@ on:
         description: Runner labels as JSON, e.g. '"ubuntu-latest"' or '["self-hosted","linux"]'
         type: string
         default: '"ubuntu-latest"'
-      baseline:
-        description: The repo's duplication baseline
-        type: string
-        default: .github/checks/jscpd-baseline.json
 
 permissions:
   contents: read
@@ -53,7 +49,5 @@ jobs:
           uv venv --python 3.12 jscpd-venv
           uv pip install --python jscpd-venv/bin/python --require-hashes -r "$RG/jscpd-requirements.txt"
       - name: Duplication
-        env:
-          BASELINE: ${{ inputs.baseline }}
         run: |
-          "$RUNNER_TEMP/jscpd-venv/bin/jscpd" --config "$RG/.jscpd.json" --baseline "$BASELINE" .
+          "$RUNNER_TEMP/jscpd-venv/bin/jscpd" --config "$RG/.jscpd.json" --baseline .github/checks/jscpd-baseline.json .

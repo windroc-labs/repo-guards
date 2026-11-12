@@ -11,10 +11,6 @@ on:
         description: The project's directory, relative to the repo root
         type: string
         default: .
-      source-dirs:
-        description: Shipped source directories, space-separated, for pyright, vulture and coverage
-        type: string
-        default: src
       coverage-shards:
         description: Coverage shards as a JSON list, each one parallel job's pytest test paths, space-separated; [] measures in one job
         type: string
@@ -33,7 +29,7 @@ jobs:
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
-      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
     defaults: &defaults
       run:
@@ -62,9 +58,14 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
+      # SOURCE_DIRS is the project section's source-dirs for this working-directory.
       - &apply-overrides
         name: Apply caller overrides
-        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+        run: |
+          overrides() { uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" "$@"; }
+          overrides apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+          dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" "$PROJECT_DIR")
+          echo "SOURCE_DIRS=$dirs" >> "$GITHUB_ENV"
       - name: Install the shared dev group
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
@@ -79,8 +80,6 @@ jobs:
             uv pip install --python .venv/bin/python -r requirements.txt
           fi
       - name: Export the resolved dependencies
-        env:
-          PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
           # pylock.toml (for pip-audit) and dependencies.toml (for the allowlist: uv.lock itself, which lists every extra and
           # group, else the compiled pylock.toml); a merge-base without uv.lock or requirements.txt leaves no base files.
@@ -153,7 +152,7 @@ jobs:
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: *base-ref
-      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
       MODE: ${{ inputs.coverage-shards != '[]' && 'merge' || 'whole' }}
       SHARDS_RESULT: ${{ needs.coverage-shard.result }}
@@ -215,7 +214,7 @@ jobs:
               mkdir -p "$RUNNER_TEMP/shard"
               cov run --source "$sources" --data-file "$RUNNER_TEMP/shard/$SHARD.coverage" -m pytest "${tests[@]}"
               # Artifact names are unique per run, and a caller may call this workflow once per working-directory.
-              artifact=$(python3 "$RG/coverage/shard_artifact.py" python "$PROJECT")
+              artifact=$(python3 "$RG/coverage/shard_artifact.py" python "$PROJECT_DIR")
               echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
               exit ;;
             merge)
@@ -253,12 +252,11 @@ jobs:
         tests: ${{ fromJSON(inputs.coverage-shards) }}
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
-      SOURCE_DIRS: ${{ inputs.source-dirs }}
+      PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
       MODE: shard
       SHARD: ${{ strategy.job-index }}
       TESTS: ${{ matrix.tests }}
-      PROJECT: ${{ inputs.working-directory }}
     defaults: *defaults
     steps:
       - *checkout

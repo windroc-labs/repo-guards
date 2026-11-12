@@ -1,5 +1,4 @@
 import argparse
-import io
 import json
 import re
 import subprocess
@@ -50,16 +49,21 @@ def unquote(name: str) -> str:
     )
 
 
+# Only \n ends a line: str.splitlines() and text-mode pipes also break on \r, form feed, U+2028
+# and others, which a PR can put inside a line to fake a diff header.
 def rows(text: str) -> list[str]:
-    # str.splitlines() also splits on form feed, U+2028 and others that a PR can put inside a line.
     return text.split("\n")
 
 
-def parse_diff(diff: str, top: Path) -> Changes:
+def decoded(data: bytes) -> str:
+    return data.decode("utf-8", "replace")
+
+
+def parse_diff(diff: list[str], top: Path) -> Changes:
     changes: dict[Path, set[int]] = {}
     lines: set[int] | None = None
     in_header = False
-    for row in rows(diff):
+    for row in diff:
         if row.startswith("diff --git "):
             in_header, lines = True, None
         elif in_header and row.startswith("+++ "):
@@ -75,13 +79,11 @@ def parse_diff(diff: str, top: Path) -> Changes:
     return {path: frozenset(found) for path, found in changes.items()}
 
 
-def capture(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command, check=False, stdout=subprocess.PIPE, encoding="utf-8", errors="surrogateescape"
-    )
+def capture(command: list[str]) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(command, check=False, stdout=subprocess.PIPE)
 
 
-def git(*args: str) -> str:
+def git(*args: str) -> bytes:
     result = capture(["git", *args])
     if result.returncode:
         raise ToolError(f"git {' '.join(args)} exited with {result.returncode}")
@@ -105,8 +107,8 @@ def changed_lines(base: str, top: Path) -> Changes:
         "--dst-prefix=b/",
         f"{base}...HEAD",
     )
-    lines = parse_diff(diff, top)
-    files = {(top / name).resolve() for name in names.split("\0") if name}
+    lines = parse_diff([decoded(row) for row in diff.split(b"\n")], top)
+    files = {(top / decoded(name)).resolve() for name in names.split(b"\0") if name}
     return {path: lines.get(path, frozenset()) for path in files}
 
 
@@ -284,10 +286,11 @@ def run(fmt: Format, command: list[str]) -> list[Finding]:
     except OSError as error:
         raise ToolError(f"cannot run {command[0]}: {error}") from error
     try:
+        stdout = decoded(result.stdout)
         if result.returncode not in fmt.exits:
             raise ToolError(f"{command[0]} exited with {result.returncode}")
         try:
-            findings = list(dict.fromkeys(fmt.parse(result.stdout)))
+            findings = list(dict.fromkeys(fmt.parse(stdout)))
         except (ValueError, KeyError, TypeError) as error:
             raise ToolError(f"cannot read {command[0]} output: {error!r}") from error
         if result.returncode in fmt.errors and not any(f.anywhere for f in findings):
@@ -297,7 +300,7 @@ def run(fmt: Format, command: list[str]) -> list[Finding]:
                 f"{command[0]} exited with {result.returncode} but reported no findings"
             )
     except ToolError:
-        sys.stdout.write(result.stdout)
+        sys.stdout.write(decoded(result.stdout))
         raise
     return findings
 
@@ -334,7 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     if not command:
         parser.error("no command after --")
     try:
-        top = Path(git("rev-parse", "--show-toplevel").strip()).resolve()
+        top = Path(decoded(git("rev-parse", "--show-toplevel")).strip()).resolve()
         changes = changed_lines(args.base, top)
         findings = run(FORMATS[args.format], command)
     except ToolError as error:
@@ -346,6 +349,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    for stream in (sys.stdout, sys.stderr):
-        cast(io.TextIOWrapper, stream).reconfigure(errors="backslashreplace")
     sys.exit(main())

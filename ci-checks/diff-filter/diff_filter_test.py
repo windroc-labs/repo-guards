@@ -34,15 +34,17 @@ class Diff(unittest.TestCase):
             "diff --git a/src/a.py b/src/a.py\n--- a/src/a.py\n+++ b/src/a.py\n"
             "@@ -1,0 +2,2 @@\n+x\n+y\n@@ -9 +11 @@\n-old\n+new\n@@ -20,3 +23,0 @@\n-gone\n-gone\n-gone\n"
         )
-        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "src/a.py": frozenset({2, 3, 11})})
+        self.assertEqual(
+            parse_diff(diff.split("\n"), ROOT), {ROOT / "src/a.py": frozenset({2, 3, 11})}
+        )
 
     def test_deleted_file_is_skipped(self):
         diff = "diff --git a/old.py b/old.py\ndeleted file mode 100644\n--- a/old.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
-        self.assertEqual(parse_diff(diff, ROOT), {})
+        self.assertEqual(parse_diff(diff.split("\n"), ROOT), {})
 
     def test_deletion_only_file_has_no_lines(self):
         diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -3 +2,0 @@\n-x\n"
-        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "a.py": frozenset()})
+        self.assertEqual(parse_diff(diff.split("\n"), ROOT), {ROOT / "a.py": frozenset()})
 
     def test_only_newline_ends_a_line(self):
         diff = (
@@ -50,7 +52,7 @@ class Diff(unittest.TestCase):
             "@@ -2 +2 @@\n-x\n+v = 2  # \x0cdiff --git a/z b/z\x0c+++ b/decoy.py\u2028@@ -1 +1,20 @@\n"
             "@@ -10 +10 @@\n-y\n+v10 = 99\n"
         )
-        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "m.py": frozenset({2, 10})})
+        self.assertEqual(parse_diff(diff.split("\n"), ROOT), {ROOT / "m.py": frozenset({2, 10})})
 
     def test_quoted_and_spaced_names(self):
         diff = (
@@ -58,13 +60,13 @@ class Diff(unittest.TestCase):
             "diff --git a/s p.py b/s p.py\n--- a/s p.py\t\n+++ b/s p.py\t\n@@ -0,0 +1 @@\n+x\n"
         )
         self.assertEqual(
-            parse_diff(diff, ROOT),
+            parse_diff(diff.split("\n"), ROOT),
             {ROOT / 'q"t.py': frozenset({1}), ROOT / "s p.py": frozenset({1})},
         )
 
     def test_added_line_that_looks_like_a_header(self):
         diff = "diff --git a/a.md b/a.md\n--- a/a.md\n+++ b/a.md\n@@ -0,0 +1,2 @@\n+++ b/other.md\n+@@ -0,0 +9 @@\n"
-        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "a.md": frozenset({1, 2})})
+        self.assertEqual(parse_diff(diff.split("\n"), ROOT), {ROOT / "a.md": frozenset({1, 2})})
 
 
 class Parsers(unittest.TestCase):
@@ -356,6 +358,17 @@ class Main(unittest.TestCase):
     def test_empty_new_file_counts_as_changed_file(self):
         self.commit({"src/empty.ts": b""})
         self.assertEqual(self.run_main("empty.ts\n", 1, "paths")[0], 1)
+
+    def test_bare_carriage_return_does_not_end_a_line(self):
+        body = [b"v%d = %d" % (n, n) for n in range(1, 11)]
+        git(self.repo, "checkout", "-q", "main")
+        self.commit({"src/m.py": b"\n".join(body) + b"\n"})
+        git(self.repo, "checkout", "-qb", "carriage-return")
+        body[1] = b"v2 = 2  # \rdiff --git a/z b/z\r+++ b/decoy.py\r@@ -1 +1,20 @@"
+        body[9] = b"v10 = 99"
+        self.commit({"src/m.py": b"\n".join(body) + b"\n"})
+        code, out = self.run_main("m.py:10: unused variable 'v10' (60% confidence)\n", 3)
+        self.assertEqual(code, 1, out)
 
     def test_findings_listed_once(self):
         row = "m.py:3: unused variable 'new' (60% confidence)\n"

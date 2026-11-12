@@ -199,7 +199,7 @@ class GitUrls(unittest.TestCase):
         for url in (
             f"https://github.com/o/r?rev=v1#{SHA_A}",  # uv.lock
             f"git+https://github.com/o/r@{SHA_A}",  # uv pip compile output
-            f"git+ssh://git@github.com/o/r.git#{SHA_A}",  # package-lock.json
+            f"git+ssh://git@git.example.org/o/r.git#{SHA_A}",  # package-lock.json
             f"git+https://github.com/o/r?branch=main#{SHA_A}",  # Cargo.lock
             f"git+https://github.com/o/r.git@{SHA_A}#egg=r",  # a requirement file
         ):

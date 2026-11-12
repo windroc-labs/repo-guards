@@ -284,7 +284,9 @@ func run(args []string, cwd string, out io.Writer) (bool, error) {
 	}
 	root = strings.TrimSpace(root)
 	path := filepath.Join(root, configPath)
-	if options.config != "" {
+	if filepath.IsAbs(options.config) {
+		path = options.config
+	} else if options.config != "" {
 		path = filepath.Join(cwd, options.config)
 	}
 	text, err := os.ReadFile(path)

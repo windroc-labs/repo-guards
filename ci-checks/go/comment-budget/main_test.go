@@ -418,6 +418,21 @@ func TestTheConfigPathCanBeOverriddenAndMustExist(t *testing.T) {
 	}
 }
 
+func TestAnAbsoluteConfigPathOutsideTheRepoIsReadAsIs(t *testing.T) {
+	r := newRepo(t)
+	r.write("a.go", "package a\n")
+	r.git("add", "a.go")
+	r.git("commit", "-q", "-m", "base")
+	outside := filepath.Join(t.TempDir(), "strict.toml")
+	if err := os.WriteFile(outside, []byte(strings.Replace(defaultConfig, "= 300", "= 0", 1)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs := r.run("--all --config " + outside)
+	if code != 0 || !strings.Contains(out, "+ 0 characters per file") {
+		t.Errorf("exit %d\n%s%s", code, out, errs)
+	}
+}
+
 func TestEachConfigErrorExitsTwo(t *testing.T) {
 	r := newRepo(t)
 	r.write("a.go", "package a\n")

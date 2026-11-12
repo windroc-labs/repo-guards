@@ -76,7 +76,7 @@ def read_hits(report: Path) -> Hits:
             if path is None:
                 continue
             lines = hits.setdefault(display(path), {})
-            for line in cls.iter("line"):
+            for line in cls.findall("lines/line"):
                 lines[int(line.get("number", "0"))] = line_units(line)
     except (OSError, ET.ParseError, ValueError) as e:
         raise Skip(f"cannot read the coverage report {report} ({e})") from e
@@ -88,7 +88,7 @@ def read_hits(report: Path) -> Hits:
 def read_functions(files: list[str]) -> list[Function]:
     try:
         result = subprocess.run(
-            [sys.executable, "-m", "lizard", "--csv", *files],
+            [sys.executable, "-I", "-m", "lizard", "--csv", *files],
             capture_output=True,
             text=True,
             check=False,
@@ -111,11 +111,14 @@ def read_functions(files: list[str]) -> list[Function]:
 def score(functions: list[Function], hits: Hits) -> list[Row]:
     rows: list[Row] = []
     for f in functions:
-        units = [u for n, u in hits.get(f.file, {}).items() if f.start <= n <= f.end]
-        total = sum(t for _, t in units)
+        units = {n: u for n, u in hits.get(f.file, {}).items() if f.start <= n <= f.end}
+        # The declaration line runs when the module loads, called or not; only a one-line function keeps it.
+        if len(units) > 1:
+            units.pop(f.start, None)
+        total = sum(t for _, t in units.values())
         if total == 0:
             continue
-        coverage = sum(c for c, _ in units) / total
+        coverage = sum(c for c, _ in units.values()) / total
         rows.append(Row(f.file, f.start, f.name, f.ccn, coverage, crap(f.ccn, coverage)))
     if not rows:
         raise Skip("no function in the measured files has coverage data")
@@ -159,9 +162,8 @@ def main(argv: list[str]) -> int:
         report = table(score(read_functions(sorted(hits)), hits), args.top)
     except Skip as e:
         report = f"CRAP report skipped: {e}\n"
-        print(report, end="")
-        if not summary:
-            return 0
+        if summary:
+            print(report, end="")
     try:
         write(report, summary)
     except OSError as e:

@@ -204,8 +204,8 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | 项 | 内容 |
 |---|---|
 | 分数 | CRAP = 复杂度² × (1 − 覆盖率)³ + 复杂度 |
-| 复杂度 | [lizard](https://github.com/terryyin/lizard) 算的圈复杂度，三种语言同一个工具。版本连同依赖带 hash 固定在 [`crap/requirements.txt`](crap/requirements.txt)（生成命令同覆盖率） |
-| 覆盖率 | 第 8 项 Coverage 步对 PR 跑出的同一份 Cobertura 报告，不再跑测试。一个函数的覆盖率 = 它起止行之间 (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，和第 8 项同一算法；只量报告里有的文件，一行都没量到的函数不列 |
+| 复杂度 | [lizard](https://github.com/terryyin/lizard) 算的圈复杂度，三种语言同一个工具。版本连同依赖带 hash 固定在 [`crap/requirements.txt`](crap/requirements.txt)（生成命令同覆盖率）。Rust 的 `match` 按分支数算，但范围模式的分支（`90..=100 =>`）lizard 不算，分数偏低 |
+| 覆盖率 | 第 8 项 Coverage 步对 PR 跑出的同一份 Cobertura 报告，不再跑测试。一个函数的覆盖率 = 它起止行之间 (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，和第 8 项同一算法。声明那一行（`def`、`export const f =`）在模块加载时就算执行过，不计入，没被调用的函数才会是 0%；只有一行的函数例外。只量报告里有的文件，一行都没量到的函数不列 |
 | 不失败 | 脚本永远退出 0；报告不存在、读不了、lizard 装不上或跑不了时，打印一行 `CRAP report skipped: <原因>`，同一行也写进 job summary。这一步另加 `continue-on-error`，任何意外都不改 job 结果 |
 
 测试：在 `crap/` 跑 `python3 -m unittest crap_report_test`。
@@ -279,7 +279,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | 锁什么 | 包括 | 写法 | 防什么 |
 |---|---|---|---|
 | 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
-| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、重复基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
+| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、重复基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
 | 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
 | 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
 | 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |

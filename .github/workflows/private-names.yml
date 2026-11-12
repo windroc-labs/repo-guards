@@ -54,7 +54,8 @@ jobs:
           fetch "+$SHA:refs/scan/main"
           if [[ -n $PR_NUMBER ]]; then
             fetch "+refs/pull/$PR_NUMBER/head:refs/scan/head"
-            # The merge ref is missing while the PR conflicts and stale until GitHub recomputes it.
+            # The merge ref is missing while the PR conflicts and stale until GitHub recomputes it;
+            # a stale one holds an old head, so scan the head, which holds every change in the PR.
             if fetch "+refs/pull/$PR_NUMBER/merge:refs/scan/tree" 2> /dev/null &&
               [[ $(git rev-parse 'refs/scan/tree^2') == $(git rev-parse refs/scan/head) ]]; then
               echo "Scanning the PR merge ref"
@@ -65,6 +66,10 @@ jobs:
             range=refs/scan/main..refs/scan/head
           else
             git update-ref refs/scan/tree refs/scan/main
+            # After a force push the old tip is not in main's history; fetch it so the range still holds every new commit.
+            if [[ -n $BEFORE && ! $BEFORE =~ ^0+$ ]]; then
+              fetch "+$BEFORE:refs/scan/before" 2> /dev/null || true
+            fi
             if git cat-file -e "$BEFORE^{commit}" 2> /dev/null; then
               range="$BEFORE..$SHA"
             elif git rev-parse -q --verify "$SHA^" > /dev/null; then

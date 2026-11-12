@@ -8,7 +8,7 @@
 |---|---|
 | [`pyproject.toml`](pyproject.toml) | `[tool.ruff]`、`[tool.ruff.format]` 是格式选项；`[dependency-groups]` 的 `dev` 组固定 ruff 的版本。不固定的话，升级后同样的代码可能突然不过 |
 
-`python.yml` 的 Format 步只检查不改写，格式不对就失败。`# fmt: off` / `# fmt: on` 和 `# fmt: skip` 算行内豁免。
+`python.yml` 的 Format 步只检查不改写，PR 改过的文件格式不对就失败（见[只查改动行](../README.md#只查改动行)）。`# fmt: off` / `# fmt: on` 和 `# fmt: skip` 算行内豁免。
 
 ## 注释预算
 

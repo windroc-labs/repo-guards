@@ -9,7 +9,7 @@
 | [`rustfmt.toml`](rustfmt.toml) | 格式选项，都是 stable 版可用的；`edition` 不写，`cargo fmt` 从 `Cargo.toml` 读 |
 | [`rust-toolchain.toml`](rust-toolchain.toml) | 固定工具链版本，`rust.yml` 按它装 rustc、rustfmt 和 clippy。不固定的话，升级后同样的代码可能突然不过 |
 
-`rust.yml` 的 Format 步只检查不改写，格式不对就失败。`#[rustfmt::skip]` 算行内豁免。
+`rust.yml` 的 Format 步只检查不改写，PR 改过的文件格式不对就失败（见[只查改动行](../README.md#只查改动行)）。`#[rustfmt::skip]` 算行内豁免。
 
 ## 注释预算
 
@@ -39,11 +39,11 @@
 
 ## 类型检查（编译器）
 
-没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，`rust.yml` 的 Lint 步（clippy）和 Type check and dead code 步都带 `-D warnings`，让它失败。
+没有模板：类型检查就是编译器本身，不靠配置；`deprecated` 默认只是警告，改动行上的警告让 `rust.yml` 的 Lint 步（clippy）和 Type check and dead code 步失败（见[只查改动行](../README.md#只查改动行)）。
 
 ## 死代码（编译器、cargo-machete）
 
-不用模板。`rust.yml` 的 Type check and dead code 步用 `-D warnings` 跑不带 `--tests` 的 `cargo check`（为什么见[死代码](../README.md#死代码)）。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
+不用模板。`rust.yml` 的 Type check and dead code 步跑不带 `--tests` 的 `cargo check`（为什么见[死代码](../README.md#死代码)）。Unused dependencies 步跑 cargo-machete 0.9.2，不用配置。
 
 `#[allow(dead_code)]` 和 `[package.metadata.cargo-machete] ignored` 算行内豁免。
 

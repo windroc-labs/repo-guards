@@ -31,11 +31,11 @@
 
 | # | 项 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 模板 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | [formatter](#formatter) | 用检查模式跑，格式不一致就失败；CI 从不改写代码 | formatter 配置 | 放宽规则 | 每个 PR | ✅ |
-| 2 | [linter](#linter-规则) | 下文规则全部开着；现有超标的记进 lint 基线，基线只能变小 | lint 配置、lint 基线、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR |  |
+| 1 | [formatter](#formatter) | 用检查模式跑，CI 从不改写代码；PR 改过的文件格式不一致就失败（见[只查改动行](#只查改动行)） | formatter 配置 | 放宽规则 | 每个 PR | ✅ |
+| 2 | [linter](#linter-规则) | 下文规则全部开着；只有 PR 改动行上的问题失败，现有的不挡（见[只查改动行](#只查改动行)） | lint 配置、escape hatch 白名单 | 放宽规则；见下文各条 | 每个 PR |  |
 | 3 | [注释预算](#注释预算) | 每个改动的文件，注释字符数不超过代码字符数的一定比例 | 注释预算配置 | 注释堆砌 | 每个 PR | ✅ |
-| 4 | [类型检查](#类型检查规则) | 下文规则全部开着 | 类型检查配置 | 放宽规则 | 每个 PR | ✅ |
-| 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码 | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | ✅ |
+| 4 | [类型检查](#类型检查规则) | 下文规则全部开着；只有 PR 改动行上的问题失败（见[只查改动行](#只查改动行)） | 类型检查配置 | 放宽规则 | 每个 PR | ✅ |
+| 5 | [死代码](#死代码) | 只算发布代码里的调用：只有测试调用的代码也是死代码；只有 PR 改动行上的问题失败（见[只查改动行](#只查改动行)） | 检查配置 | 没用的代码；只有测试调用的函数 | 每个 PR | ✅ |
 | 6 | [重复代码](#重复代码) | 没有大段重复；现有的重复记进重复基线，基线只能变小；测试代码排除或用更松的门槛 | 检查配置、重复基线 | 复制粘贴；默认只认完全相同的 token，改个名字就躲过，交给[第 6 层](../README.md#要-guard-一个-repo需要这六层)独立审计 | 每个 PR | ✅ |
 | 7 | [依赖检查](#依赖检查规则) | lockfile 和 base 比 diff：新增或变了的包必须在依赖白名单里；依赖来源、安装和测试时的行为也受限 | 依赖白名单 | 引入改过的包、在安装或测试时改结果的插件、有漏洞或许可证不合的包、没用的依赖 | 每个 PR | ⚠️ |
 | 8 | [覆盖率](#覆盖率) | 行和分支都算。总覆盖率 ≥ 80%，也不低于 merge-base；PR 改动的行 ≥ 90%。只算发布代码 | 覆盖率门槛、覆盖率配置 | 少写测试、删测试；新代码不测，靠旧代码撑总覆盖率；靠测试代码自己的覆盖撑比例 | 每个 PR | ✅ |
@@ -43,6 +43,25 @@
 | 10 | [变异测试](#变异测试) | 每个 PR 只变异改动的行，有变异体存活就失败；定期跑全部代码，存活的补测试。变异白名单里的除外 | 变异白名单 | 测试执行了代码，但不检查结果 | 每个 PR（改动行）、定期（全部） |  |
 | 11 | [sanitizer](#sanitizer) | 定期：全部测试在内存、线程、未定义行为 sanitizer 下跑。按项目需要：每个 PR 跑轻量版（sanitizer 和竞态检测） | 豁免白名单 | 平时测试暴露不出的内存和并发错误 | 定期；按项目需要每个 PR |  |
 | 12 | [文档测试](#文档测试)（按项目需要） | 文档里的示例能跑，结果和文档一致 | 文档 | 文档和代码脱节 | 每个 PR |  |
+
+### 只查改动行
+
+第 1、2、4、5 项只挡新问题，接入时不用改现有代码。工具照旧查整个项目，再由 [`diff-filter/diff_filter.py`](diff-filter/diff_filter.py)（只用标准库）只留 PR 改动行上的问题：
+
+- 改动行：`git diff --text <base>...HEAD` 里新增或改过的行，删掉的行不算；`--text` 让 `.gitattributes` 标成二进制的文件也照样比。`<base>`：PR 是 base 分支（比的是 merge-base），merge queue 是 base sha，push 是推送前的 commit（只看推上来的那段），新分支是默认分支。
+- 有行号的问题（lint、类型检查、死代码）：落在改动行上才失败。
+- 按文件算的问题（formatter、没用的文件）：PR 改过这个文件就失败，只删了行或只改了名也算。
+- 在哪都失败：Rust 编译错误、tsc 的配置错误，以及 knip 报的依赖问题（第 7 项，查的是 `package.json`，不按行）。clippy 加 `--cap-lints=warn`，deny 级 lint 也降成警告，旧代码里的不会中止编译；`cargo check` 不加 `-D warnings`，警告由脚本判。
+- 其余问题打印成汇总（每个文件几个），不让 CI 失败。
+- 工具出错算失败：退出码不在该工具的正常范围、输出读不懂，或退出码说有问题却一个也没读出来（cargo 退出 101 却没有 error 级消息也算）。
+- 局限：Python、TypeScript 的类型错误落在没改的行上就不挡，比如 PR 改了函数签名，旧调用处报的错。Rust 的编译错误照样挡。
+
+| 项 | 内容 |
+|---|---|
+| 用法 | `diff_filter.py --base <ref> --format <格式> -- <命令…>`：在当前目录跑命令，stderr 原样输出，解析 stdout |
+| 格式 | `cargo`（`--message-format=json`）、`ruff`、`ruff-format`（`--output-format json`）、`pyright`（`--outputjson`，只算 error）、`vulture`、`tsc`（`--pretty false`）、`knip`（`--reporter json`）、`paths`（每行一个文件：`prettier --list-different`、`cargo fmt --message-format short`） |
+| 退出码 | 0 通过，1 改动行上有问题，2 出错 |
+| 测试 | 在该目录跑 `python3 -m unittest diff_filter_test` |
 
 ### formatter
 
@@ -52,7 +71,7 @@
 
 ### linter 规则
 
-所有规则都开在 error 级，warning 也让 CI 失败（Rust 用 `-D warnings`，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
+所有规则都开在 error 级，改动行上的 warning 也让 CI 失败（Rust 由[只查改动行](#只查改动行)的脚本判，ESLint 用 `--max-warnings 0`；ruff 没有 warning 级别）。linter 配置至少开着这些规则。后三列是各语言的具体规则。禁用列表类规则是 Rust `clippy::disallowed_methods`（配置键 `disallowed-methods`）、Python `TID251`（配置键 `banned-api`）、TypeScript `no-restricted-*`；冒号后或括号里是要列进去的 API 或选择器。工具：Rust 用 clippy，Python 用 ruff，TypeScript 用 eslint（typescript-eslint）。
 
 | 类 | 规则 | 防什么 | Rust | Python | TypeScript |
 |---|---|---|---|---|---|
@@ -270,7 +289,7 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 | 锁什么 | 包括 | 写法 | 防什么 |
 |---|---|---|---|
 | 工具配置和测试钩子 | 下表各语言的文件名 | 只写文件名（不带 `/`），任何深度都匹配，新建的也算；带目录的写成 `**/` 开头 | 改规则；子目录里新建同名配置，覆盖根目录那份；测试钩子把失败改成通过 |
-| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；lint 基线、重复基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
+| 白名单和基线 | 豁免、escape hatch、依赖、变异、状态、二进制白名单，删除名单；重复基线、CRAP 基线、覆盖率门槛 | 建议都放在一个目录里，锁整个目录 | 自己给自己放行 |
 | 测试数据 | golden、快照、fixture 目录 | 目录 | 改标准答案迁就错误输出 |
 | 生成相关 | 生成路径名单、生成器配置 | 文件 | 把逻辑藏进"生成"文件 |
 | 检查工具清单 | 检查工具和版本 | 文件 | 换掉或降级检查工具 |

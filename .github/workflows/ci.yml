@@ -278,6 +278,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/typescript/inline-exemptions
         run: npm ci --no-audit --no-fund --ignore-scripts && npm test
+      - name: Rust inline exemptions tests
+        id: rust-inline-exemptions
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/inline-exemptions
+        run: cargo test --locked
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -301,9 +306,10 @@ jobs:
           PYTHON_INLINE_EXEMPTIONS: ${{ steps.python-inline-exemptions.outcome }}
           GO_INLINE_EXEMPTIONS: ${{ steps.go-inline-exemptions.outcome }}
           TYPESCRIPT_INLINE_EXEMPTIONS: ${{ steps.typescript-inline-exemptions.outcome }}
+          RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CONFIGS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

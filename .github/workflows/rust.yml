@@ -23,7 +23,7 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -148,7 +148,6 @@ jobs:
         id: coverage
         if: ${{ !cancelled() }}
         env:
-          PROJECT_DIR: ${{ inputs.working-directory }}
           UNIT_TESTS: ${{ inputs.unit-tests }}
         run: |
           # Target selectors only: any other cargo-llvm-cov option could loosen the locked coverage config.
@@ -165,19 +164,12 @@ jobs:
             exit 1
           fi
           regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
-          measure() {
-            (cd "$1" && cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$2")
-          }
-          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
-          git worktree prune
-          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
-          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
-          measure . "$RUNNER_TEMP/coverage-head.xml"
+          cargo llvm-cov --workspace --all-features --locked --branch "${targets[@]}" --ignore-filename-regex "$regex" --cobertura --output-path "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |
           PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
-            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"
+            --head "$RUNNER_TEMP/coverage-head.xml" --compare-branch "$BASE_REF"
       # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
       - name: CRAP report
         if: ${{ !cancelled() }}

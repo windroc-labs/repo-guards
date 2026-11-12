@@ -27,7 +27,7 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -179,7 +179,6 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
-          PROJECT_DIR: ${{ inputs.working-directory }}
         run: |
           pin() { python3 -c 'import sys, tomllib; print(next(r for r in tomllib.load(open(sys.argv[1], "rb"))["dependency-groups"]["dev"] if r.startswith(sys.argv[2])))' "$RG/python/pyproject.toml" "$1"; }
           coverage=$(pin "coverage[toml]==")
@@ -187,28 +186,21 @@ jobs:
           read -ra dirs <<< "$SOURCE_DIRS"
           sources=$(IFS=,; echo "${dirs[*]}")
           # A uv project's pytest comes from its lock; a requirements.txt project without one gets the shared dev group's.
-          install() {
-            if [[ -f uv.lock ]]; then
-              uv sync --locked
-            else
-              uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
-              .venv/bin/python -c 'import pytest' 2> /dev/null || tools+=(--with "$pytest")
-            fi
-          }
+          tools=(--with "$coverage")
+          if [[ -f uv.lock ]]; then
+            uv sync --locked
+          else
+            uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
+            .venv/bin/python -c 'import pytest' 2> /dev/null || tools+=(--with "$pytest")
+          fi
           cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
-          measure() {
-            (tools=(--with "$coverage") && cd "$1" && install && cov run --source "$sources" -m pytest && cov xml -o "$2")
-          }
-          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
-          git worktree prune
-          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
-          measure "$RUNNER_TEMP/base/$PROJECT_DIR" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
-          measure . "$RUNNER_TEMP/coverage-head.xml"
+          cov run --source "$sources" -m pytest
+          cov xml -o "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
         if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
         run: |
           PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
-            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"
+            --head "$RUNNER_TEMP/coverage-head.xml" --compare-branch "$BASE_REF"
       # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
       - name: CRAP report
         if: ${{ !cancelled() }}

@@ -19,4 +19,6 @@
 
 辅助：issue 和 PRD 的规格写清楚。规格越模糊，agent 越容易作弊。
 
+辅助：push 到 public repo 之前，本地 pre-push hook 先跑 scanner，拦下泄漏。每个 clone 要启用一次，见 [`hooks/`](hooks/README.md)。
+
 建议的落地顺序：1 → 2 → 3 → 6 → 4 → 5。

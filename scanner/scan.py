@@ -9,6 +9,11 @@ The list may come from the environment variable REPO_GUARDS_PRIVATE_NAMES instea
 It scans the tracked files and the messages and author and committer emails of the
 commits in `--commits` (default origin/main..HEAD); `--pr-from-env` adds the PR title
 and body from PR_TITLE and PR_BODY.
+`--pre-push REMOTE` (the git pre-push hook, hooks/pre-push) reads git's pre-push input from
+stdin and scans instead each pushed commit's message, emails and added or changed files,
+leaving out commits REMOTE's remote-tracking refs or the input's remote shas reach. Its
+checks default to the leak class. A hit in a pushed file is `commit <sha> file #k`, k its
+line in `git diff-tree -r --root -c --no-commit-id --name-only <sha>`.
 `--public` prints counts only; the default output gives a position for every hit
 but never the matched text. Leak-class hits in files are reported by the file's
 1-based index in `git ls-files`, never by its path. Exit 0 clean, 1 hits or list
@@ -33,6 +38,10 @@ LEAK, HYGIENE = "leak", "hygiene"
 EM_DASH = chr(0x2014)
 UNAVAILABLE = "private-name: 名单不可用 (private-name list unavailable)"
 LEAK_NOTICE = 'Leak-class hits are already public: follow "If something leaks" in AGENTS.md.'
+PRE_PUSH_NOTICE = (
+    "Nothing was pushed: remove the hits from the listed commits (amend or rebase), then push again."
+)
+GITLINK = "160000"
 
 
 class Usage(Exception):
@@ -56,6 +65,8 @@ class Where:
     def render(self, leak: bool) -> str:
         if self.index:
             name = "file #%d" % self.index if leak else self.path
+            if self.sha:
+                name = "commit %s %s" % (self.sha, name)
             return "%s path" % name if self.field == "path" else "%s:%d:%d" % (name, self.line, self.col)
         if self.sha:
             return "commit %s %s" % (self.sha, self.field or "line %d" % self.line)
@@ -144,8 +155,8 @@ def private_name_finder(entries: list[str]) -> Finder:
     return find
 
 
-def git(top: str, *args: str) -> bytes:
-    proc = subprocess.run(["git", "-C", top, *args], capture_output=True)
+def git(top: str, *args: str, stdin: bytes = b"") -> bytes:
+    proc = subprocess.run(["git", "-C", top, *args], input=stdin, capture_output=True)
     if proc.returncode:
         raise Usage("git %s failed: %s" % (args[0], proc.stderr.decode(errors="replace").strip()))
     return proc.stdout
@@ -179,9 +190,12 @@ def load_names(names_file: str | None, top: str) -> list[str] | None:
 
 @dataclass(frozen=True)
 class TrackedFile:
+    """A file to scan: a tracked file, or with `sha` set, entry `index` of that pushed commit."""
+
     index: int
     path: str
     text: str | None
+    sha: str = ""
 
 
 def tracked_files(top: str) -> list[TrackedFile]:
@@ -214,11 +228,12 @@ def read_text(full: str) -> str | None:
 
 
 class Report:
-    def __init__(self, checks: list[Check]):
+    def __init__(self, checks: list[Check], notice: str = LEAK_NOTICE):
         self.checks = checks
         self.hits: list[tuple[Check, Where]] = []
         self.unavailable = False
         self.skipped = 0
+        self.notice = notice
 
     def add(self, check: Check, where: Where) -> None:
         self.hits.append((check, where))
@@ -239,11 +254,11 @@ class Report:
             count = sum(1 for c, _ in self.hits if c is check)
             shown = "unavailable" if check.name == "private-name" and self.unavailable else str(count)
             lines.append("  %s  %-7s  %s" % (check.name.ljust(width), check.klass, shown))
-        files = {where.index for _, where in self.hits if where.index}
+        files = {(where.sha, where.index) for _, where in self.hits if where.index}
         lines.append("skipped non-text files: %d" % self.skipped)
         lines.append("files with hits: %d, total hits: %d" % (len(files), len(self.hits)))
         if any(check.klass == LEAK for check, _ in self.hits):
-            lines.append(LEAK_NOTICE)
+            lines.append(self.notice)
         return "\n".join(lines) + "\n"
 
 
@@ -259,11 +274,11 @@ def scan_files(report: Report, finders: dict[Check, Finder], files: list[Tracked
     for f in files:
         for check, find in path_finders.items():
             if find(f.path):
-                report.add(check, Where(f.path, f.index, field="path"))
+                report.add(check, Where(f.path, f.index, f.sha, field="path"))
         if f.text is None:
             report.skipped += 1
         else:
-            scan_text(report, finders, f.text, Where(f.path, f.index))
+            scan_text(report, finders, f.text, Where(f.path, f.index, f.sha))
 
 
 @dataclass(frozen=True)
@@ -274,8 +289,8 @@ class Commit:
     message: str
 
 
-def commits(top: str, revisions: str) -> list[Commit]:
-    out = git(top, "log", "-z", "--format=%H%x00%ae%x00%ce%x00%B", "--end-of-options", revisions)
+def commits(top: str, *revisions: str) -> list[Commit]:
+    out = git(top, "log", "-z", "--format=%H%x00%ae%x00%ce%x00%B", *revisions)
     fields = out.decode("utf-8", "replace").split("\0")
     if fields and not fields[-1]:
         fields.pop()
@@ -289,6 +304,80 @@ def scan_commits(report: Report, finders: dict[Check, Finder], log: list[Commit]
         for field, address in (("author", c.author), ("committer", c.committer)):
             if email and not email_allowed(address):
                 report.add(email, Where(sha=c.sha, field=field))
+
+
+SHA = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
+
+
+def absent(sha: str) -> bool:
+    return not sha.strip("0")
+
+
+def lines(items: Iterable[str]) -> bytes:
+    return "".join(item + "\n" for item in items).encode()
+
+
+def pushed_revisions(top: str, remote: str, text: str) -> list[str]:
+    """`git log` revisions of the commits a push publishes, from git's pre-push input lines."""
+    heads, known = [], []
+    # Ref names may hold characters str.splitlines() breaks on; git ends each line with "\n".
+    for number, line in enumerate(text.split("\n"), 1):
+        if not line:
+            continue
+        fields = line.rsplit(" ", 3)
+        if len(fields) != 4 or not (SHA.fullmatch(fields[1]) and SHA.fullmatch(fields[3])):
+            raise Usage("unexpected pre-push input line %d" % number)
+        if not absent(fields[1]):
+            heads.append(fields[1] + "^{commit}")
+        if not absent(fields[3]):
+            known.append(fields[3])
+    if not heads:
+        return []
+    # A remote sha this repository lacks would make `git log` fail.
+    checked = git(top, "cat-file", "--batch-check", stdin=lines(known)).decode().splitlines() if known else []
+    present = [line.split()[0] for line in checked if not line.endswith(" missing")]
+    return [*heads, "--not", "--remotes=" + remote, *present]
+
+
+def blob_texts(top: str, oids: list[str]) -> list[str | None]:
+    """Each blob's UTF-8 text, or None, in the order given."""
+    out = git(top, "cat-file", "--batch", stdin=lines(oids)) if oids else b""
+    texts: list[str | None] = []
+    pos = 0
+    for _ in oids:
+        end = out.index(b"\n", pos)
+        header = out[pos:end].split()
+        if header[1] != b"blob":
+            raise Usage("pushed object %s is %s, not a blob" % (header[0].decode(), header[1].decode()))
+        size = int(header[2])
+        try:
+            texts.append(out[end + 1 : end + 1 + size].decode("utf-8"))
+        except UnicodeDecodeError:
+            texts.append(None)
+        pos = end + 2 + size
+    return texts
+
+
+def pushed_files(top: str, shas: list[str]) -> list[TrackedFile]:
+    """Files each commit adds or changes; a merge's are those differing from every parent (diff-tree -c)."""
+    out = git(top, "diff-tree", "--stdin", "-r", "-z", "--root", "-c", stdin=lines(shas)) if shas else b""
+    entries: list[tuple[str, int, str, str]] = []
+    tokens = iter(out.split(b"\0"))
+    commit, entry = "", 0
+    for token in tokens:
+        if not token.startswith(b":"):
+            if token.strip():
+                commit, entry = token.decode().strip(), 0
+            continue
+        raw = next(tokens)
+        entry += 1
+        parts = token.decode().lstrip(":").split()
+        parents = len(parts) // 2 - 1
+        mode, oid = parts[parents], parts[2 * parents + 1]
+        if not absent(oid) and mode != GITLINK:
+            entries.append((commit, entry, os.fsdecode(raw), oid))
+    texts = blob_texts(top, [oid for *_, oid in entries])
+    return [TrackedFile(entry, path, text, commit) for (commit, entry, path, _), text in zip(entries, texts)]
 
 
 def scan_pull_request(report: Report, finders: dict[Check, Finder]) -> None:
@@ -424,26 +513,33 @@ def scan_links(report: Report, check: Check, files: list[TrackedFile]) -> None:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--repo", default=".", help="git checkout to scan (default: current directory)")
-    parser.add_argument("--checks", default=",".join(CHECKS), help="comma-separated checks (default: all): %(default)s")
+    parser.add_argument("--checks", help="comma-separated checks of %s (default: all; with --pre-push, the %s class)"
+                        % (",".join(CHECKS), LEAK))
     parser.add_argument("--names-file", help="private-name list, one literal per line; must be outside the checkout")
     parser.add_argument("--commits", default="origin/main..HEAD",
                         help="revision range whose commit messages and emails are scanned (default: %(default)s)")
     parser.add_argument("--pr-from-env", action="store_true",
                         help="also scan the PR title and body from the PR_TITLE and PR_BODY variables")
     parser.add_argument("--public", action="store_true", help="print counts only, for public CI logs")
+    parser.add_argument("--pre-push", metavar="REMOTE",
+                        help="read git's pre-push input from stdin and scan the pushed commits not on REMOTE's"
+                             " remote-tracking refs, and their files, instead of the tracked files and --commits")
     return parser.parse_args(argv)
 
 
 def run(argv: list[str]) -> tuple[int, str]:
     args = parse_args(argv)
-    names = [n.strip() for n in args.checks.split(",") if n.strip()]
+    if args.checks is None:
+        names = [c.name for c in CHECKS.values() if args.pre_push is None or c.klass == LEAK]
+    else:
+        names = [n.strip() for n in args.checks.split(",") if n.strip()]
     unknown = [n for n in names if n not in CHECKS]
     if unknown or not names:
         raise Usage("unknown check %r; choose from %s" % (",".join(unknown), ",".join(CHECKS)))
     checks = [c for c in CHECKS.values() if c.name in names]
     top = os.path.realpath(git(os.path.abspath(args.repo), "rev-parse", "--show-toplevel").decode().strip())
 
-    report = Report(checks)
+    report = Report(checks, LEAK_NOTICE if args.pre_push is None else PRE_PUSH_NOTICE)
     finders: dict[Check, Finder] = {}
     for check in checks:
         if check.name == "link":
@@ -457,8 +553,15 @@ def run(argv: list[str]) -> tuple[int, str]:
         else:
             finders[check] = TEXT_FINDERS[check.name]
 
-    log = commits(top, args.commits) if finders else []
-    files = tracked_files(top) if finders or "link" in names else []
+    if args.pre_push is not None:
+        if "link" in names:
+            raise Usage("--pre-push cannot run the link check, which needs the whole tree")
+        revisions = pushed_revisions(top, args.pre_push, sys.stdin.read())
+        log = commits(top, *revisions) if finders and revisions else []
+        files = pushed_files(top, [c.sha for c in log])
+    else:
+        log = commits(top, "--end-of-options", args.commits) if finders else []
+        files = tracked_files(top) if finders or "link" in names else []
     scan_files(report, finders, files)
     if "link" in names:
         scan_links(report, CHECKS["link"], files)

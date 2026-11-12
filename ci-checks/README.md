@@ -11,8 +11,9 @@
 1. 把 [`ci.yml`](ci.yml) 复制成 `.github/workflows/ci.yml`：删掉用不到的语言 job，`with:` 按下表填，`uses:` 保持 `@main`。`runs-on`：公开 repo 用默认的 GitHub-hosted runner，私有 repo 写 `'["self-hosted","linux"]'`（例子里两种都有）。
 2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级其他 action 在 `uses:` 里钉住的版本；repo-guards 的 workflow 用 `@main`，不用升级。
 3. 要改共用配置，写进 `.github/checks/repo-guards.toml`（见[覆盖默认配置](#覆盖默认配置)）；jscpd 基线放 `.github/checks/jscpd-baseline.json`。`.github/` 已由 CODEOWNERS 锁住。
-4. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
-5. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。这个目录写进 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_configs_test`（要 Python 3.11.4 及以上）。
+4. 接入[行内豁免](#行内豁免)（模板里的 `inline-exemptions` job）时，先在本地跑一遍，把现有的每一处豁免登记进 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，写明原因。
+5. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
+6. 可选：本地要读规则、跑工具时，把 [`fetch-configs/fetch_configs.py`](fetch-configs/fetch_configs.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。这个目录写进 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_configs_test`（要 Python 3.11.4 及以上）。
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
@@ -21,6 +22,7 @@
 | [`typescript.yml`](../.github/workflows/typescript.yml) | [TypeScript](typescript/README.md) 各项和依赖检查 | `working-directory`（`.`） |
 | [`go.yml`](../.github/workflows/go.yml) | [Go](go/README.md) 各项和依赖检查 | `working-directory`（`.`）、`unit-tests`（`./...`） |
 | [`jscpd.yml`](../.github/workflows/jscpd.yml) | [重复代码](#重复代码) | 无 |
+| [`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml) | [行内豁免](#行内豁免)（第 13 项） | 无 |
 | [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) | [第 21 项](#github-改动单独成-pr) | 无 |
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml`、`requirements.txt`、`package.json` 或 `go.mod` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它。`unit-tests` 选覆盖率要量的单元测试：Rust 是测试目标，Go 是 `go test` 的参数（包模式），见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。别的设置都在共用配置文件里，项目用覆盖文件改，见[覆盖默认配置](#覆盖默认配置)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，四种语言共用；`exceptions` 是 Python、TypeScript、Go 不查许可证的包（Go 是模块路径，要完全相同），默认空；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。Rust 的例外是 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.exceptions`，cargo-deny 的写法。
@@ -90,13 +92,13 @@ source-dirs = ["src", "tools"]
 
 ## 流程级
 
-本 repo 只定要求（第 21 项除外，由 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现，比如用语言自带的语法解析找豁免和所在函数。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
+本 repo 只定要求（第 13 项和第 21 项除外，分别由 [`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml) 和 [`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），其余各项由各 repo 用自己的语言和工具实现。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
 
 状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
 
 | # | 检查 | 要求 | 标准答案（锁住的文件） | 防什么 | 频率 | 状态 |
 |---|---|---|---|---|---|---|
-| 13 | [行内豁免](#行内豁免) | 每一处豁免都要在豁免白名单里登记，登记和代码对不上就失败 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR |  |
+| 13 | [行内豁免](#行内豁免) | 每一处豁免都要在豁免白名单里登记，登记和代码对不上就失败 | 豁免白名单 | 在代码里局部关掉检查 | 每个 PR | ✅ |
 | 14 | [测试结果状态门](#测试结果状态门) | 这次运行的结果文件里每个测试都是 passed；测试数和测试 ID 都对得上 | 状态白名单、删除名单 | 加跳过标记、标成预期失败、重试到通过、改构建配置让测试不跑、删测试或改名、拿旧结果文件冒充 | 每个 PR |  |
 | 15 | 先失败后通过 | PR 新增或改过的测试拿去跑 base 的源码：PR 改了行为时，至少一个失败；在 head 上全部通过 | `.github/` 里的 CI 文件 | 测试没测到这次改的行为 | 每个 PR |  |
 | 16 | 隔离再跑 | 必跑的测试（时间允许就全部测试）再跑一遍：去掉 CI 环境变量、断网、随机时区、locale 和时钟、换一个 checkout 路径、打乱顺序；每个测试有超时 | `.github/` 里的 CI 文件 | linter 规则"不检测测试环境"没抓到的测试环境特判；测试依赖顺序、网络或机器；测试卡住 | 每个 PR |  |
@@ -265,7 +267,7 @@ TypeScript 用 `no-restricted-syntax`，配这四个选择器：
 jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscpd-baseline.json --update-baseline .
 ```
 
-`ignorePattern` 算行内豁免。
+`ignorePattern` 写在 `.github/checks/repo-guards.toml` 里，已由 CODEOWNERS 审，不另在[行内豁免](#行内豁免)白名单里登记。
 
 #### 依赖检查规则
 
@@ -356,7 +358,80 @@ diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`]
 - 各工具的豁免都算：lint、类型检查、覆盖率排除、跳过标记、死代码和重复代码的忽略、sanitizer 抑制、"生成文件"头。
 - 登记的内容：工具、文件、规则编号、所在函数、次数、原因。
 - 没登记的、次数对不上的、登记了但代码里已经没有的，都失败。
-- 例外：Rust 加在 `#[cfg(test)] mod tests` 上的 `coverage(off)` 不用登记（见[第 8 项](#覆盖率)），加在别处的照样登记。
+- 例外：Rust 加在 cfg 正好是 `#[cfg(test)]` 的 `mod` 上的 `coverage(off)` 不用登记（见[第 8 项](#覆盖率)），模块名不限，行内 `mod x { … }` 和 `mod x;` 都算；`cfg(any(test, …))`、`cfg(all(test, …))` 的和加在别处的照样登记。
+- `.github/checks/repo-guards.toml` 里写的设置（如 `.jscpd.json` 的 `ignorePattern`、`knip.json` 的 `ignore*`）已由 CODEOWNERS 审，不算，不另登记。
+
+实现：[`inline-exemptions.yml`](../.github/workflows/inline-exemptions.yml)，跑 [`inline-exemptions/inline_exemptions.py`](inline-exemptions/inline_exemptions.py)。四种语言一个 job，按整个 repo 查，不看 `working-directory`。
+
+- 查什么：HEAD 上 git 跟踪的文件（含测试），从 repo 根目录算；不看 diff，不按路径排除，不扫 submodule 的内容。只读这些文件：Rust `.rs`；Python `.py`、`.pyi`；TypeScript `.ts`、`.tsx`、`.mts`、`.cts`、`.js`、`.jsx`、`.mjs`、`.cjs`（含 `.d.ts`）；任何目录的 `Cargo.toml`、`pyproject.toml`、`go.mod`。
+- 怎么查：用 tree-sitter 静态解析（版本连同依赖带 hash 固定在 [`inline-exemptions/requirements.txt`](inline-exemptions/requirements.txt)，生成命令同覆盖率），不 import、不构建、不执行调用方的代码，不装调用方的依赖。注释形式只认真正的注释，字符串、模板字符串、正则字面量、JSX 文本和 Rust 文档注释里的文字不算。大小写、空格不限。
+- 什么算豁免由下表的内置写法定，表外的写法不算；工具名和规则值由下表固定。
+- 键是（工具、文件、规则、所在函数）。规则：能带规则列表的写法记写出的每条规则，一处写了几条就算几次，没写规则的记 `"*"`；其余写法记表里的关键词。所在函数是最内层的具名函数或方法，只带最内层的所属类型或类：Rust `Foo::bar`，Python、TypeScript、Go `Foo.bar`；不带模块路径。加在函数上的属性、装饰器和紧挨着声明的注释算那个函数；匿名函数、回调算外层的具名函数；不在函数里的为 `""`，包括加在 `impl` 块、结构体、字段、类本身和类体里非方法语句上的。TypeScript 里 `const f = () => …` 记 `f`，类字段上的箭头函数记 `C.f`，赋给 const 的对象字面量里的方法记 `o.m`，匿名的 `export default` 函数记 `default`；Go 的方法去掉 `*` 和类型参数。同一个键出现几次，次数就是几。
+- 白名单写在 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，四种语言共用一份（默认 [`inline-exemptions/settings.toml`](inline-exemptions/settings.toml) 是空的）。每条一个表，字段只有下面六个，都必须写；`tool` 只能是内置工具名，`count` 是正整数，`reason` 不能为空：
+
+```toml
+[["ci-checks/inline-exemptions/settings.toml".exemption]]
+tool = "rustc"
+file = "src/a.rs"
+rule = "dead_code"
+function = "Foo::bar"
+count = 1
+reason = "只在 feature full 下用到"
+```
+
+- 同一节的 `skip` 列出不查的工具（默认空），比如 `skip = ["cargo-test"]`：这个工具的豁免都不查，白名单里它的条目要删。`skip` 里只能写内置工具名。
+- 结果：一致时退出 0。代码里有、白名单里没有的，次数不对的，白名单里有、代码里没有的，退出 1，按（文件、函数、工具、规则）排序列出每一条：要加的写成可直接粘贴的条目，`reason` 留空，要改次数的和要删的也给出整条。源文件解析不了（语法错误、不是 UTF-8）、跟踪的上述文件是符号链接、白名单读不了或写错（未知字段、缺字段、类型或取值不对、同一个键两条）、`skip` 里有未知工具时退出 2，给出文件名或哪一条，所有文件都查完才退出。输出里的文件名和规则值都按 TOML 字符串转义，不会产生以 `::` 开头的行。
+- 本地跑：先在 repo 根目录跑 fetch-configs（见[每个 repo 自己要做的](#每个-repo-自己要做的)），再在 repo 根目录：
+
+```sh
+uv venv --python 3.12 "${TMPDIR:-/tmp}/inline-exemptions-venv"
+uv pip install --python "${TMPDIR:-/tmp}/inline-exemptions-venv/bin/python" --require-hashes -r .repo-guards/ci-checks/inline-exemptions/requirements.txt
+"${TMPDIR:-/tmp}/inline-exemptions-venv/bin/python" .repo-guards/ci-checks/inline-exemptions/inline_exemptions.py
+```
+
+  结果和退出码同 CI。本地读工作区里 git 跟踪的文件；工作区有未提交的改动时，输出第一行先提示。
+- 测试：在本 repo 的 `inline-exemptions/` 用上面的 venv 跑 `python -m unittest discover -p '*_test.py'`。
+
+内置写法（写法 → 工具 / 规则）：
+
+| 语言 | 写法 | 工具 | 规则 |
+|---|---|---|---|
+| Rust | `#[allow(…)]`、`#[expect(…)]`、`#![allow(…)]`、`#![expect(…)]`，含写在 `cfg_attr` 里的 | `clippy::` 开头的规则记 `clippy`，其余记 `rustc` | lint 名照写 |
+| Rust | `#[rustfmt::skip]` | `rustfmt` | `skip` |
+| Rust | `coverage(off)` | `cargo-llvm-cov` | `off` |
+| Rust | `#[ignore]` | `cargo-test` | `ignore` |
+| Rust | `#[no_sanitize(…)]`、`#[sanitize(<名> = "off")]` | `sanitizer` | 每个 sanitizer 名 |
+| Rust | `Cargo.toml` 的 `[lints.*]`、`[workspace.lints.*]` 里设成 `allow` 的 lint | 同 `#[allow]` | `clippy::<名>`；`rust` 表的照写，其余表 `<表名>::<名>` |
+| Rust | `Cargo.toml` 的 `[package.metadata.cargo-machete]`、`[workspace.metadata.cargo-machete]` 的 `ignored` | `cargo-machete` | crate 名 |
+| Python | `# noqa`、`# noqa: <规则>`；文件级 `# ruff: noqa`、`# flake8: noqa` | `V` 开头的规则记 `vulture`，其余记 `ruff` | 规则码 |
+| Python | `# fmt: off`、`# yapf: disable`；`# fmt: skip` | `ruff-format` | `off`；`skip` |
+| Python | `# type: ignore`、`# pyright: ignore`；文件级 `# pyright: <设置>`；`@typing.no_type_check` | `pyright` | 规则或 `*`；设置名；`no_type_check` |
+| Python | `# pragma: no cover`、`# pragma: no branch`（coverage.py 默认正则认的写法） | `coverage` | `no cover`、`no branch` |
+| Python | `pytest.mark.skip`、`skipif`、`xfail`（写在哪都算，含 `pytestmark` 和 `pytest.param(…, marks=…)`）；`pytest.skip()`、`pytest.xfail()`、`pytest.importorskip()` | `pytest` | 标记或函数名 |
+| Python | `unittest.skip`、`skipIf`、`skipUnless`、`expectedFailure`；`<x>.skipTest()`；`raise unittest.SkipTest` | `unittest` | 名字本身 |
+| Python | 文件名含 `whitelist` 的 Python 文件（vulture 白名单）里引用的每个名字 | `vulture` | 这个名字 |
+| Python | `pyproject.toml` 的 `[tool.deptry]` 的 `ignore`、`per_rule_ignores` | `deptry` | 规则码；`<规则码>:<包>` |
+| TypeScript | `@ts-expect-error`、`@ts-ignore`、`@ts-nocheck` | `tsc` | 指令名 |
+| TypeScript | `eslint-disable`、`eslint-disable-line`、`eslint-disable-next-line`（`//` 和 `/* */`）；把规则设成 `"off"` 或 `0` 的 `/* eslint … */` | `eslint` | 规则，` -- ` 起的说明不算 |
+| TypeScript | `prettier-ignore`（含 JSX 里的 `{/* prettier-ignore */}`） | `prettier` | `ignore` |
+| TypeScript | `v8 ignore`、`c8 ignore`、`istanbul ignore`（可带 `-- @preserve`） | `vitest-coverage` | `next`、`start`、`if`、`else`、`file` |
+| TypeScript | JSDoc 的 `@public` | `knip` | `public` |
+| TypeScript | `test`、`it`、`describe`、`suite`（含从 `vitest` 别名导入的）链上的 `.skip`、`.todo`、`.fails`、`.skipIf(…)`、`.runIf(…)`；`ctx.skip()`、`context.skip()`；`xit`、`xtest`、`xdescribe` | `vitest` | 标记名 |
+| Go | `//nolint`、`//nolint:<linter>,…`（`//` 后不带空格；写在 `package` 前的作用于整个文件） | `golangci-lint` | 每个 linter；不带 linter 或 `all` 记 `*` |
+| Go | `<x>.Skip(…)`、`<x>.Skipf(…)`、`<x>.SkipNow()` | `go-test` | 方法名 |
+| Go | `//go:build`、`// +build`（不求值，一律算） | `go-build` | 条件表达式原文 |
+| Go | `go.mod` 的 `ignore` 指令；上层目录也有 `go.mod` 的 `go.mod`（嵌套模块） | `go-mod` | 路径；`module` |
+| 共有 | 文件开头注释里的 `@generated`、`Code generated … DO NOT EDIT.`、`Generated by the protocol buffer compiler.  DO NOT EDIT!` | `generated` | `generated` |
+| 共有 | `jscpd:ignore-start` | `jscpd` | `ignore` |
+
+不算：`#nosec`（`golangci.toml` 设了 `nosec = true`）、`it.only` 等 focus 标记（归第 14 项）、`eslint-enable`、`v8 ignore stop`。
+
+已知限制：
+
+- 第 21 项要求改 `.github/` 的 PR 不改别的文件，白名单又在 `.github/checks/repo-guards.toml` 里：加豁免的代码 PR 没登记就失败，先合的登记 PR 因代码里还没有这处豁免也失败，删豁免时反过来一样。给第 21 项开窄例外与否由 owner 定；定之前，owner 只能强制合并其中一个失败的 PR。
+- 不扫 submodule 的内容；`#[path]`、`include!` 引入的文件和宏调用输入里写的属性看不到；`macro_rules!` 宏体里的属性按写法认，展开后生成的看不到。
+- 只读上面列的文件：Markdown、YAML、CSS 里的 `prettier-ignore` 查不出来。Go 文件名后缀（`_windows.go`）也能让文件不参与构建，不查。
+- vulture 白名单只按文件名认；表外的写法查不出来，`skip` 能关掉整个工具，都靠 CODEOWNERS 审。
 
 #### 测试结果状态门
 

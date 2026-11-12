@@ -66,8 +66,8 @@ COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 def commit_of(url: str) -> str | None:
     """The commit a locked git URL records: its #fragment (uv.lock, npm, Cargo.lock) or trailing @rev (uv pip compile)."""
     rest, _, fragment = url.strip().partition("#")
-    rev = fragment or urllib.parse.urlsplit(rest.removeprefix("git+")).path.rpartition("@")[2]
-    return rev.lower() if COMMIT.fullmatch(rev.lower()) else None
+    at = urllib.parse.urlsplit(rest.removeprefix("git+")).path.rpartition("@")[2]
+    return next((rev.lower() for rev in (fragment, at) if COMMIT.fullmatch(rev.lower())), None)
 
 
 class GitSource(NamedTuple):
@@ -423,30 +423,6 @@ def read_package_lock(path: Path) -> list[Locked]:
     return locked
 
 
-def read_declared(paths: Iterable[Path]) -> list[Locked]:
-    """The git sources requirement files ask for by name, read before uv clones them. Absent files are skipped."""
-    locked: list[Locked] = []
-    for path in paths:
-        if not path.is_file():
-            continue
-        for raw in path.read_text().splitlines():
-            line = raw.split(" #", 1)[0].strip()
-            option, _, value = line.partition(" ")
-            if option in ("-r", "--requirement", "-c", "--constraint"):
-                locked += read_declared([path.parent / value.strip()])
-                continue
-            if option in ("-e", "--editable"):
-                line = value.strip()
-            if line.startswith("git+"):
-                egg = re.search(r"[#&]egg=([A-Za-z0-9._-]+)", line)
-                locked.append(Locked(egg.group(1) if egg else line, "", "git", line))
-            elif match := re.match(
-                r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*@\s*(git\+\S+)", line
-            ):
-                locked.append(Locked(match.group(1), "", "git", match.group(2)))
-    return locked
-
-
 def report(found: list[str]) -> int:
     for line in found:
         print(line, file=sys.stderr)
@@ -459,24 +435,16 @@ def report(found: list[str]) -> int:
     return 0
 
 
-def check_python(args: argparse.Namespace) -> int:
-    allowlist = load(args.allowlist, "python")
+def read_python_lock(args: argparse.Namespace) -> list[Locked]:
     if args.uv_lock:
-        locked = read_uv_lock(args.uv_lock)
-    elif args.requirements:
-        locked = read_requirements(args.requirements)
-    else:
-        locked = read_declared(args.declared)
-    found = violations(locked, allowlist, "python.", pep503)
-    for package in locked:
-        if package.kind == "git" and not any(
-            pep503(s.name) == pep503(package.name) for s in allowlist.build
-        ):
-            found.append(
-                f"{package}: a git dependency builds from source; "
-                f"add {package.name} to python.bans.build.allow-build-scripts"
-            )
-    return report(found)
+        return read_uv_lock(args.uv_lock)
+    return read_requirements(args.requirements) if args.requirements else []
+
+
+def check_python(args: argparse.Namespace) -> int:
+    """A git source has no wheel, so the allow-git entry that admits it also admits its build."""
+    allowlist = load(args.allowlist, "python")
+    return report(violations(read_python_lock(args), allowlist, "python.", pep503))
 
 
 def check_rust(args: argparse.Namespace) -> int:
@@ -508,11 +476,52 @@ def licenses(args: argparse.Namespace) -> int:
     return 0
 
 
-def env_python(args: argparse.Namespace) -> int:
-    names = dict.fromkeys(spec.name for spec in load(args.allowlist, "python").build)
-    if names:
-        print(f"UV_NO_BINARY_PACKAGE={' '.join(names)}")
+INCLUDE = re.compile(r"(?:-r|--requirement|-c|--constraint)(?:\s*=\s*|\s+|(?<=-[rc]))(\S+)")
+
+
+def requirement_lines(path: Path, seen: set[Path]) -> Iterator[str]:
+    """Each requirement as written, -r and -c files inline, continuations joined, comments dropped."""
+    if path.resolve() in seen or not path.is_file():
+        return
+    seen.add(path.resolve())
+    for raw in re.sub(r"\\\r?\n", " ", path.read_text()).splitlines():
+        line = " ".join(re.split(r"(?:^|\s)#", raw, maxsplit=1)[0].split())
+        if include := INCLUDE.fullmatch(line):
+            yield from requirement_lines(path.parent / include.group(1), seen)
+        elif line:
+            yield line
+
+
+def prebuild_python(args: argparse.Namespace) -> int:
+    """The git requirements the allowlist admits, as written. uv caches metadata by the URL as written, so
+    building each alone lets the strict resolve read a git source that names no package. Only chooses what
+    to build: admission is check python's, on uv's output, so a line missed here fails the resolve."""
+    allowlist = load(args.allowlist, "python")
+    seen: set[Path] = set()
+    for path in args.files:
+        for line in requirement_lines(path, seen):
+            url = re.search(r"git\+\S+", line)
+            if url and any(s.matches(url.group()) for s in allowlist.git):
+                print(line)
     return 0
+
+
+def env_python(args: argparse.Namespace) -> int:
+    """UV_NO_BINARY_PACKAGE: the build entries, plus the git packages of a checked lock or resolution."""
+    allowlist = load(args.allowlist, "python")
+    names = [spec.name for spec in allowlist.build]
+    names += [package.name for package in read_python_lock(args) if package.kind == "git"]
+    if names:
+        print(f"UV_NO_BINARY_PACKAGE={' '.join(dict.fromkeys(names))}")
+    return 0
+
+
+def python_lock(command: argparse.ArgumentParser, required: bool) -> None:
+    lock = command.add_mutually_exclusive_group(required=required)
+    lock.add_argument("--uv-lock", type=Path)
+    lock.add_argument(
+        "--requirements", type=Path, help="uv pip compile output with --emit-index-annotation"
+    )
 
 
 def parser() -> argparse.ArgumentParser:
@@ -529,17 +538,7 @@ def parser() -> argparse.ArgumentParser:
     rust.set_defaults(run=check_rust)
     python = check.add_parser("python")
     python.add_argument("--allowlist", type=Path, required=True)
-    lock = python.add_mutually_exclusive_group(required=True)
-    lock.add_argument("--uv-lock", type=Path)
-    lock.add_argument(
-        "--requirements", type=Path, help="uv pip compile output with --emit-index-annotation"
-    )
-    lock.add_argument(
-        "--declared",
-        type=Path,
-        nargs="+",
-        help="requirement files as written, checked before resolving; absent files are skipped",
-    )
+    python_lock(python, required=True)
     python.set_defaults(run=check_python)
     typescript = check.add_parser("typescript")
     typescript.add_argument("--allowlist", type=Path, required=True)
@@ -550,7 +549,17 @@ def parser() -> argparse.ArgumentParser:
     )
     env_py = env.add_parser("python")
     env_py.add_argument("--allowlist", type=Path, required=True)
+    python_lock(env_py, required=False)
     env_py.set_defaults(run=env_python)
+    prebuild = commands.add_parser(
+        "prebuild", help="print the git requirements to build before resolving"
+    ).add_subparsers(required=True)
+    prebuild_py = prebuild.add_parser("python")
+    prebuild_py.add_argument("--allowlist", type=Path, required=True)
+    prebuild_py.add_argument(
+        "files", type=Path, nargs="+", help="requirement files; absent files are skipped"
+    )
+    prebuild_py.set_defaults(run=prebuild_python)
     env_ts = env.add_parser("typescript")
     env_ts.add_argument("--allowlist", type=Path, required=True)
     env_ts.set_defaults(run=env_typescript)

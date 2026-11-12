@@ -201,6 +201,7 @@ class GitUrls(unittest.TestCase):
             f"git+https://github.com/o/r@{SHA_A}",  # uv pip compile output
             f"git+ssh://git@github.com/o/r.git#{SHA_A}",  # package-lock.json
             f"git+https://github.com/o/r?branch=main#{SHA_A}",  # Cargo.lock
+            f"git+https://github.com/o/r.git@{SHA_A}#egg=r",  # a requirement file
         ):
             self.assertEqual(commit_of(url), SHA_A, url)
         for url in ("git+https://github.com/o/r", "git+https://github.com/o/r@main"):
@@ -462,43 +463,48 @@ class Cli(unittest.TestCase):
             self.assertEqual(code, 1)
             self.assertNotIn("private-pkg", err)
             self.assertIn("somepkg@4.0.0: git source", err)
-            self.assertIn(
-                "somepkg@4.0.0: a git dependency builds from source; "
-                "add somepkg to python.bans.build.allow-build-scripts",
-                err,
-            )
+            self.assertNotIn("allow-build-scripts", err)
 
-    def test_check_python_declared_reads_git_lines_before_resolving(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            Path(tmp, "requirements.txt").write_text(
-                "-r more.txt\n"
-                "six==1.17.0\n"
-                "somepkg @ git+https://git.example.org/o/somepkg@0123  # pinned\n"
-                "-e git+https://git.example.org/o/editable.git#egg=editable\n"
-            )
-            Path(tmp, "more.txt").write_text(
-                "other[extra] @ git+https://git.example.org/o/other@1\n"
-            )
-            Path(tmp, "a.toml").write_text(
-                '[python.sources]\nallow-git = ["https://git.example.org/o/somepkg", "https://git.example.org/o/other"]\n'
-                '[python.bans.build]\nallow-build-scripts = ["somepkg", "other"]\n'
-            )
-            code, _, err = self.run_main(
-                [
-                    "check",
-                    "python",
-                    "--allowlist",
-                    str(Path(tmp, "a.toml")),
-                    "--declared",
-                    str(Path(tmp, "requirements.txt")),
-                    str(Path(tmp, "requirements-dev.txt")),
-                ]
-            )
-        self.assertEqual(code, 1)
-        self.assertEqual(
-            [line.split(":")[0] for line in err.splitlines()[:-1]], ["editable", "editable"]
+    def test_check_python_admits_a_git_source_by_url_or_commit_alone(self):
+        resolved = f"dynpkg @ git+https://git.example.org/o/dyn@{SHA_A}\n    # via -r r.txt\n"
+        cases = (
+            ("", 1),
+            ('[python.sources]\nallow-git = ["https://git.example.org/o/dyn"]\n', 0),
+            (
+                (
+                    '[python.sources]\nallow-git = [{ url = "https://git.example.org/o/dyn", '
+                    f'rev = "{SHA_A}" }}]\n'
+                ),
+                0,
+            ),
+            (
+                (
+                    '[python.sources]\nallow-git = [{ url = "https://git.example.org/o/dyn", '
+                    f'rev = "{SHA_B}" }}]\n'
+                ),
+                1,
+            ),
         )
-        self.assertIn("add https://git.example.org/o/editable to python.sources.allow-git", err)
+        for allowlist, expected in cases:
+            with self.subTest(allowlist=allowlist), tempfile.TemporaryDirectory() as tmp:
+                Path(tmp, "a.toml").write_text(allowlist)
+                Path(tmp, "r.txt").write_text(resolved)
+                code, _, err = self.run_main(
+                    [
+                        "check",
+                        "python",
+                        "--allowlist",
+                        str(Path(tmp, "a.toml")),
+                        "--requirements",
+                        str(Path(tmp, "r.txt")),
+                    ]
+                )
+                self.assertEqual(code, expected, err)
+                self.assertNotIn("allow-build-scripts", err)
+
+    def test_check_python_reads_no_requirement_files_as_written(self):
+        with redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+            main(["check", "python", "--allowlist", "a.toml", "--declared", "requirements.txt"])
 
     def test_check_python_ignores_other_languages_entries(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -589,6 +595,93 @@ class Cli(unittest.TestCase):
             self.assertEqual(
                 self.run_main(["env", "python", "--allowlist", str(Path(tmp, "none.toml"))]),
                 (0, "", ""),
+            )
+
+    def test_prebuild_python_lists_the_admitted_git_lines_as_written(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "requirements.txt").write_text(
+                "-r=more.txt\n"
+                "-rmore2.txt\n"
+                "--requirement extra.txt\n"
+                "-r requirements.txt\n"
+                "six==1.17.0\n"
+                f"git+https://git.example.org/o/dyn@{SHA_A}  # no name\n"
+                'named @ git+https://git.example.org/o/named@main ; python_version >= "3"\n'
+                f"-e git+https://git.example.org/o/edit.git@{SHA_A}#egg=edit\n"
+                "unlisted @ git+https://git.example.org/o/unlisted\n"
+                "long @ \\\n    git+https://git.example.org/o/long\n"
+                "# git+https://git.example.org/o/named\n"
+            )
+            Path(tmp, "more.txt").write_text("git+https://git.example.org/o/more\n")
+            Path(tmp, "more2.txt").write_text("git+https://git.example.org/o/more2\n")
+            Path(tmp, "extra.txt").write_text("-c constraints.txt\n")
+            Path(tmp, "constraints.txt").write_text(f"git+https://git.example.org/o/con@{SHA_B}\n")
+            Path(tmp, "a.toml").write_text(
+                '[python.sources]\nallow-git = ["https://git.example.org/o/named", '
+                '"https://git.example.org/o/more", "https://git.example.org/o/more2", '
+                '"https://git.example.org/o/long", "https://git.example.org/o/edit", '
+                f'{{ url = "https://git.example.org/o/dyn", rev = "{SHA_A}" }}, '
+                f'{{ url = "https://git.example.org/o/con", rev = "{SHA_A}" }}]\n'
+                '[sources]\nallow-git = ["https://git.example.org/o/unlisted"]\n'
+            )
+            code, out, err = self.run_main(
+                [
+                    "prebuild",
+                    "python",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    str(Path(tmp, "requirements.txt")),
+                    str(Path(tmp, "requirements-dev.txt")),
+                ]
+            )
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(
+            out.splitlines(),
+            [
+                "git+https://git.example.org/o/more",
+                "git+https://git.example.org/o/more2",
+                f"git+https://git.example.org/o/dyn@{SHA_A}",
+                'named @ git+https://git.example.org/o/named@main ; python_version >= "3"',
+                f"-e git+https://git.example.org/o/edit.git@{SHA_A}#egg=edit",
+                "long @ git+https://git.example.org/o/long",
+            ],
+        )
+
+    def test_env_python_adds_the_resolved_git_packages_to_the_build_list(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "a.toml").write_text(
+                '[python.bans.build]\nallow-build-scripts = ["other", "somepkg"]\n'
+            )
+            Path(tmp, "r.txt").write_text(REQUIREMENTS)
+            Path(tmp, "uv.lock").write_text(UV_LOCK)
+            for flag, path in (("--requirements", "r.txt"), ("--uv-lock", "uv.lock")):
+                self.assertEqual(
+                    self.run_main(
+                        [
+                            "env",
+                            "python",
+                            "--allowlist",
+                            str(Path(tmp, "a.toml")),
+                            flag,
+                            str(Path(tmp, path)),
+                        ]
+                    ),
+                    (0, "UV_NO_BINARY_PACKAGE=other somepkg\n", ""),
+                    flag,
+                )
+            Path(tmp, "a.toml").write_text("")
+            self.assertEqual(
+                self.run_main(
+                    [
+                        "env",
+                        "python",
+                        "--allowlist",
+                        str(Path(tmp, "a.toml")),
+                        "--requirements",
+                        str(Path(tmp, "r.txt")),
+                    ]
+                ),
+                (0, "UV_NO_BINARY_PACKAGE=somepkg\n", ""),
             )
 
 

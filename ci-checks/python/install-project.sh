@@ -4,6 +4,8 @@
 # files in REQUIREMENTS (space-separated) and the present REQUIREMENTS_DEV files into RESOLVED, with each package's
 # index, and sync installs RESOLVED into .venv. Dependency rules checks the lock or RESOLVED between the two.
 # Only the packages in UV_NO_BINARY_PACKAGE build from source: uv sync reads it with UV_NO_BUILD, uv pip reads neither.
+# Before resolving, each git requirement the allowlist (ALLOWLIST) admits is built alone, so the resolve, which builds
+# nothing, finds its metadata in uv's cache even when the line names no package.
 set -euo pipefail
 command=$1
 resolved=$2
@@ -35,8 +37,16 @@ case $command in
     else
       uv venv --clear --python 3.12 .venv
     fi
-    uv pip compile --python .venv/bin/python "${wheels[@]}" --emit-index-annotation --generate-hashes --quiet \
-      -o "$resolved" "${files[@]}"
+    allowlist=(uv run --no-project --python 3.12 "$(dirname "$0")/../allowlist/allowlist.py")
+    "${allowlist[@]}" prebuild python --allowlist "$ALLOWLIST" "${files[@]}" > "$resolved.prebuild"
+    while IFS= read -r requirement; do
+      uv pip compile --python .venv/bin/python --no-deps --quiet -o /dev/null - <<< "$requirement"
+    done < "$resolved.prebuild"
+    if ! uv pip compile --python .venv/bin/python "${wheels[@]}" --emit-index-annotation --generate-hashes --quiet \
+      -o "$resolved" "${files[@]}"; then
+      echo "::error::Resolving builds nothing. If uv says building source distributions is disabled, a git requirement it must build to read: add its repository URL to python.sources.allow-git in the allowlist; a PyPI sdist: add its name to python.bans.build.allow-build-scripts."
+      exit 1
+    fi
     ;;
   sync)
     uv pip sync --python .venv/bin/python "${wheels[@]}" "$resolved"

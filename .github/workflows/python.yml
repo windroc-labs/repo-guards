@@ -77,7 +77,7 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
-      # The allowlist's build entries are the only packages uv may build from source.
+      # The allowlist's build entries and admitted git sources are the only packages uv may build from source.
       - &allowlist
         name: Apply the dependency allowlist
         run: uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" env python --allowlist "$ALLOWLIST" >> "$GITHUB_ENV"
@@ -86,20 +86,21 @@ jobs:
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
-      # Before install. Without uv.lock, the requirement files' own git lines are checked before resolving clones them.
+      # Before install. Without uv.lock, the resolve builds nothing but the git sources the allowlist admits, then the
+      # rules check what it resolved. Admitted git packages are then added to the packages sync may build.
       - &dependency-rules
         name: Dependency rules
         id: dependency-rules
         run: |
-          check=(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py" check python --allowlist "$ALLOWLIST")
+          allowlist=(uv run --no-project --python 3.12 "$RG/allowlist/allowlist.py")
           if [[ -f uv.lock ]]; then
-            "${check[@]}" --uv-lock uv.lock
+            lock=(--uv-lock uv.lock)
           else
-            read -ra files <<< "$REQUIREMENTS $REQUIREMENTS_DEV"
-            "${check[@]}" --declared "${files[@]}"
             bash "$RG/python/install-project.sh" resolve "$RUNNER_TEMP/resolved.txt"
-            "${check[@]}" --requirements "$RUNNER_TEMP/resolved.txt"
+            lock=(--requirements "$RUNNER_TEMP/resolved.txt")
           fi
+          "${allowlist[@]}" check python --allowlist "$ALLOWLIST" "${lock[@]}"
+          "${allowlist[@]}" env python --allowlist "$ALLOWLIST" "${lock[@]}" >> "$GITHUB_ENV"
       - name: Install the project
         run: bash "$RG/python/install-project.sh" sync "$RUNNER_TEMP/resolved.txt"
       - name: Format

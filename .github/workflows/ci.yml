@@ -1,0 +1,238 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  # PR runs check out the merge ref: HEAD^1 is the base, HEAD^2 the PR head.
+  RANGE: ${{ github.event_name == 'pull_request' && 'HEAD^1..HEAD^2' || format('{0}..HEAD', github.event.before) }}
+
+jobs:
+  scan:
+    name: Public rules
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Check out the default branch's scanner
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: default
+          persist-credentials: false
+      - name: Scan
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          scanner=default/scanner/scan.py
+          # The PR that adds this workflow lands before the default branch has a scanner.
+          [[ -f $scanner ]] || scanner=repo/scanner/scan.py
+          args=()
+          if [[ $EVENT == pull_request ]]; then
+            # Read from the event file: the log echoes a step's env: block, which would publish hits in the title or body.
+            PR_TITLE=$(jq -r '.pull_request.title // ""' "$GITHUB_EVENT_PATH")
+            PR_BODY=$(jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH")
+            export PR_TITLE PR_BODY
+            args+=(--pr-from-env)
+          elif ! git -C repo cat-file -e "${RANGE%..HEAD}^{commit}" 2>/dev/null; then
+            # A new branch (all-zero before) or an unknown before: scan the pushed head.
+            RANGE='HEAD^!'
+          fi
+          python3 "$scanner" --repo repo --checks local-path,email,em-dash,link --commits "$RANGE" "${args[@]}"
+
+  tools:
+    name: gitleaks and actionlint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GITLEAKS_URL: https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+      ACTIONLINT_URL: https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
+      ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+      GITLEAKS_CONFIG_URL: https://raw.githubusercontent.com/gitleaks/gitleaks/83d9cd684c87d95d656c1458ef04895a7f1cbd8e/config/gitleaks.toml
+      GITLEAKS_CONFIG_SHA256: e163e53b9e7e8a8511e77271e2b323ed057759542a6d988258afe3a1fa329caf
+    steps:
+      # gitleaks always reads <target>/.gitleaksignore, so it scans the checkout's parent and its .git, never the work tree root.
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: tree/repo
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks and actionlint
+        id: install
+        working-directory: ${{ runner.temp }}
+        run: |
+          mkdir -p bin empty
+          for item in GITLEAKS ACTIONLINT GITLEAKS_CONFIG; do
+            url=${item}_URL sha=${item}_SHA256
+            curl -sSfL --retry 3 -o "$item" "${!url}"
+            echo "${!sha}  $item" | sha256sum -c -
+          done
+          tar -xzf GITLEAKS -C bin gitleaks
+          tar -xzf ACTIONLINT -C bin actionlint
+          # The default config allowlists any path matching gitleaks\.toml, which would pass a secret put in such a file.
+          entry="    '''gitleaks\.toml''',"
+          grep -qxF "$entry" GITLEAKS_CONFIG
+          grep -vxF "$entry" GITLEAKS_CONFIG > gitleaks.toml
+          : > actionlint.yaml
+      - name: gitleaks
+        id: gitleaks
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [[ $EVENT != pull_request ]] && ! git -C tree/repo cat-file -e "${RANGE%..HEAD}^{commit}" 2>/dev/null; then
+            RANGE='HEAD^!'
+          fi
+          messages=$RUNNER_TEMP/messages
+          mkdir -p "$messages/m"
+          for sha in $(git -C tree/repo log --format=%H "$RANGE"); do
+            git -C tree/repo log -1 --format=%B "$sha" > "$messages/m/$sha"
+          done
+          bin=$RUNNER_TEMP/bin/gitleaks
+          opts=(--config "$RUNNER_TEMP/gitleaks.toml" --gitleaks-ignore-path "$RUNNER_TEMP/empty" --ignore-gitleaks-allow
+                --redact --no-banner --log-level error --exit-code 3 --report-format json)
+          for scan in files commits messages; do
+            case $scan in
+              files) target=(dir "$GITHUB_WORKSPACE/tree") ;;
+              commits) target=(git "$GITHUB_WORKSPACE/tree/repo/.git" --log-opts "--diff-merges=first-parent $RANGE") ;;
+              messages) target=(dir "$messages") ;;
+            esac
+            code=0
+            err=$RUNNER_TEMP/gitleaks-$scan.err
+            "$bin" "${target[@]}" "${opts[@]}" --report-path "$RUNNER_TEMP/gitleaks-$scan.json" 2> "$err" || code=$?
+            # gitleaks exits 0 when git itself fails, so any error-level log counts as a failed scan.
+            if (( code != 0 && code != 3 )) || [[ -s $err ]]; then
+              cat "$err"
+              echo "::error::gitleaks $scan scan failed with exit code $code"
+              exit 1
+            fi
+          done
+          python3 - "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP" <<'PY'
+          import json, os, subprocess, sys
+          top, tmp = sys.argv[1], sys.argv[2]
+          indexes = {}
+
+          def index_of(path, commit):
+              # FR-21: a file is named by its 1-based place in the scanned commit's file list, never by its path.
+              if commit not in indexes:
+                  cmd = ["ls-files", "-z"] if commit == "HEAD" else ["ls-tree", "-r", "-z", "--name-only", commit]
+                  listed = subprocess.run(["git", "-C", top, *cmd], capture_output=True, check=True).stdout
+                  indexes[commit] = {os.fsdecode(p): n for n, p in enumerate(dict.fromkeys(listed.split(b"\0")[:-1]), 1)}
+              return indexes[commit].get(path)
+
+          hits = 0
+          for scan in ("files", "commits", "messages"):
+              for f in json.load(open(os.path.join(tmp, "gitleaks-%s.json" % scan))):
+                  hits += 1
+                  line, col = f["StartLine"], f["StartColumn"]
+                  if scan == "messages":
+                      where = "commit %s line %d" % (os.path.basename(f["File"]), line)
+                  else:
+                      commit = f["Commit"] if scan == "commits" else "HEAD"
+                      n = index_of(os.path.relpath(f["File"], top) if scan == "files" else f["File"], commit)
+                      where = "file #%d:%d:%d" % (n, line, col) if n else "line %d" % line
+                      if scan == "commits":
+                          where = "commit %s %s" % (commit, where)
+                  print("%s: gitleaks (leak) rule %s" % (where, f["RuleID"]))
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write("hits=%d\n" % hits)
+          PY
+      - name: actionlint
+        id: actionlint
+        if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+        working-directory: tree/repo
+        run: |
+          code=0
+          "$RUNNER_TEMP/bin/actionlint" -config-file "$RUNNER_TEMP/actionlint.yaml" -shellcheck= -pyflakes= -oneline > "$RUNNER_TEMP/actionlint.txt" || code=$?
+          cat "$RUNNER_TEMP/actionlint.txt"
+          if (( code > 1 )); then
+            echo "::error::actionlint failed with exit code $code"
+            exit 1
+          fi
+          echo "hits=$(grep -c . "$RUNNER_TEMP/actionlint.txt")" >> "$GITHUB_OUTPUT"
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          GITLEAKS_HITS: ${{ steps.gitleaks.outputs.hits || 'not run' }}
+          ACTIONLINT_HITS: ${{ steps.actionlint.outputs.hits || 'not run' }}
+        run: |
+          echo "summary:"
+          printf '  %-10s  %-7s  %s\n' gitleaks leak "$GITLEAKS_HITS" actionlint hygiene "$ACTIONLINT_HITS"
+          if [[ $GITLEAKS_HITS != 0 && $GITLEAKS_HITS != 'not run' ]]; then
+            echo 'Leak-class hits are already public: follow "If something leaks" in AGENTS.md.'
+          fi
+          [[ $GITLEAKS_HITS == 0 && $ACTIONLINT_HITS == 0 ]]
+
+  tests:
+    name: Checker tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: repo
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          persist-credentials: false
+      - name: Install Node
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      - name: Install Rust from the shared rust-toolchain.toml
+        run: |
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' ci-checks/rust/rust-toolchain.toml)
+          rustup toolchain install "$channel" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+      - name: Scanner tests
+        id: scanner
+        if: ${{ !cancelled() }}
+        run: python3 -m unittest discover -s scanner -p 'test_*.py'
+      - name: Python comment budget tests
+        id: python
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/comment-budget
+        run: python3 -m unittest comment_budget_test
+      - name: TypeScript comment budget tests
+        id: typescript
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/comment-budget
+        run: |
+          npm ci --no-audit --no-fund --ignore-scripts
+          npm test
+      - name: Rust comment budget tests
+        id: rust
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/comment-budget
+        run: cargo test --locked
+      - name: Summary
+        if: ${{ !cancelled() }}
+        env:
+          SCANNER: ${{ steps.scanner.outcome }}
+          PYTHON: ${{ steps.python.outcome }}
+          TYPESCRIPT: ${{ steps.typescript.outcome }}
+          RUST: ${{ steps.rust.outcome }}
+        run: |
+          failed=0
+          for suite in SCANNER PYTHON TYPESCRIPT RUST; do
+            printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
+            [[ ${!suite} == success ]] || failed=$((failed + 1))
+          done
+          echo "summary:"
+          printf '  %-13s  %-7s  %s\n' checker-tests hygiene "$failed"
+          (( failed == 0 ))

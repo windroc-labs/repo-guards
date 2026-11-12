@@ -50,6 +50,11 @@ jobs:
           ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
           path: repo-guards
           persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       - name: Install Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -82,7 +87,7 @@ jobs:
         run: npm ci --no-audit --no-fund
       - name: Format
         if: ${{ !cancelled() }}
-        run: prettier --check --config "$RG/typescript/.prettierrc.json" .
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- prettier --list-different --config "$RG/typescript/.prettierrc.json" .
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: node "$RG/typescript/comment-budget/comment-budget.ts" --base "$BASE_REF" --config "$RG/typescript/comment-budget.toml"
@@ -90,7 +95,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           mapfile -t flags < <(node -e 'for (const [k, v] of Object.entries(require(process.argv[1]).compilerOptions)) console.log(`--${k}\n${v}`)' "$RG/typescript/tsconfig.json")
-          tsc --project tsconfig.json --noEmit "${flags[@]}"
+          uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format tsc -- tsc --project tsconfig.json --noEmit --pretty false "${flags[@]}"
       - name: Dead code and unused dependencies
         if: ${{ !cancelled() }}
         env:
@@ -98,7 +103,7 @@ jobs:
           PROJECT: ${{ inputs.knip-project }}
         run: |
           node -e 'const [src, entry, project, out] = process.argv.slice(1); const c = require(src); c.entry = JSON.parse(entry); c.project = JSON.parse(project); require("fs").writeFileSync(out, JSON.stringify(c))' "$RG/typescript/knip.json" "$ENTRY" "$PROJECT" "$RUNNER_TEMP/knip.json"
-          knip --production --config "$RUNNER_TEMP/knip.json"
+          uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format knip -- knip --production --config "$RUNNER_TEMP/knip.json" --reporter json
       - name: Vulnerabilities
         if: ${{ !cancelled() }}
         run: npm audit

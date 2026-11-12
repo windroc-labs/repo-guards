@@ -71,10 +71,10 @@ jobs:
         run: uv sync --locked
       - name: Format
         if: ${{ !cancelled() }}
-        run: ruff format --check --config "$RG/python/pyproject.toml" .
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Lint
         if: ${{ !cancelled() }}
-        run: ruff check --config "$RG/python/pyproject.toml" .
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff -- ruff check --output-format json --config "$RG/python/pyproject.toml" .
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
@@ -83,10 +83,10 @@ jobs:
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
-          pyright --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
+          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() }}
-        run: vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
+        run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
       - name: Unused dependencies
         if: ${{ !cancelled() }}
         run: |
@@ -102,12 +102,12 @@ jobs:
         env:
           EXCEPTIONS: ${{ inputs.license-exceptions }}
         run: |
-          allowed=$(python3 -c 'import sys, tomllib; c = tomllib.load(open(sys.argv[1], "rb")); print(";".join(c["allow"] + [k for k, v in c["python-classifiers"].items() if v in c["allow"]]))' "$RG/licenses.toml")
           ignore=("$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb")).get("project", {}).get("name", ""))')")
           if [[ -f "$GITHUB_WORKSPACE/repo/$EXCEPTIONS" ]]; then
             mapfile -t -O 1 ignore < <(grep -v '^[[:space:]]*$' "$GITHUB_WORKSPACE/repo/$EXCEPTIONS")
           fi
-          pip-licenses --python .venv/bin/python --from mixed --allow-only "$allowed" --ignore-packages "${ignore[@]}"
+          pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
+          python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
       # The coverage steps run the PR's tests, so they come after every static check.
       - name: Coverage
         id: coverage

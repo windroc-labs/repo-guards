@@ -9,7 +9,7 @@
 | [`.prettierrc.json`](.prettierrc.json) | 格式选项 |
 | [`package.json`](package.json) | `devDependencies` 固定 prettier 的版本，不带 `^` 或 `~`。不固定的话，升级后同样的代码可能突然不过 |
 
-`typescript.yml` 的 Format 步只检查不改写，格式不对就失败。`// prettier-ignore` 算行内豁免。
+`typescript.yml` 的 Format 步只检查不改写，PR 改过的文件格式不对就失败（见[只查改动行](../README.md#只查改动行)）。`// prettier-ignore` 算行内豁免。
 
 ## 注释预算
 

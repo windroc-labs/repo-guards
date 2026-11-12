@@ -239,14 +239,29 @@ REQUIREMENT = re.compile(
 )
 
 
+UV_LOCAL_SOURCES = ("editable", "virtual", "path", "directory")
+# uv pip compile writes these option lines; none of them names a package.
+COMPILE_OPTIONS = (
+    "--index-url",
+    "--extra-index-url",
+    "--find-links",
+    "--no-index",
+    "--no-binary",
+    "--only-binary",
+)
+
+
 def read_uv_lock(path: Path) -> list[Locked]:
     locked: list[Locked] = []
     for package in tomllib.loads(path.read_text()).get("package", []):
         source: dict[str, str] = package.get("source", {})
-        kind = next((k for k in ("registry", "git", "url") if k in source), "local")
-        locked.append(
-            Locked(package["name"], package.get("version", ""), kind, source.get(kind, ""))
-        )
+        name, version = package["name"], package.get("version", "")
+        if kind := next((k for k in ("registry", "git", "url") if k in source), None):
+            locked.append(Locked(name, version, kind, source[kind]))
+        elif any(k in source for k in UV_LOCAL_SOURCES):
+            locked.append(Locked(name, version, "local", ""))
+        else:
+            raise Error(f"{path}: package {name} has an unknown source {source!r}")
     return locked
 
 
@@ -261,7 +276,10 @@ def read_requirements(path: Path) -> list[Locked]:
                 locked[-1] = locked[-1]._replace(url=index.group(1))
         elif line.startswith(("-e ", "--editable ")):
             locked.append(Locked(Path(line.split(maxsplit=1)[1]).name, "", "local", ""))
-        elif line and not raw[0].isspace() and not line.startswith("-"):
+        elif line.startswith("-") and not raw[0].isspace():
+            if re.split(r"[\s=]", line, maxsplit=1)[0] not in COMPILE_OPTIONS:
+                raise Error(f"{path}: cannot read option line {line!r}")
+        elif line and not raw[0].isspace():
             match = REQUIREMENT.match(line)
             if not match:
                 raise Error(f"{path}: cannot read requirement {line!r}")
@@ -304,7 +322,8 @@ def registry_tarball(url: str) -> bool:
 
 def read_package_lock(path: Path) -> list[Locked]:
     """Each installed package by where it resolved. Remote: a tarball that is no registry's, or that some
-    package.json asks for by URL. package.json overrides do not reach the lock, so resolved URLs decide."""
+    package.json asks for by URL. package.json overrides do not reach the lock, so resolved URLs decide.
+    No resolved: a registry package (omit-lockfile-registry-resolved, or bundled in its parent's tarball)."""
     packages = json.loads(path.read_text()).get("packages")
     if not isinstance(packages, dict):
         raise Error(f"{path}: no packages map; npm 7 or later writes it (lockfileVersion 2 or 3)")
@@ -320,13 +339,15 @@ def read_package_lock(path: Path) -> list[Locked]:
         if not key:
             continue
         name = entry.get("name") or key.rpartition("node_modules/")[2]
-        resolved: str = (
-            "" if entry.get("link") or "node_modules/" not in key else entry.get("resolved", "")
-        )
-        if resolved.startswith(("git+", "git:", "github:")):
+        resolved: str = entry.get("resolved", "")
+        if entry.get("link") or "node_modules/" not in key or resolved.startswith("file:"):
+            kind, resolved = "local", ""
+        elif not resolved:
+            kind = "registry"
+        elif resolved.startswith(("git+", "git:", "github:")):
             kind = "git"
         elif not resolved.startswith(("https:", "http:")):
-            kind, resolved = "local", ""
+            raise Error(f"{path}: {key} resolved to {resolved!r}, which is no known source")
         elif registry_tarball(resolved) and key.rpartition("node_modules/")[2] not in by_url:
             kind = "registry"
         else:

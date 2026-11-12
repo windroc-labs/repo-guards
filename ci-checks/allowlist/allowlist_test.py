@@ -341,6 +341,31 @@ class Readers(unittest.TestCase):
             ],
         )
 
+    def test_uv_lock_unknown_or_missing_source_is_an_error(self):
+        for source in ('source = { mystery = "x" }\n', ""):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                path = self.write(
+                    tmp, "uv.lock", f'[[package]]\nname = "odd"\nversion = "1"\n{source}'
+                )
+                with self.assertRaisesRegex(Error, "odd"):
+                    read_uv_lock(path)
+
+    def test_unknown_option_line_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = self.write(tmp, "r.txt", "--trusted-host example.org\nsix==1.17.0\n")
+            with self.assertRaisesRegex(Error, "--trusted-host"):
+                read_requirements(path)
+
+    def test_index_and_build_option_lines_are_read_past(self):
+        text = (
+            "--index-url https://pypi.org/simple\n--extra-index-url https://x.example/simple\n"
+            "--find-links https://x.example/f\n--no-index\n--no-binary somepkg\n"
+            "--only-binary :all:\nsix==1.17.0\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            locked = read_requirements(self.write(tmp, "r.txt", text))
+        self.assertEqual(locked, [Locked("six", "1.17.0", "registry", "")])
+
     def test_registry_package_without_an_index_annotation_has_no_registry(self):
         with tempfile.TemporaryDirectory() as tmp:
             locked = read_requirements(self.write(tmp, "r.txt", "six==1.17.0\n"))
@@ -558,6 +583,7 @@ PACKAGE_LOCK = {
         "packages/member": {"name": "member", "version": "0.1.0"},
         "node_modules/vendored": {"version": "1.0.0", "resolved": "file:vendor/vendored-1.0.0.tgz"},
         "node_modules/bundled": {"version": "1.0.0", "inBundle": True},
+        "node_modules/omitted": {"version": "2.0.0", "integrity": "sha512-x"},
     },
 }
 
@@ -619,9 +645,39 @@ class Npm(unittest.TestCase):
                 Locked("member", "", "local", ""),
                 Locked("member", "0.1.0", "local", ""),
                 Locked("vendored", "1.0.0", "local", ""),
-                Locked("bundled", "1.0.0", "local", ""),
+                Locked("bundled", "1.0.0", "registry", ""),
+                Locked("omitted", "2.0.0", "registry", ""),
             ],
         )
+
+    def test_entry_without_resolved_is_held_to_the_package_list(self):
+        lock = {"lockfileVersion": 3, "packages": {"node_modules/omitted": {"version": "2.0.0"}}}
+        with tempfile.TemporaryDirectory() as tmp:
+            Path(tmp, "package-lock.json").write_text(json.dumps(lock))
+            Path(tmp, "a.toml").write_text('[typescript.bans]\nallow = ["left-pad"]\n')
+            code, _, err = self.run_main(
+                [
+                    "check",
+                    "typescript",
+                    "--allowlist",
+                    str(Path(tmp, "a.toml")),
+                    "--lock",
+                    str(Path(tmp, "package-lock.json")),
+                ]
+            )
+        self.assertEqual(code, 1)
+        self.assertIn('omitted@2.0.0: not in typescript.bans.allow; add "omitted@2.0.0"', err)
+
+    def test_unknown_resolved_form_is_an_error(self):
+        lock = {
+            "lockfileVersion": 3,
+            "packages": {"node_modules/odd": {"version": "1.0.0", "resolved": "ftp://x/odd.tgz"}},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp, "package-lock.json")
+            path.write_text(json.dumps(lock))
+            with self.assertRaisesRegex(Error, "node_modules/odd"):
+                read_package_lock(path)
 
     def test_lockfile_v1_is_an_error(self):
         with tempfile.TemporaryDirectory() as tmp:

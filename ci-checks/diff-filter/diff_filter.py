@@ -50,19 +50,22 @@ def unquote(name: str) -> str:
     )
 
 
+def rows(text: str) -> list[str]:
+    # str.splitlines() also splits on form feed, U+2028 and others that a PR can put inside a line.
+    return text.split("\n")
+
+
 def parse_diff(diff: str, top: Path) -> Changes:
     changes: dict[Path, set[int]] = {}
     lines: set[int] | None = None
     in_header = False
-    for row in diff.splitlines():
+    for row in rows(diff):
         if row.startswith("diff --git "):
             in_header, lines = True, None
         elif in_header and row.startswith("+++ "):
             name = unquote(row[4:].rstrip("\t"))
             if name != "/dev/null":
                 lines = changes.setdefault((top / name.removeprefix("b/")).resolve(), set())
-        elif in_header and row.startswith("rename to "):
-            changes.setdefault((top / unquote(row[10:])).resolve(), set())
         elif row.startswith("@@"):
             in_header = False
             hunk = HUNK.match(row)
@@ -86,6 +89,8 @@ def git(*args: str) -> str:
 
 
 def changed_lines(base: str, top: Path) -> Changes:
+    # Every file the PR adds, edits or renames, even with no added lines (empty, deletion-only, pure rename).
+    names = git("diff", "--name-only", "-z", "-M", "--diff-filter=d", f"{base}...HEAD")
     diff = git(
         "-c",
         "core.quotePath=false",
@@ -100,7 +105,9 @@ def changed_lines(base: str, top: Path) -> Changes:
         "--dst-prefix=b/",
         f"{base}...HEAD",
     )
-    return parse_diff(diff, top)
+    lines = parse_diff(diff, top)
+    files = {(top / name).resolve() for name in names.split("\0") if name}
+    return {path: lines.get(path, frozenset()) for path in files}
 
 
 def where(path: str) -> Path:
@@ -108,7 +115,7 @@ def where(path: str) -> Path:
 
 
 def json_lines(out: str) -> Iterator[Any]:
-    for row in out.splitlines():
+    for row in rows(out):
         if row.strip():
             yield json.loads(row)
 
@@ -154,7 +161,7 @@ VULTURE = re.compile(r"(.+):(\d+): (.+)")
 
 
 def parse_vulture(out: str) -> Iterator[Finding]:
-    for row in out.splitlines():
+    for row in rows(out):
         if not row.strip():
             continue
         match = VULTURE.fullmatch(row)
@@ -163,17 +170,27 @@ def parse_vulture(out: str) -> Iterator[Finding]:
         yield Finding(where(match[1]), int(match[2]), match[3])
 
 
-TSC_AT = re.compile(r"(.+)\((\d+),\d+\): error (TS\d+: .*)")
+TSC_AT = re.compile(r"\((\d+),\d+\): error (TS\d+: .*)")
 TSC_GLOBAL = re.compile(r"error (TS\d+: .*)")
+
+
+def tsc_location(row: str) -> Finding | None:
+    # A message can echo "(1,1): error TS…" from a string type; prefer the split whose path exists.
+    splits = [
+        Finding(where(row[:i]), int(m[1]), m[2])
+        for i in range(1, len(row))
+        if row[i] == "(" and (m := TSC_AT.fullmatch(row, i))
+    ]
+    return next((f for f in splits if f.path and f.path.is_file()), splits[0] if splits else None)
 
 
 def parse_tsc(out: str) -> list[Finding]:
     found: list[Finding] = []
-    for row in out.splitlines():
+    for row in rows(out):
         if row.startswith((" ", "\t")) and found:
             found[-1] = replace(found[-1], text=f"{found[-1].text}\n{row}")
-        elif at := TSC_AT.fullmatch(row):
-            found.append(Finding(where(at[1]), int(at[2]), at[3]))
+        elif at := tsc_location(row):
+            found.append(at)
         elif glob := TSC_GLOBAL.fullmatch(row):
             found.append(Finding(None, None, glob[1], anywhere=True))
         elif row.strip():
@@ -215,7 +232,7 @@ def parse_knip(out: str) -> Iterator[Finding]:
 
 
 def parse_paths(out: str) -> Iterator[Finding]:
-    for row in out.splitlines():
+    for row in rows(out):
         if row.strip():
             yield Finding(where(row.strip()), None, "not formatted")
 

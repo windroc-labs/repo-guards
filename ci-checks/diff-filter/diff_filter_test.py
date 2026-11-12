@@ -44,9 +44,13 @@ class Diff(unittest.TestCase):
         diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -3 +2,0 @@\n-x\n"
         self.assertEqual(parse_diff(diff, ROOT), {ROOT / "a.py": frozenset()})
 
-    def test_pure_rename_counts_as_changed_file(self):
-        diff = "diff --git a/old.py b/new.py\nsimilarity index 100%\nrename from old.py\nrename to new.py\n"
-        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "new.py": frozenset()})
+    def test_only_newline_ends_a_line(self):
+        diff = (
+            "diff --git a/m.py b/m.py\n--- a/m.py\n+++ b/m.py\n"
+            "@@ -2 +2 @@\n-x\n+v = 2  # \x0cdiff --git a/z b/z\x0c+++ b/decoy.py\u2028@@ -1 +1,20 @@\n"
+            "@@ -10 +10 @@\n-y\n+v10 = 99\n"
+        )
+        self.assertEqual(parse_diff(diff, ROOT), {ROOT / "m.py": frozenset({2, 10})})
 
     def test_quoted_and_spaced_names(self):
         diff = (
@@ -181,6 +185,15 @@ class Parsers(unittest.TestCase):
             parse("vulture", out),
             {Finding(ROOT / "pkg/x:1: y.py", 7, "unused import 'os' (90% confidence)")},
         )
+
+    def test_tsc_path_prefers_an_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            (root / "new.ts").write_text("")
+            row = "new.ts(5,7): error TS2322: Type '\"a(1,1): error TS1: b\"' is not assignable.\n"
+            with mock.patch.object(Path, "cwd", return_value=root):
+                found = set(FORMATS["tsc"].parse(row))
+        self.assertEqual({(f.path, f.line) for f in found}, {(root / "new.ts", 5)})
 
     def test_tsc_continuations_and_global_errors(self):
         out = (
@@ -334,6 +347,15 @@ class Main(unittest.TestCase):
         git(self.repo, "checkout", "-qb", "deletion")
         self.commit({"src/m.py": b"old = 1\n"})
         self.assertEqual(self.run_main("m.py\n", 1, "paths")[0], 1)
+
+    def test_pure_rename_counts_as_changed_file(self):
+        git(self.repo, "mv", "src/m.py", "src/renamed.py")
+        git(self.repo, "commit", "-qm", "rename")
+        self.assertEqual(self.run_main("renamed.py\n", 1, "paths")[0], 1)
+
+    def test_empty_new_file_counts_as_changed_file(self):
+        self.commit({"src/empty.ts": b""})
+        self.assertEqual(self.run_main("empty.ts\n", 1, "paths")[0], 1)
 
     def test_findings_listed_once(self):
         row = "m.py:3: unused variable 'new' (60% confidence)\n"

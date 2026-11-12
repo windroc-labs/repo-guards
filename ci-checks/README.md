@@ -177,11 +177,23 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 ### 覆盖率
 
-PR 改动行的覆盖率用 diff-cover 算，三种语言通用。不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在锁住的覆盖率配置里。第 9 项用同一份报告和配置。
+三种语言各自跑测试、生成 Cobertura 报告，再用同一个检查器 [`coverage/coverage_gate.py`](coverage/coverage_gate.py)（只用标准库，要 Python 3.11 及以上）判定：
+
+| 项 | 内容 |
+|---|---|
+| 总覆盖率 | (覆盖的行 + 覆盖的分支) ÷ (全部行 + 全部分支)，取 Cobertura 报告根节点的总数。不低于门槛，也不低于 merge-base 上同样跑出来的值 |
+| 改动行 | diff-cover 对 merge-base 算 PR 改动行的覆盖率，不低于门槛 |
+| 门槛 | [`coverage/coverage.toml`](coverage/coverage.toml)：`total-min`、`diff-min`，0 到 100，两个键都必须写 |
+| merge-base | workflow 在 merge-base 的副本里再跑一遍测试。这一步失败（比如刚接入时 base 还没配好覆盖率）只跳过"不低于 merge-base"这一条，并给 warning；base 上没有发布代码也跳过 |
+| 退出码 | 0 通过，1 不达标，2 出错（配置不对、报告读不了、一行发布代码都没量到、找不到 diff-cover） |
+
+diff-cover 的版本连同依赖带 hash 固定在 [`coverage/requirements.txt`](coverage/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.12` 生成）。测试：在 `coverage/` 跑 `python3 -m unittest coverage_gate_test`。
+
+不设 100%：100% 会逼出空测试，断言由变异测试把关。测试文件和生成文件不进分母，排除名单写在各语言锁住的覆盖率配置里。第 9 项用同一份报告和配置。跑测试就是执行 PR 的代码，所以覆盖率的几步排在各 workflow 的静态检查之后，而且依赖检查（漏洞、许可证；Rust 是 cargo-deny）没过就不跑。
 
 | Rust | Python | TypeScript |
 |---|---|---|
-| cargo-llvm-cov：分支要 `--branch`（只支持 nightly）；排除用 `--ignore-filename-regex`（没有配置文件，写在 CI 命令里）；`src` 里的 `#[cfg(test)] mod tests` 正则排除不了，要给它加 `#[cfg_attr(coverage_nightly, coverage(off))]` | coverage.py：`[run] branch = true`、`[run] omit` | vitest 的 v8 coverage（报分支）：`coverage.include` 写发布源码的 glob（默认只算测试 import 过的文件，没测的文件不进分母）、`coverage.exclude` |
+| [cargo-llvm-cov](rust/README.md#覆盖率cargo-llvm-cov) | [coverage.py](python/README.md#覆盖率coveragepy) | [vitest 的 v8 coverage](typescript/README.md#覆盖率vitest-v8) |
 
 覆盖率只说明代码被执行过，不说明测试检查了结果：空测试也能把覆盖率刷上去。识破空测试要靠变异测试（工具在临时副本里把代码改坏，测试没失败就说明没检查结果；第 10 项），或者[顶层 README](../README.md) 第 5 层的隐藏验收测试。
 

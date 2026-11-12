@@ -118,7 +118,8 @@ jobs:
           UNIT_TESTS: ${{ inputs.unit-tests }}
         run: |
           # Target selectors only: any other cargo-llvm-cov option could loosen the locked coverage config.
-          read -ra targets <<< "$UNIT_TESTS"
+          # -d '' reads past newlines, so a multi-line value is checked whole; read then returns 1 at its end.
+          read -ra targets -d '' <<< "$UNIT_TESTS" || true
           for target in "${targets[@]}"; do
             if [[ ! $target =~ ^--(lib|bins|(bin|test)=[A-Za-z0-9_-]+)$ ]]; then
               echo "::error::unit-tests: $target is not --lib, --bins, --bin=<name> or --test=<name>"

@@ -23,7 +23,7 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; each slow one (the type check, or the tests) runs in its own job, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -62,14 +62,12 @@ jobs:
         with:
           version: "0.13.7"
           enable-cache: false
-      - &install-dev-group
-        name: Install the shared dev group
+      - name: Install the shared dev group
         run: |
           uv venv --python 3.12 "$RUNNER_TEMP/tools"
           uv pip install --python "$RUNNER_TEMP/tools" --group "$RG/python/pyproject.toml:dev" pip-audit==2.10.1 pip-licenses==5.5.5
           echo "$RUNNER_TEMP/tools/bin" >> "$GITHUB_PATH"
-      - &install-project
-        name: Install the project from wheels only
+      - name: Install the project from wheels only
         run: uv sync --locked
       - name: Format
         if: ${{ !cancelled() }}
@@ -80,6 +78,12 @@ jobs:
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
+      - name: Type check
+        if: ${{ !cancelled() }}
+        run: |
+          # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
+          python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
+          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
@@ -104,29 +108,6 @@ jobs:
           fi
           pip-licenses --python .venv/bin/python --from all --format json --ignore-packages "${ignore[@]}" > "$RUNNER_TEMP/licenses.json"
           python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
-
-  type-check:
-    name: Type check
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 40
-    env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
-      SOURCE_DIRS: ${{ inputs.source-dirs }}
-      UV_NO_BUILD: "1"
-    defaults: *defaults
-    steps:
-      - *checkout
-      - *checkout-repo-guards
-      - *install-uv
-      - *install-dev-group
-      - *install-project
-      - name: Type check
-        if: ${{ !cancelled() }}
-        run: |
-          # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
-          python3 -c 'import json, sys, tomllib, pathlib; c = tomllib.load(open(sys.argv[1], "rb"))["tool"]["pyright"]; c["extraPaths"] = [str(pathlib.Path(d).resolve()) for d in sys.argv[3:]]; pathlib.Path(sys.argv[2]).write_text(json.dumps(c))' "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
-          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:

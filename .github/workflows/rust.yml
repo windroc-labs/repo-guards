@@ -23,7 +23,7 @@ on:
 permissions:
   contents: read
 
-# Fast checks share one job; each slow one (a build of the project, or its tests) runs in its own job, in parallel.
+# Fast checks share one job; only the coverage run, which runs the tests twice, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   checks:
@@ -35,7 +35,7 @@ jobs:
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       CARGO_TERM_COLOR: always
       TOOLCHAIN: rust-toolchain.toml
-      COMPONENTS: rustfmt
+      COMPONENTS: rustfmt,clippy
     defaults: &defaults
       run:
         shell: bash
@@ -75,6 +75,12 @@ jobs:
           fi
           rustup toolchain install "$toolchain" --profile minimal ${COMPONENTS:+--component "$COMPONENTS"}
           echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+      - &cache
+        name: Cache Rust builds
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: repo/${{ inputs.working-directory }}
+          save-if: ${{ github.event_name == 'push' }}
       - name: Install cargo-machete and cargo-deny
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -82,9 +88,15 @@ jobs:
       - name: Format
         if: ${{ !cancelled() }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- cargo fmt --all --check --message-format short -- --config-path "$RG/rust/rustfmt.toml"
+      - name: Lint
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
       - name: Comment budget
         if: ${{ !cancelled() }}
         run: cargo run --release --locked --manifest-path "$RG/rust/comment-budget/Cargo.toml" -- --base "$BASE_REF" --config "$RG/rust/comment-budget.toml"
+      - name: Type check and dead code
+        if: ${{ !cancelled() }}
+        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
       - name: Unused dependencies
         if: ${{ !cancelled() }}
         run: cargo machete
@@ -95,52 +107,6 @@ jobs:
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$GITHUB_WORKSPACE/repo/$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
-
-  lint:
-    name: Lint
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 60
-    env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
-      CARGO_TERM_COLOR: always
-      TOOLCHAIN: rust-toolchain.toml
-      COMPONENTS: clippy
-    defaults: *defaults
-    steps:
-      - *checkout
-      - *checkout-repo-guards
-      - *install-uv
-      - *install-rust
-      - &cache
-        name: Cache Rust builds
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: repo/${{ inputs.working-directory }}
-          save-if: ${{ github.event_name == 'push' }}
-      - name: Lint
-        if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo clippy --workspace --all-targets --all-features --locked --message-format=json -- --cap-lints=warn
-
-  type-check:
-    name: Type check and dead code
-    runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 60
-    env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
-      BASE_REF: *base-ref
-      CARGO_TERM_COLOR: always
-      TOOLCHAIN: rust-toolchain.toml
-    defaults: *defaults
-    steps:
-      - *checkout
-      - *checkout-repo-guards
-      - *install-uv
-      - *install-rust
-      - *cache
-      - name: Type check and dead code
-        if: ${{ !cancelled() }}
-        run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format cargo -- cargo check --workspace --all-features --locked --message-format=json
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:

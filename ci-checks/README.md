@@ -25,13 +25,13 @@
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock` 或 `pyproject.toml` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它，`deny-allowlist` 和 `license-exceptions` 仍相对 repo 根目录。`license-exceptions` 每行一个包名，不受许可证检查；文件可以不存在。`unit-tests` 是覆盖率要量的 Rust 单元测试目标，见[覆盖率](#覆盖率)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，三种语言共用；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。
 
-三个语言 workflow 把检查分成几个并行的 job：快的检查合在 Checks 一个 job 里，慢的（要编译项目、要跑测试，或者随代码量变慢）各占一个 job。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
+三个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（测试在 merge-base 和 PR 上各跑一遍），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑。
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Checks（Format、Comment budget、Unused dependencies、Dependency rules）、Lint、Type check and dead code、Coverage（Coverage、Coverage gate、CRAP report） |
-| `python.yml` | Checks（Format、Lint、Comment budget、Dead code、Unused dependencies、Vulnerabilities、Licenses）、Type check、Coverage（同上） |
-| `typescript.yml` | Checks（Format、Comment budget、Vulnerabilities、Licenses）、Type check、Dead code and unused dependencies、Coverage（同上） |
+| `rust.yml` | Checks（Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules）、Coverage（Coverage、Coverage gate、CRAP report） |
+| `python.yml` | Checks（Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
+| `typescript.yml` | Checks（Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Licenses）、Coverage（同上） |
 
 ## 语言级
 

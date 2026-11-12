@@ -1,0 +1,3 @@
+#!/bin/sh
+# git runs this through core.hooksPath; the logic lives beside the scanner it uses.
+exec python3 -I "$(dirname -- "$0")/../scanner/pre_push.py" "$@"

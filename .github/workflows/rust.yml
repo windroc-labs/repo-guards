@@ -19,7 +19,7 @@ jobs:
   rust:
     name: Rust
     runs-on: ${{ fromJSON(inputs.runs-on) }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       RG: ${{ github.workspace }}/repo-guards/ci-checks
       BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
@@ -58,15 +58,23 @@ jobs:
           fi
           rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
+          coverage=$(sed -n 's/^toolchain = "\(.*\)"$/\1/p' "$RG/rust/coverage.toml")
+          rustup toolchain install "$coverage" --profile minimal --component llvm-tools-preview
+          echo "COVERAGE_TOOLCHAIN=$coverage" >> "$GITHUB_ENV"
       - name: Cache Rust builds
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: repo
           save-if: ${{ github.event_name == 'push' }}
-      - name: Install cargo-machete and cargo-deny
+      - name: Install cargo-machete, cargo-deny and cargo-llvm-cov
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
-          tool: cargo-machete@0.9.2,cargo-deny@0.20.2
+          tool: cargo-machete@0.9.2,cargo-deny@0.20.2,cargo-llvm-cov@0.9.1
+      - name: Install diff-cover
+        working-directory: ${{ runner.temp }}
+        run: |
+          uv venv --python 3.12 coverage-venv
+          uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Format
         if: ${{ !cancelled() }}
         run: cargo fmt --all --check -- --config-path "$RG/rust/rustfmt.toml"
@@ -85,9 +93,30 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo machete
       - name: Dependency rules
+        id: dependency-rules
         if: ${{ !cancelled() }}
         env:
           ALLOWLIST: ${{ inputs.deny-allowlist }}
         run: |
           uv run --no-project --python 3.12 "$RG/rust/deny-merge/deny_merge.py" "$RG/rust/deny.toml" "$RG/licenses.toml" "$ALLOWLIST" "$RUNNER_TEMP/deny.toml"
           cargo deny --locked --config "$RUNNER_TEMP/deny.toml" check
+      # The coverage steps run the PR's tests, so they come after every static check and only once the dependency checks pass.
+      - name: Coverage
+        id: coverage
+        if: ${{ !cancelled() && steps.dependency-rules.outcome == 'success' }}
+        run: |
+          regex=$(sed -n "s/^ignore-filename-regex = '\(.*\)'$/\1/p" "$RG/rust/coverage.toml")
+          export RUSTUP_TOOLCHAIN=$COVERAGE_TOOLCHAIN
+          measure() {
+            (cd "$1" && cargo llvm-cov --workspace --all-features --locked --branch --ignore-filename-regex "$regex" --cobertura --output-path "$2")
+          }
+          # A self-hosted runner keeps repo/.git but empties RUNNER_TEMP: drop the last job's stale registration.
+          git worktree prune
+          git worktree add --detach "$RUNNER_TEMP/base" "$(git merge-base "$BASE_REF" HEAD)"
+          measure "$RUNNER_TEMP/base" "$RUNNER_TEMP/coverage-base.xml" || echo "::warning::Tests at the merge-base failed"
+          measure . "$RUNNER_TEMP/coverage-head.xml"
+      - name: Coverage gate
+        if: ${{ !cancelled() && steps.coverage.outcome == 'success' }}
+        run: |
+          PATH="$RUNNER_TEMP/coverage-venv/bin:$PATH" python "$RG/coverage/coverage_gate.py" --config "$RG/coverage/coverage.toml" \
+            --head "$RUNNER_TEMP/coverage-head.xml" --base "$RUNNER_TEMP/coverage-base.xml" --compare-branch "$BASE_REF"

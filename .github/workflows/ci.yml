@@ -316,6 +316,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/typescript/inline-exemptions
         run: npm ci --no-audit --no-fund --ignore-scripts && npm test
+      - name: TypeScript layer rules tests
+        id: typescript-layer-rules
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/typescript/layer-rules
+        run: npm ci --no-audit --no-fund --ignore-scripts && npm test && npx tsc
       - name: Rust inline exemptions tests
         id: rust-inline-exemptions
         if: ${{ !cancelled() }}
@@ -351,9 +356,10 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
           LAYER_RULES: ${{ steps.layer-rules.outcome }}
           PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
+          TYPESCRIPT_LAYER_RULES: ${{ steps.typescript-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES TYPESCRIPT_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

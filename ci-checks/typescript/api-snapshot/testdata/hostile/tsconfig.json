@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "es2022",
+    "module": "nodenext",
+    "types": [],
+    "outDir": "../escape/out",
+    "declarationDir": "../escape/decl",
+    "tsBuildInfoFile": "../escape/build.tsbuildinfo",
+    "incremental": true,
+    "composite": true,
+    "sourceMap": true,
+    "declarationMap": true,
+    "generateTrace": "../escape/trace"
+  },
+  "include": ["src"]
+}

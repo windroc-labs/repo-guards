@@ -104,7 +104,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 - `kind`：rustdoc 报告的种类，如 `function`、`struct`、`trait`、`impl`、`assoc_type`、`proc_derive`。
 - trait 的方法、关联常量和关联类型：上级是 trait 的规范路径。
 - 实现：每个 `impl` 一个条目，上级是实现它的类型的规范路径，名字和签名都是 impl 头（`impl core::convert::From<u32> for mycrate::Id`）；impl 里的方法等以这个头为上级，所以 `From<u32>` 和 `From<String>` 的 `from`、类型自己的 `len` 和 trait 实现里的 `len` 键都不同。同一类型的几个固有 `impl` 块合成一个。
-- 别的 crate 的条目被 `pub use` 出来时，种类照 rustdoc 对目标的报告，签名是 `pub use <路径>`；glob 的名字是 `<源路径>::*`。显式的 `pub use` 和本模块的条目照 Rust 的规则按命名空间（类型、值、宏）遮住 glob 带进来的同名条目，被遮住的不进快照。
+- 别的 crate 的条目被 `pub use` 出来时，种类照 rustdoc 对目标的报告，签名是 `pub use <路径>`；glob 的名字是 `<源路径>::*`。显式的 `pub use` 和本模块的条目照 Rust 的规则按命名空间（类型、值、宏）遮住 glob 带进来的同名条目，被遮住的不进快照；glob 带进来的条目只要主命名空间（类型的类型、函数的值）被占，就整个不进，即使元组结构体的构造函数还看得见。
 - 签名：泛型参数和约束、where 子句（rustdoc 把写在参数上的约束也并进 where）、公开字段（有私有字段时写 `/* private fields */`）、枚举成员和判别值（算出的值）、`const`/`async`/`unsafe`/`extern`、trait 方法的默认实现（`{ ... }`）。本 crate 的类型用规范路径，别的 crate 的类型用 rustdoc 记的定义路径（`core::result::Result`），所以改 `use` 写法、把代码挪到别的文件再 `pub use` 出来，签名都不变。参数只记类型不记名字：调用方依赖不到参数名。
 
 不进快照：文档注释、源文件位置、私有和 `#[doc(hidden)]` 条目、blanket impl、不稳定的自动 trait（`Freeze`、`UnsafeUnpin`）；自动 trait 的 impl（`Send`、`Sync`、`Unpin`、`UnwindSafe`、`RefUnwindSafe`）不带 where 子句，因为 rustdoc 是从私有字段的类型推出来的。宏的签名是 rustdoc 给的各分支模式，关联常量的默认值是 rustdoc 印出的文字，改它们的写法也算签名变化。既没挂在本 crate 公开类型上、也没挂在公开 trait 上的 impl（如别的 crate 的 trait 为 `&Id` 实现）查不到。升级 nightly 时 rustdoc 记的标准库路径可能变，快照要重新生成。

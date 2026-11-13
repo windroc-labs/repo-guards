@@ -42,6 +42,14 @@ fn namespaces(kind: ItemKind, item: Option<&Item>) -> u8 {
     }
 }
 
+/// The namespace that names the item itself: the type of a type that also has a constructor.
+fn primary(spaces: u8) -> u8 {
+    [TYPE, VALUE, MACRO]
+        .into_iter()
+        .find(|space| spaces & space != 0)
+        .unwrap_or(0)
+}
+
 /// rustdoc's kind for a re-exported item of another crate, or `use` when rustdoc does not know it.
 pub fn external_kind(krate: &Crate, re_export: &Use) -> &'static str {
     match re_export.id.and_then(|id| krate.paths.get(&id)) {
@@ -72,6 +80,19 @@ struct Walker<'a> {
 impl<'a> Walker<'a> {
     fn item(&self, id: &Id) -> Result<&'a Item, String> {
         item(self.krate, id)
+    }
+
+    /// The namespaces a binding takes; a glob of another crate's module takes none (its names are unknown),
+    /// and an external item rustdoc does not know takes all three.
+    fn spaces(&self, binding: &Binding) -> u8 {
+        match binding {
+            Binding::Local(item) => namespaces(item.inner.item_kind(), Some(item)),
+            Binding::External(u) if u.is_glob => 0,
+            Binding::External(u) => match u.id.and_then(|id| self.krate.paths.get(&id)) {
+                Some(summary) => namespaces(summary.kind, None),
+                None => TYPE | VALUE | MACRO,
+            },
+        }
     }
 
     fn local(&self, id: Option<Id>) -> Option<&'a Item> {
@@ -108,59 +129,44 @@ impl<'a> Walker<'a> {
                     None => continue,
                 },
             };
-            let (kind, spaces, binding) = match (target, &item.inner) {
-                (Some(target), _) => {
-                    let kind = target.inner.item_kind();
-                    (
-                        kind_name(kind),
-                        namespaces(kind, Some(target)),
-                        Binding::Local(target),
-                    )
-                }
-                (None, ItemEnum::Use(u)) => {
-                    let spaces = match u.id.and_then(|id| self.krate.paths.get(&id)) {
-                        Some(summary) => namespaces(summary.kind, None),
-                        None => TYPE | VALUE | MACRO,
-                    };
-                    (external_kind(self.krate, u), spaces, Binding::External(u))
-                }
+            let (kind, binding) = match (target, &item.inner) {
+                (Some(target), _) => (kind_name(target.inner.item_kind()), Binding::Local(target)),
+                (None, ItemEnum::Use(u)) => (external_kind(self.krate, u), Binding::External(u)),
                 (None, _) => continue,
             };
-            *taken.entry(name.clone()).or_default() |= spaces;
+            *taken.entry(name.clone()).or_default() |= self.spaces(&binding);
             bound.push((name, kind, binding));
         }
         globs.sort_by(|a, b| a.source.cmp(&b.source));
+        let mut from_globs = Vec::new();
         for glob in globs {
             match self.local(glob.id) {
                 Some(target) if matches!(target.inner, ItemEnum::Module(_)) => {
-                    if !globbed.insert(target.id) {
-                        continue;
-                    }
-                    for (name, kind, binding) in self.bindings(&target.id, globbed)? {
-                        let spaces = match &binding {
-                            Binding::Local(item) => namespaces(item.inner.item_kind(), Some(item)),
-                            Binding::External(u) => {
-                                match u.id.and_then(|id| self.krate.paths.get(&id)) {
-                                    Some(summary) if !u.is_glob => namespaces(summary.kind, None),
-                                    _ if u.is_glob => 0,
-                                    _ => TYPE | VALUE | MACRO,
-                                }
-                            }
-                        };
-                        let taken = taken.entry(name.clone()).or_default();
-                        if spaces != 0 && spaces & !*taken == 0 {
-                            continue;
-                        }
-                        *taken |= spaces;
-                        bound.push((name, kind, binding));
+                    if globbed.insert(target.id) {
+                        from_globs.extend(self.bindings(&target.id, globbed)?);
                     }
                 }
-                _ => bound.push((
+                _ => from_globs.push((
                     format!("{}::*", glob.source),
                     "use",
                     Binding::External(glob),
                 )),
             }
+        }
+        for (name, kind, binding) in from_globs {
+            // The same re-export reached through two globs is one binding.
+            if bound.iter().any(|(n, k, _)| *n == name && *k == kind) {
+                continue;
+            }
+            let spaces = self.spaces(&binding);
+            let taken = taken.entry(name.clone()).or_default();
+            // Shadowed in its main namespace (a tuple struct's type, under an explicit enum), a binding is
+            // left out whole: the constructor still visible is no path to the type, its fields or impls.
+            if primary(spaces) & *taken != 0 {
+                continue;
+            }
+            *taken |= spaces;
+            bound.push((name, kind, binding));
         }
         bound.sort_by(|a, b| (&a.0, a.1).cmp(&(&b.0, b.1)));
         Ok(bound)
@@ -178,8 +184,7 @@ pub fn walk(krate: &Crate) -> Result<Public<'_>, String> {
     let mut emitted = HashSet::new();
     let mut level = vec![(krate.root, Vec::<String>::new())];
     while !level.is_empty() {
-        level.sort_by_key(|(_, path)| path.join("::"));
-        let mut next = Vec::new();
+        let mut found = Vec::new();
         for (module, path) in level {
             for (name, _, binding) in walker.bindings(&module, &mut HashSet::from([module]))? {
                 match binding {
@@ -188,23 +193,25 @@ pub fn walk(krate: &Crate) -> Result<Public<'_>, String> {
                             .external
                             .push((path.clone(), u, external_kind(krate, u)))
                     }
-                    Binding::Local(item) => {
-                        let mut at = path.clone();
-                        at.push(name);
-                        if !emitted.insert((at.join("::"), item.id)) {
-                            continue;
-                        }
-                        public
-                            .canonical
-                            .entry(item.id)
-                            .or_insert_with(|| at.clone());
-                        if matches!(item.inner, ItemEnum::Module(_)) && expanded.insert(item.id) {
-                            next.push((item.id, at.clone()));
-                        }
-                        public.items.push((at, item));
-                    }
+                    Binding::Local(item) => found.push(([path.as_slice(), &[name]].concat(), item)),
                 }
             }
+        }
+        // Equal-length paths in byte order of the joined path, so the first one met is the canonical one.
+        found.sort_by_cached_key(|(at, _)| at.join("::"));
+        let mut next = Vec::new();
+        for (at, item) in found {
+            if !emitted.insert((at.join("::"), item.id)) {
+                continue;
+            }
+            public
+                .canonical
+                .entry(item.id)
+                .or_insert_with(|| at.clone());
+            if matches!(item.inner, ItemEnum::Module(_)) && expanded.insert(item.id) {
+                next.push((item.id, at.clone()));
+            }
+            public.items.push((at, item));
         }
         level = next;
     }

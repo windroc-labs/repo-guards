@@ -574,3 +574,42 @@ fn two_runs_byte_identical() {
     assert!(!first.contains(root.to_str().unwrap()));
     assert!(!first.contains(std::env::temp_dir().to_str().unwrap()));
 }
+
+#[test]
+fn partly_shadowed_and_repeated_globs_keep_keys_unique() {
+    let entries = generate("globs", "globs").entries();
+    assert_keys_unique(&entries);
+    assert_eq!(
+        signature(&entries, "enum", "", "Local"),
+        "pub enum Local { A }"
+    );
+    assert!(
+        !entries
+            .iter()
+            .any(|e| e["kind"] == "struct" && e["parent"] == "" && e["name"] == "Local")
+    );
+    assert_eq!(
+        signature(&entries, "function", "impl globs::Local", "new"),
+        "pub fn new() -> Self"
+    );
+    assert_eq!(
+        signature(&entries, "function", "impl globs::inner::Local", "new"),
+        "pub fn new() -> Self"
+    );
+    assert_eq!(
+        signature(&entries, "use", "", "core::ops::*"),
+        "pub use core::ops::*"
+    );
+    assert_eq!(signature(&entries, "struct", "t", "Tie"), "pub struct Tie");
+    assert_eq!(signature(&entries, "struct", "t0", "Tie"), "pub struct Tie");
+    // Equal-length paths: the canonical one is the smaller string, "t0::Tie" < "t::Tie" ('0' < ':').
+    assert_eq!(
+        signature(
+            &entries,
+            "impl",
+            "t0::Tie",
+            "impl core::marker::Send for globs::t0::Tie"
+        ),
+        "impl core::marker::Send for globs::t0::Tie"
+    );
+}

@@ -23,7 +23,10 @@ MATCHES = {
     + ["pytest.toml", "requirements.in", "pkg/.importlinter"],
     "rust": ["src/main.rs", "Cargo.toml", "crates/a/Cargo.lock", ".cargo/config.toml", "a/clippy.toml"],
     "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"]
-    + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"],
+    + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"]
+    # The files the Layer rules step reads or refuses.
+    + ["app/.dependency-cruiser.json", "app/.dependency-cruiser.cjs", "app/.dependency-cruiser.mts"]
+    + ["app/.dependency-cruiser-known-violations.json"],
     "go": ["main.go", "go.mod", "sub/go.sum", "pkg/testdata/in.txt", "x/sum_amd64.s", "cgo/a.c", "vendor/modules.txt"],
 }
 SHARED = [".github/workflows/ci.yml", ".github/checks/repo-guards.toml", ".github/checks/jscpd-baseline.json"]

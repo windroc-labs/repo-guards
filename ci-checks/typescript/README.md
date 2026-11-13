@@ -69,6 +69,22 @@ repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的
 
 [`api-snapshot/`](api-snapshot/) 生成 TypeScript 的接口快照条目，用 Node 自带的类型剥离直接运行；做法和限制见[接口快照：TypeScript 生成](../README.md#接口快照typescript-生成)。
 
+## 分层规则（dependency-cruiser）
+
+[`layer-rules/`](layer-rules/) 是[第 2 项分层规则](../../architecture/README.md#第-2-项分层规则)的 TypeScript 实现：`typescript.yml` 的 Layer rules 步在 `working-directory` 里跑 `node layer-rules.ts`，用 Node 自带的类型剥离直接运行。依赖在它自己的 `package.json` 里固定版本，和项目的依赖分开装：dependency-cruiser 18.7.2、`typescript` 6.0.3（dependency-cruiser 用它解析 TypeScript，只支持到 6.x）。
+
+| 项 | 内容 |
+|---|---|
+| 配置文件 | `working-directory` 下的 `.dependency-cruiser.json`（可以写 JSON5）、`.js`、`.cjs`、`.mjs`、`.ts`、`.cts` 或 `.mts`，按这个顺序取第一个，和 dependency-cruiser 自己找的顺序一样。规则用 dependency-cruiser 自己的写法（`forbidden`、`allowed`），写哪层可以或不可以 import 哪层。只在这一层目录找，不往上级、下级目录找 |
+| 没有配置 | 这七个文件名都没有：打印一行提示，然后通过 |
+| 脚本配置 | `.js`、`.ts` 这类配置加载时就会运行。它们的文件名在 CODEOWNERS 里锁住，所以可以运行；它们再 `require` 或 `import` 的文件也得是 `.dependency-cruiser` 开头的文件名，别的文件（包括 npm 包）一律不加载，失败 |
+| 查什么 | 对 `working-directory` 整个目录跑一次（`depcruise .`），有违规就失败。`node_modules` 之类的目录由配置的 `options.doNotFollow`、`options.exclude` 排除，不排除就一起查 |
+| 已有的违规 | 在配置里豁免（如规则里写 `pathNot`），或者用 dependency-cruiser 的基线文件：`working-directory` 下有 `.dependency-cruiser-known-violations.json`（`depcruise --baseline` 生成）时带上 `--ignore-known`，文件里列出的违规不算 |
+| 不执行项目代码 | [`guard.ts`](layer-rules/guard.ts) 预加载进 dependency-cruiser，只加载本目录的模块和 `.dependency-cruiser` 开头的文件：`extends` 指向别的 JavaScript 文件或 npm 包、设了 `options.webpackConfig`，都会失败。`extends` 指向 JSON 文件、`options.tsConfig` 照常读，只解析不运行；`options.babelConfig` 不起作用，本目录没装 babel。不写缓存（`--no-cache`） |
+| 锁住 | CODEOWNERS 的 `.dependency-cruiser*` 锁住配置和基线文件。`extends` 指向的 JSON 文件要用 `.dependency-cruiser` 开头的文件名才锁得住：这一步只读 JSON、不运行它，所以不查它的文件名；指向别的文件名，就是把那部分规则交给不经 owner 批准的改动 |
+| 退出码 | 0 通过或跳过；1 有违规、配置被 dependency-cruiser 拒绝，或要加载不许加载的文件。dependency-cruiser 自己的退出码是错误条数，`guard.ts` 把非 0 都改成 1，不然 256 条会变成 0 |
+| 测试 | 在该目录跑 `npm ci --ignore-scripts`、`npm test` 和 `npx tsc` |
+
 ## 读写配置（workflow-config）
 
 [`workflow-config/`](workflow-config/) 是 `typescript.yml` 读写 JSON 用的脚本，`node workflow-config.ts <命令>` 直接跑，不用装依赖（要 Node 22.18 及以上）。

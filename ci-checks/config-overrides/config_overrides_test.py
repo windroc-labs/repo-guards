@@ -544,7 +544,7 @@ class SnapshotJobTest(unittest.TestCase):
         return steps
 
     def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("python", "typescript", "go"):
+        for language in ("python", "typescript"):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
@@ -558,7 +558,7 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("python", "typescript", "go"):
+        for language in ("python", "typescript"):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
@@ -570,6 +570,16 @@ class SnapshotJobTest(unittest.TestCase):
         self.assertNotIn("API_SNAPSHOT_SCOPE", generate)
         self.assertIn('--config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"', generate)
         self.assertIn('--working-directory "$PROJECT_DIR"', generate)
+
+    def test_go_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("go")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("scope", steps["Generate"].split("run: |", 1)[0])
+        self.assertIn(
+            '"$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json"',
+            steps["Generate"],
+        )
+        self.assertNotIn("API_SNAPSHOT_SCOPE", (self.WORKFLOWS / "go.yml").read_text(encoding="utf-8"))
 
 
 class ScopeDocsTest(unittest.TestCase):
@@ -599,6 +609,7 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertIn("- 范围不合法时退出 2", contract)
         self.assertIn("Rust 的生成器自己从 `.github/checks/repo-guards.toml`", contract)
         self.assertIn("- 现状：Rust 的生成器已接上", contract)
+        self.assertIn("Go 的也已接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

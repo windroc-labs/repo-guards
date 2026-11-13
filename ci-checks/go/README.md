@@ -108,15 +108,16 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 ## 接口快照生成（api-snapshot）
 
-[`api-snapshot/`](api-snapshot/) 是[第 4 层](../../architecture/README.md#第-1-项接口快照)第 1 项接口快照的 Go 生成器：一个 Go 小程序，只用标准库，在自己的模块里，`go.mod` 没有 `require`，所以没有 `go.sum`。工具的版本就是本目录的源码加 [`.go-version`](.go-version) 的 Go。`go.yml` 的 API snapshot job 只在设了 `api-snapshot.go` 时装 Go，Generate 步用 `go build` 编译它，在项目目录里跑，把条目写进 `$RUNNER_TEMP/api-entries.json`，交给[接口快照比对](../README.md#接口快照比对)。
+[`api-snapshot/`](api-snapshot/) 是[第 4 层](../../architecture/README.md#第-1-项接口快照)第 1 项接口快照的 Go 生成器：一个 Go 小程序，在自己的模块里，`go.mod` 只固定 `github.com/BurntSushi/toml` v1.6.0（读冻结范围）。工具的版本就是本目录的源码、`go.mod` 加 [`.go-version`](.go-version) 的 Go。`go.yml` 的 API snapshot job 只在设了 `api-snapshot.go` 时装 Go，Generate 步用 `go build` 编译它，在项目目录里跑 `api-snapshot <repo 根目录> <working-directory>`，把条目写进 `$RUNNER_TEMP/api-entries.json`，交给[接口快照比对](../README.md#接口快照比对)。
 
 | 项 | 内容 |
 |---|---|
 | 构建 | `go list -export -deps ./...`：编译模块里每个包和它的依赖，从编译器写出的 export data（编译后的类型信息）读接口，不读源码。编译不过就退出 2，编译器的报错原样输出 |
 | 单元 | `go list ./...` 找到的包，名字不是 `main`，且有非测试的 Go 文件；`internal/` 下的包也算。`unit` 是包的完整 import path |
+| 冻结范围 | 自己读 `.github/checks/repo-guards.toml` 里 `[project."<working-directory>"]` 的 `api-snapshot-scope.go`（见[冻结范围](../README.md#冻结范围)），不经环境变量；不给两个参数时不读。文件、这一节或这一项没有时写全部单元；否则只写 import path 等于某个前缀或在它下面的单元，按 `/` 分段比（`example.com/m/driver` 包括 `example.com/m/driver/io`，不包括 `example.com/m/driverx`） |
 | 条目 | 包里导出的 `const`、`var`、`func`、`type`。导出的类型下还有 `method`（`*T` 方法集里导出的方法，含嵌入带来的）和 `field`（在 `T` 上能选到的导出字段，含嵌入带来的，按 Go 的选择规则），`parent` 是类型名；接口下是它方法集里导出的方法。测试文件、文档注释、文件位置、非导出的名字都不进 |
 | 签名 | 见下表。不写参数名和返回值名，调用方用不到它们；别名都换成它指向的类型，`interface{}` 写成 `any`，`byte`、`rune` 写成 `uint8`、`int32`；别的包的类型名带完整 import path，本包的不带；union 的各项和接口里方法以外的元素都排序；只嵌一个元素的约束写成那个元素，`[T ~int]` 和 `[T interface{~int}]`、`[T comparable]` 和 `[T interface{comparable}]` 写法相同 |
-| 退出码 | 0 写出条目（没有条目时是 `[]`）；2 跑不了：不在模块里、编译不过、export data 读不了、多给了参数 |
+| 退出码 | 0 写出条目（没有条目时是 `[]`）；2 跑不了：不在模块里、编译不过、export data 读不了、参数不是零个或两个、`repo-guards.toml` 读不懂、`project` 或这一节或 `api-snapshot-scope` 不是表、`api-snapshot-scope.go` 不是非空的字符串数组、前缀含控制字符或不是 import path 写法（按 `/` 分的每段只含字母、数字和 `._~+-`，不是 `.` 或 `..`）。只查 `go` 这一项，别的语言名不查 |
 | 测试 | 在该目录跑 `go test ./...`；fixture 在 `testdata/` |
 
 | 种类 | 签名 |
@@ -128,7 +129,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 | `method` | `func (N) M(…) …`；只在 `*N` 的方法集里时写 `func (*N) M(…) …`。泛型类型的方法用类型声明里的类型参数名 |
 | `field` | `Name T`；嵌入的字段写 `embedded T` |
 
-实现的接口只在候选里找：`error`，和各单元里导出的、非泛型、至少有一个方法的普通接口。所以在模块的任何一个包里加一个导出接口，别的包里正好实现它的类型，签名也会变。泛型类型不列实现的接口。
+实现的接口只在候选里找：`error`，和各单元里导出的、非泛型、至少有一个方法的普通接口。所以在模块的任何一个包里加一个导出接口，别的包里正好实现它的类型，签名也会变。设了冻结范围时只在范围内的单元里找，范围外加的接口不改范围内类型的签名。泛型类型不列实现的接口。
 
 限制：
 

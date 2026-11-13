@@ -18,6 +18,10 @@ class Entry(NamedTuple):
     name: str
     signature: str
 
+    @property
+    def key(self) -> Key:
+        return self[:4]
+
 
 FIELDS = frozenset(Entry._fields)
 KEY_FIELDS = Entry._fields[:4]
@@ -44,10 +48,6 @@ def quote(text: str) -> str:
     return json.dumps(text).replace("#", "\\u0023")
 
 
-def quote_key(key: Key) -> str:
-    return "(" + ", ".join(quote(part) for part in key) + ")"
-
-
 def parse(text: str, source: str) -> dict[Key, Entry]:
     try:
         items = json.loads(text)
@@ -70,10 +70,9 @@ def parse(text: str, source: str) -> dict[Key, Entry]:
         if wrong:
             raise Error(f"{source}: item {index} has non-string {', '.join(wrong)}")
         entry = Entry(**item)
-        key = entry[:4]
-        if key in entries:
-            raise Error(f"{source}: duplicate key (unit, parent, kind, name) {quote_key(key)} at item {index}")
-        entries[key] = entry
+        if entry.key in entries:
+            raise Error(f"{source}: duplicate key {key_json(entry)} at item {index}")
+        entries[entry.key] = entry
     return entries
 
 
@@ -167,9 +166,14 @@ def summary_text(diff: Diff | None, entries: dict[Key, Entry], artifact: str, pa
 
 
 def write(path: str, text: str, mode: str) -> None:
+    # Encoded before opening, so text that is not valid UTF-8 never leaves a truncated file behind.
     try:
-        with open(path, mode, encoding="utf-8", newline="\n") as file:
-            file.write(text)
+        data = text.encode("utf-8")
+    except UnicodeEncodeError as error:
+        raise Error(f"cannot write {quote(path)}: text is not valid UTF-8 ({quote(error.reason)})") from error
+    try:
+        with open(path, mode + "b") as file:
+            file.write(data)
     except OSError as error:
         raise Error(f"cannot write {quote(path)}: {type(error).__name__}") from error
 
@@ -186,7 +190,6 @@ def main(argv: list[str]) -> int:
         entries = read(Path(args.entries), "entries")
         snapshot = read_snapshot(Path(args.snapshot))
         diff = None if snapshot is None else compare(snapshot, entries)
-        print("\n".join(log_lines(diff, entries, args.artifact, args.path)))
         matches = diff is not None and diff.empty
         if not matches:
             write(args.output, render(entries), "w")
@@ -196,12 +199,13 @@ def main(argv: list[str]) -> int:
     except Error as error:
         print(f"api snapshot: {error}", file=sys.stderr)
         return 2
+    print("\n".join(log_lines(diff, entries, args.artifact, args.path)))
     return 0 if matches else 1
 
 
 if __name__ == "__main__":
     try:
         sys.exit(main(sys.argv[1:]))
-    except Exception as error:  # noqa: BLE001 -- FR-14: anything unexpected means the check could not run.
+    except Exception as error:  # noqa: BLE001 -- anything unexpected means the check could not run.
         print(f"api snapshot: {type(error).__name__}: {quote(str(error))}", file=sys.stderr)
         sys.exit(2)

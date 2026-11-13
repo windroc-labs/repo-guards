@@ -25,7 +25,7 @@ def as_json(*entries: Entry) -> str:
 
 
 def keyed(*entries: Entry) -> dict:
-    return {e[:4]: e for e in entries}
+    return {e.key: e for e in entries}
 
 
 class Parse(unittest.TestCase):
@@ -291,7 +291,7 @@ class Main(unittest.TestCase):
     def test_mismatch_writes_full_snapshot_and_names_artifact_and_path(self):
         run = Run(self, [OPEN, CLOSE, METHOD], [OPEN])()
         self.assertEqual(run.code, 1)
-        self.assertEqual(run.output.read_text(encoding="utf-8"), render({e[:4]: e for e in (OPEN, CLOSE, METHOD)}))
+        self.assertEqual(run.output.read_text(encoding="utf-8"), render({e.key: e for e in (OPEN, CLOSE, METHOD)}))
         inside, _ = fenced(run.summary_text)
         self.assertIn("api-snapshot-rust", inside)
         self.assertIn(".github/checks/api-rust.json", inside)
@@ -309,7 +309,7 @@ class Main(unittest.TestCase):
     def test_missing_snapshot_exits_1_writes_snapshot_names_artifact_and_path(self):
         run = Run(self, [OPEN, CLOSE])()
         self.assertEqual(run.code, 1)
-        self.assertEqual(run.output.read_text(encoding="utf-8"), render({e[:4]: e for e in (OPEN, CLOSE)}))
+        self.assertEqual(run.output.read_text(encoding="utf-8"), render({e.key: e for e in (OPEN, CLOSE)}))
         self.assertFalse(run.snapshot.exists())
         self.assertIn('".github/checks/api-rust.json" does not exist; 2 entries generated', run.stdout)
         self.assertIn("快照文件不存在", run.summary_text)
@@ -360,6 +360,21 @@ class Main(unittest.TestCase):
         run()
         self.assertEqual(run.code, 2)
         self.assertIn("cannot write", run.stderr)
+
+    def test_text_not_encodable_as_utf8_exits_2_and_leaves_no_file(self):
+        lone_surrogate = '[{"unit": "u", "parent": "", "kind": "k", "name": "n", "signature": "\\ud800"}]'
+        run = Run(self, lone_surrogate)()
+        self.assertEqual(run.code, 2)
+        self.assertIn("not valid UTF-8", run.stderr)
+        self.assertFalse(run.output.exists())
+        self.assertEqual(run.stdout, "")
+
+    def test_failed_write_prints_no_new_snapshot_line(self):
+        run = Run(self, [OPEN, CLOSE], [OPEN])
+        run.output.mkdir()
+        run()
+        self.assertEqual(run.code, 2)
+        self.assertNotIn("new snapshot", run.stdout)
 
     def test_unwritable_summary_exits_2(self):
         run = Run(self, [OPEN, CLOSE], [OPEN])

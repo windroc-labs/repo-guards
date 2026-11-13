@@ -136,6 +136,17 @@ jobs:
         env:
           UV_NO_CONFIG: "1"
         run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" python
+      - name: Layer rules
+        # import-linter on the project's .importlinter or pyproject.toml [tool.importlinter]; without either it prints a
+        # line and passes. The wrapper finds the packages in working-directory and SOURCE_DIRS and runs none of their code.
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: |
+          rules=$RG/python/layer-rules
+          uv venv -q --python 3.14 "$RUNNER_TEMP/layer-rules-venv"
+          uv pip install -q --python "$RUNNER_TEMP/layer-rules-venv/bin/python" --require-hashes -r "$rules/requirements.txt"
+          "$RUNNER_TEMP/layer-rules-venv/bin/python" -I "$rules/layer_rules.py" . $SOURCE_DIRS
       - name: Format
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .

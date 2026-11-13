@@ -229,5 +229,14 @@ class Requirements(unittest.TestCase):
         self.assertIn("import-linter==2.16", [name for name, _ in blocks])
 
 
+class Workflow(unittest.TestCase):
+    def test_step_runs_the_wrapper_isolated_from_the_project(self):
+        workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+        step = workflow.split("      - name: Layer rules\n", 1)[1].split("      - name: ", 1)[0]
+        self.assertIn('UV_NO_CONFIG: "1"', step)
+        self.assertIn('--require-hashes -r "$rules/requirements.txt"', step)
+        self.assertIn('-I "$rules/layer_rules.py" . $SOURCE_DIRS', step)
+
+
 if __name__ == "__main__":
     unittest.main()

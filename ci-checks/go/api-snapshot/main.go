@@ -50,13 +50,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	var scope []string
-	var err error
 	if len(args) == 2 {
-		scope, err = readScope(args[0], args[1])
-	}
-	if err != nil {
-		fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
-		return 2
+		var err error
+		if scope, err = readScope(args[0], args[1]); err != nil {
+			fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
+			return 2
+		}
 	}
 	entries, err := generate(stderr, scope)
 	if err != nil {
@@ -87,40 +86,32 @@ func readScope(root, workingDirectory string) ([]string, error) {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	var config map[string]any
-	if err == nil {
-		_, err = toml.Decode(string(text), &config)
-	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", overrides, err)
-	}
-	where := "[project]"
-	value, err := lookup(config, where, "project")
-	if err == nil && value != nil {
-		where = "[project." + strconv.Quote(workingDirectory) + "]"
-		value, err = lookup(value, where, workingDirectory)
-	}
-	if err == nil && value != nil {
-		where += " api-snapshot-scope"
-		value, err = lookup(value, where, "api-snapshot-scope")
-	}
-	if err == nil && value != nil {
-		where += ".go"
-		value, err = lookup(value, where, "go")
-	}
-	if err != nil || value == nil {
 		return nil, err
 	}
-	return scopePrefixes(value, where)
-}
-
-// lookup returns table[key], nil when it is missing; where names table for the error.
-func lookup(table any, where, key string) (any, error) {
-	t, ok := table.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("%s: %s is not a table", overrides, where)
+	var config map[string]any
+	if _, err := toml.Decode(string(text), &config); err != nil {
+		return nil, fmt.Errorf("%s: %w", overrides, err)
 	}
-	return t[key], nil
+	section := "[project." + strconv.Quote(workingDirectory) + "]"
+	path := []struct{ key, where string }{
+		{"project", "[project]"},
+		{workingDirectory, section},
+		{"api-snapshot-scope", section + " api-snapshot-scope"},
+		{"go", section + " api-snapshot-scope.go"},
+	}
+	var value any = config
+	for i, step := range path {
+		table, ok := value.(map[string]any)
+		if !ok {
+			// The document itself is always a table, so i > 0 here.
+			return nil, fmt.Errorf("%s: %s is not a table", overrides, path[i-1].where)
+		}
+		if value = table[step.key]; value == nil {
+			return nil, nil
+		}
+	}
+	return scopePrefixes(value, path[len(path)-1].where)
 }
 
 func scopePrefixes(value any, where string) ([]string, error) {

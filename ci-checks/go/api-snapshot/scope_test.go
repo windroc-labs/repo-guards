@@ -165,27 +165,32 @@ func TestScopeReportsAdditionsInside(t *testing.T) {
 
 func TestBadScopeExits2(t *testing.T) {
 	root := repoWith(t, ".")
-	for _, config := range []string{
-		"[project.\".\"\n",
-		"project = 1\n",
-		"[project]\n\".\" = 1\n",
-		"[project.\".\"]\napi-snapshot-scope = [\"example.com/scope\"]\n",
-		goScope(`[]`),
-		goScope(`"example.com/scope"`),
-		goScope(`[1]`),
-		goScope(`["example.com/scope", 1]`),
-		goScope(`[["example.com/scope"]]`),
-		goScope(`["example.com/scope/"]`),
-		goScope(`["/example.com/scope"]`),
-		goScope(`["example.com/../scope"]`),
-		goScope(`["example.com/./scope"]`),
-		goScope(`["example.com/sc ope"]`),
-		goScope(`["example.com/scope/*"]`),
-		goScope(`["example.com/scope\u0001"]`),
-	} {
-		r := generateIn(t, root, ".", config)
-		if r.code != 2 || !strings.Contains(r.stderr, "api-snapshot: .github/checks/repo-guards.toml: ") || r.stdout != "" {
-			t.Errorf("config %q: exit %d, stdout %q, stderr %q; want exit 2 naming repo-guards.toml and no output", config, r.code, r.stdout, r.stderr)
+	const where = `[project."."] api-snapshot-scope.go`
+	notStrings := where + " is not an array of strings"
+	badPrefix := `must be a package import path such as "example.com/mod/driver"`
+	cases := []struct{ config, message string }{
+		{"[project.\".\"\n", "toml:"},
+		{"project = 1\n", "[project] is not a table"},
+		{"[project]\n\".\" = 1\n", `[project."."] is not a table`},
+		{"[project.\".\"]\napi-snapshot-scope = [\"example.com/scope\"]\n", `[project."."] api-snapshot-scope is not a table`},
+		{goScope(`[]`), where + " = []: must list at least one package import path"},
+		{goScope(`"example.com/scope"`), notStrings},
+		{goScope(`[1]`), notStrings},
+		{goScope(`["example.com/scope", 1]`), notStrings},
+		{goScope(`[["example.com/scope"]]`), notStrings},
+		{goScope(`["example.com/scope/"]`), badPrefix},
+		{goScope(`["/example.com/scope"]`), badPrefix},
+		{goScope(`["example.com/../scope"]`), badPrefix},
+		{goScope(`["example.com/./scope"]`), badPrefix},
+		{goScope(`["example.com/sc ope"]`), badPrefix},
+		{goScope(`["example.com/scope/*"]`), badPrefix},
+		{goScope(`["example.com/scope\u0001"]`), "must not contain control characters"},
+	}
+	for _, c := range cases {
+		r := generateIn(t, root, ".", c.config)
+		prefix := "api-snapshot: .github/checks/repo-guards.toml: "
+		if r.code != 2 || r.stdout != "" || !strings.HasPrefix(r.stderr, prefix) || !strings.Contains(r.stderr, c.message) {
+			t.Errorf("config %q: exit %d, stdout %q, stderr %q; want exit 2, no output, stderr %q... naming %q", c.config, r.code, r.stdout, r.stderr, prefix, c.message)
 		}
 	}
 }

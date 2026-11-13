@@ -277,6 +277,31 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/tests/ci-checks/coverage
         run: python3 -m unittest shard_artifact_test
+      - name: coverage-gate tests
+        id: coverage-gate
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/coverage
+        run: python3 -m unittest coverage_gate_test
+      - name: crap-report tests
+        id: crap-report
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/crap
+        run: python3 -m unittest crap_report_test
+      - name: diff-filter tests
+        id: diff-filter
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/diff-filter
+        run: python3 -m unittest diff_filter_test
+      - name: Rust shard-targets tests
+        id: rust-shard-targets
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/rust/shard-targets
+        run: python3 -m unittest shard_targets_test
+      - name: Python license check tests
+        id: python-license-check
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/python/license-check
+        run: python3 -m unittest license_check_test
       - name: Rust coverage LCOV tests
         id: rust-coverage-lcov
         if: ${{ !cancelled() }}
@@ -384,9 +409,14 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
           RUST_API_SNAPSHOT: ${{ steps.rust-api-snapshot.outcome }}
           GO_LAYER_RULES: ${{ steps.go-layer-rules.outcome }}
+          COVERAGE_GATE: ${{ steps.coverage-gate.outcome }}
+          CRAP_REPORT: ${{ steps.crap-report.outcome }}
+          DIFF_FILTER: ${{ steps.diff-filter.outcome }}
+          RUST_SHARD_TARGETS: ${{ steps.rust-shard-targets.outcome }}
+          PYTHON_LICENSE_CHECK: ${{ steps.python-license-check.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES COVERAGE_GATE CRAP_REPORT DIFF_FILTER RUST_SHARD_TARGETS PYTHON_LICENSE_CHECK; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

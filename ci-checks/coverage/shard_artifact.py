@@ -2,10 +2,13 @@ import hashlib
 import sys
 
 
-def name(language: str, working_directory: str) -> str:
+def digest(working_directory: str) -> str:
     # download-artifact runs decodeURIComponent on the name and matches it as a glob, so a hash stands in for the path.
-    digest = hashlib.sha256(working_directory.encode()).hexdigest()[:16]
-    return f"{language}-coverage-{digest}-shard"
+    return hashlib.sha256(working_directory.encode()).hexdigest()[:16]
+
+
+def name(language: str, working_directory: str) -> str:
+    return f"{language}-coverage-{digest(working_directory)}-shard"
 
 
 def main(argv: list[str]) -> int:

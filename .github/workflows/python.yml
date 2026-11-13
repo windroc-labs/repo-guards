@@ -343,12 +343,16 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-      # Builds the project and writes its public API entries to $RUNNER_TEMP/api-entries.json; each language's generation replaces this stub.
+      # Builds the project's wheels and writes their public API entries to $RUNNER_TEMP/api-entries.json; exit 2 when it cannot.
+      # griffe gets a venv of its own; env -u lets the build read the project's uv config, as the Checks job's install does.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
         run: |
-          echo "::error::API snapshot: $LANGUAGE generation is not wired up yet (本语言的生成还没接上)"
-          exit 2
+          api=$RG/python/api-snapshot
+          uv venv -q --python 3.14 "$RUNNER_TEMP/api-venv" \
+            && uv pip install -q --python "$RUNNER_TEMP/api-venv/bin/python" --require-hashes -r "$api/requirements.txt" \
+            || { echo "::error::API snapshot: cannot install the Python API tool"; exit 2; }
+          env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" . "$RUNNER_TEMP/api-entries.json"
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

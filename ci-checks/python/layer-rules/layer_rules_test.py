@@ -235,19 +235,35 @@ class LayerRules(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn(f"{PREFIX}cannot read pyproject.toml", result.stderr)
 
-    def test_tool_output_cannot_issue_workflow_commands(self):
-        # A syntax error echoes the PR's source line; it must sit inside a stop-commands block.
-        self.package("", core_imports_ui=False)
-        self.write({"pyproject.toml": FORBIDDEN_TOML, "app/core/bad.py": "::error::x = (\n"})
-        result = self.run_check()
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+    def assert_commands_fenced(self, result: subprocess.CompletedProcess[str]) -> None:
+        # Every line that could act as a workflow command sits inside the stop-commands block; stderr shares stdout.
+        self.assertEqual(result.stderr, "")
         lines = result.stdout.splitlines()
         start = next(i for i, line in enumerate(lines) if line.startswith("::stop-commands::"))
         token = lines[start].removeprefix("::stop-commands::")
         self.assertGreaterEqual(len(token), 32)
         end = lines.index(f"::{token}::")
+        self.assertEqual(end, len(lines) - 1, result.stdout)
         self.assertTrue(all(i in range(start, end + 1) for i, line in enumerate(lines) if line.startswith("::")))
-        self.assertIn("::error::x = (", result.stdout + result.stderr)
+
+    def test_tool_output_cannot_issue_workflow_commands(self):
+        # A syntax error echoes the PR's source line.
+        self.package("", core_imports_ui=False)
+        self.write({"pyproject.toml": FORBIDDEN_TOML, "app/core/bad.py": "::error::x = (\n"})
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_commands_fenced(result)
+        self.assertIn("::error::x = (", result.stdout)
+
+    def test_tool_crash_stays_inside_the_block(self):
+        # rich reads the contract name as markup and raises after lint_imports' own error handling.
+        self.package("", core_imports_ui=False)
+        name = 'name = "[/x\\n::error title=forged::injected\\n]"'
+        self.write({"pyproject.toml": FORBIDDEN_TOML.replace('name = "core does not import ui"', name)})
+        result = self.run_check()
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assert_commands_fenced(result)
+        self.assertIn("::error title=forged::injected", result.stdout)
 
     def test_wrong_arguments_exit_2(self):
         result = subprocess.run([sys.executable, "-I", str(SCRIPT)], capture_output=True, text=True, check=False)

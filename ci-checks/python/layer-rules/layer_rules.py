@@ -8,6 +8,7 @@ import os
 import secrets
 import sys
 import tomllib
+import traceback
 from collections.abc import Sequence
 from importlib.machinery import ModuleSpec, PathFinder
 from pathlib import Path
@@ -106,6 +107,9 @@ def main(argv: list[str]) -> int:
     os.dup2(sys.stdout.fileno(), sys.stderr.fileno())
     try:
         passed = lint(config, roots)
+    except Exception:  # noqa: BLE001 -- the traceback can quote the PR's text, so it must print inside the block.
+        traceback.print_exc()
+        return 2
     finally:
         sys.stdout.flush()
         sys.stderr.flush()

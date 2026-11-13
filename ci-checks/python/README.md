@@ -94,10 +94,10 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 `python.yml` 的 Layer rules 步跑 [`layer-rules/layer_rules.py`](layer-rules/layer_rules.py)：
 
 - 没有配置：打印一行 `layer rules (python): no import-linter config in .importlinter or pyproject.toml [tool.importlinter]; skipped`，通过。
-- 有配置：对整个项目跑一次 import-linter，规则不满足或配置被拒绝都失败（退出 1）；`pyproject.toml` 不是合法 TOML、装不上工具退出 2。
+- 有配置：对整个项目跑一次 import-linter，规则不满足或配置被拒绝都失败（退出 1）；`pyproject.toml` 不是合法 TOML、装不上工具、工具自己出错退出 2。
 - 找包：在项目目录和 `source-dirs`（见[覆盖默认配置](../README.md#覆盖默认配置)）里找 `root_packages`，src 布局不用装项目。
 - 不执行项目的代码：脚本用 `python -I` 跑，不经 import-linter 的命令行（它把当前目录放到 `sys.path` 最前面），找到的项目模块都没有 loader，import 它们不会运行。所以 `contract_types` 只能用 import-linter 自带的规则类型，指向项目代码的会失败。
-- 输出包在 `::stop-commands::` 里，PR 的文件名和源码行当不了 workflow 命令。
+- 输出包在 `::stop-commands::` 里，工具出错时的 traceback 也在里面，PR 的文件名、源码行和规则名当不了 workflow 命令。
 - 版本：import-linter 固定在 [`layer-rules/requirements.in`](layer-rules/requirements.in)，[`requirements.txt`](layer-rules/requirements.txt) 带 hash（在该目录跑 `uv pip compile requirements.in -o requirements.txt --generate-hashes --universal --python-version 3.14` 生成），装进单独的 Python 3.14 环境，不和项目的依赖混装。
 - 测试：在该目录建好装了 `requirements.txt` 的 Python 3.14 环境，用它跑 `python -m unittest layer_rules_test`。
 

@@ -774,9 +774,14 @@ class Docs(unittest.TestCase):
         self.assertIn("  - `test-paths`：", section)
         self.assertIn('layers = [\n  { name = "api"', section)
         self.assertIn("| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
+        self.assertIn("| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
         arch = (self.ROOT / "architecture/README.md").read_text()
         self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
         self.assertIn("\n### 第 2 项分层规则\n", arch)
+        item = arch.split("\n### 第 2 项分层规则\n", 1)[1].split("\n### ", 1)[0]
+        self.assertIn("`python.yml` 和 `typescript.yml` 有这一步", item)
+        self.assertIn("- 什么算 import（TypeScript）：", item)
+        self.assertIn("layer_rules.py typescript", item)
 
 
 class Output(unittest.TestCase):

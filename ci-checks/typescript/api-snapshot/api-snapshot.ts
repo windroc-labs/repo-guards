@@ -43,6 +43,56 @@ interface Outputs {
   options: Map<string, ts.CompilerOptions>;
   // Per build: its own declaration files (hand-written and emitted), which may declare ambient modules.
   declarations: Map<ts.CompilerOptions, string[]>;
+  // tsc's resolution of every import the build saw, per containing source file and resolutionKey.
+  resolutions: Map<string, Map<string, ts.ResolvedModuleWithFailedLookupLocations>>;
+}
+
+type Resolutions = Map<string, Map<string, ts.ResolvedModuleWithFailedLookupLocations>>;
+
+function resolutionKey(literal: ts.StringLiteralLike, mode: ts.ResolutionMode): string {
+  return `${mode ?? ""}:${literal.text}`;
+}
+
+// Resolves with tsc's own module resolution, as the host's default would, and records each result.
+function recordingResolver(
+  host: ts.CompilerHost,
+  options: ts.CompilerOptions,
+  record: Resolutions,
+  first?: (
+    literal: ts.StringLiteralLike,
+    mode: ts.ResolutionMode,
+    containing: ts.SourceFile,
+  ) => ts.ResolvedModuleWithFailedLookupLocations | undefined,
+  finish: (
+    result: ts.ResolvedModuleWithFailedLookupLocations,
+  ) => ts.ResolvedModuleWithFailedLookupLocations = (result) => result,
+): NonNullable<ts.CompilerHost["resolveModuleNameLiterals"]> {
+  const cache = ts.createModuleResolutionCache(
+    host.getCurrentDirectory(),
+    (file) => host.getCanonicalFileName(file),
+    options,
+  );
+  return (literals, containingFile, redirected, compilerOptions, containing) => {
+    const resolved = record.get(containingFile) ?? new Map();
+    record.set(containingFile, resolved);
+    return literals.map((literal) => {
+      const mode = ts.getModeForUsageLocation(containing, literal, compilerOptions);
+      const result = finish(
+        first?.(literal, mode, containing) ??
+          ts.resolveModuleName(
+            literal.text,
+            containingFile,
+            compilerOptions,
+            host,
+            cache,
+            redirected,
+            mode,
+          ),
+      );
+      resolved.set(resolutionKey(literal, mode), result);
+      return result;
+    });
+  };
 }
 
 const PREFIX = "api snapshot (typescript): ";
@@ -80,6 +130,7 @@ export function generate(projectDir: string): Entry[] {
     jsOf: new Map(),
     options: new Map(),
     declarations: new Map(),
+    resolutions: new Map(),
   };
   const builds = new Map<string, ts.CompilerOptions>();
   for (const pkg of packages) build(pkg.config, outputs, builds, rel);
@@ -256,6 +307,7 @@ function build(
   builds.set(config, options);
   const host = ts.createCompilerHost(options, true);
   delete host.trace;
+  host.resolveModuleNameLiterals = recordingResolver(host, options, outputs.resolutions);
   host.writeFile = (file) => {
     throw new Error(`the compiler tried to write ${quote(rel(file))}`);
   };
@@ -387,7 +439,11 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
 }
 
 // Serves the in-memory outputs to a second program, also through symlinked paths such as workspace node_modules.
-function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.CompilerHost {
+function virtualHost(
+  options: ts.CompilerOptions,
+  outputs: Outputs,
+  resolutions: Resolutions,
+): ts.CompilerHost {
   const host = ts.createCompilerHost(options, true);
   delete host.trace;
   const real = (file: string): string => {
@@ -412,49 +468,44 @@ function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.Compiler
   host.writeFile = () => {
     throw new Error("the declaration reader must not write files");
   };
-  // Resolves as the build did (paths, references, .ts extensions), then reads a compiled source's emitted .d.ts.
-  const cache = ts.createModuleResolutionCache(
-    host.getCurrentDirectory(),
-    (file) => host.getCanonicalFileName(file),
+  // An emitted .d.ts reuses the build's resolution of the same import in its source, so it resolves exactly as tsc
+  // did in the build (paths, references, untyped JS, ambient modules); a compiled source reads as its emitted .d.ts.
+  const fromBuild = (
+    literal: ts.StringLiteralLike,
+    mode: ts.ResolutionMode,
+    containing: ts.SourceFile,
+  ): ts.ResolvedModuleWithFailedLookupLocations | undefined => {
+    const source = outputs.source.get(real(containing.fileName));
+    return source && outputs.resolutions.get(source.fileName)?.get(resolutionKey(literal, mode));
+  };
+  const toDeclarationFile = (
+    result: ts.ResolvedModuleWithFailedLookupLocations,
+  ): ts.ResolvedModuleWithFailedLookupLocations => {
+    const found = result.resolvedModule;
+    const declaration = found && outputs.declarationOf.get(real(found.resolvedFileName));
+    if (found === undefined || declaration === undefined) return result;
+    const extension = declaration.endsWith(".d.mts")
+      ? ts.Extension.Dmts
+      : declaration.endsWith(".d.cts")
+        ? ts.Extension.Dcts
+        : ts.Extension.Dts;
+    return {
+      ...result,
+      resolvedModule: {
+        ...found,
+        resolvedFileName: declaration,
+        extension,
+        isExternalLibraryImport: false,
+      },
+    };
+  };
+  host.resolveModuleNameLiterals = recordingResolver(
+    host,
     options,
+    resolutions,
+    fromBuild,
+    toDeclarationFile,
   );
-  host.resolveModuleNameLiterals = (
-    literals,
-    containingFile,
-    redirected,
-    compilerOptions,
-    containing,
-  ) =>
-    literals.map((literal) => {
-      const mode = ts.getModeForUsageLocation(containing, literal, compilerOptions);
-      const result = ts.resolveModuleName(
-        literal.text,
-        containingFile,
-        compilerOptions,
-        host,
-        cache,
-        redirected,
-        mode,
-      );
-      const found = result.resolvedModule;
-      if (found === undefined) return result;
-      const declaration = outputs.declarationOf.get(real(found.resolvedFileName));
-      if (declaration === undefined) return result;
-      const extension = declaration.endsWith(".d.mts")
-        ? ts.Extension.Dmts
-        : declaration.endsWith(".d.cts")
-          ? ts.Extension.Dcts
-          : ts.Extension.Dts;
-      return {
-        ...result,
-        resolvedModule: {
-          ...found,
-          resolvedFileName: declaration,
-          extension,
-          isExternalLibraryImport: false,
-        },
-      };
-    });
   return host;
 }
 
@@ -470,29 +521,38 @@ function read(
     ...units.map((u) => u.declaration),
     ...(outputs.declarations.get(buildOptions) ?? []),
   ]);
+  const resolutions: Resolutions = new Map();
   const program = ts.createProgram({
     rootNames: [...rootNames],
     options,
-    host: virtualHost(options, outputs),
+    host: virtualHost(options, outputs, resolutions),
   });
   const checker = program.getTypeChecker();
-  // An import the reader cannot follow would silently drop what it re-exports; ambient modules count as resolved.
+  // An import is unresolved exactly when tsc has no module for it: no resolution and no ambient module.
+  // Only files the units reach can drop entries, so only those are checked.
   const unresolved: { file: string; specifier: string }[] = [];
-  for (const file of program.getSourceFiles()) {
-    if (
-      program.isSourceFileDefaultLibrary(file) ||
-      file.fileName.split("/").includes("node_modules")
-    ) {
-      continue;
-    }
+  const seen = new Set<string>();
+  const queue = units.map((u) => program.getSourceFile(u.declaration));
+  while (queue.length > 0) {
+    const file = queue.shift();
+    if (file === undefined || seen.has(file.fileName)) continue;
+    seen.add(file.fileName);
+    if (file.fileName.split("/").includes("node_modules")) continue;
+    const current = file;
     const visit = (node: ts.Node): void => {
       const specifier = moduleSpecifier(node);
-      if (specifier !== undefined && checker.getSymbolAtLocation(specifier) === undefined) {
-        unresolved.push({ file: file.fileName, specifier: specifier.text });
+      if (specifier !== undefined) {
+        const mode = program.getModeForUsageLocation(current, specifier);
+        const found = resolutions.get(current.fileName)?.get(resolutionKey(specifier, mode));
+        if (found?.resolvedModule !== undefined) {
+          queue.push(program.getSourceFile(found.resolvedModule.resolvedFileName));
+        } else if (checker.getSymbolAtLocation(specifier) === undefined) {
+          unresolved.push({ file: current.fileName, specifier: specifier.text });
+        }
       }
       ts.forEachChild(node, visit);
     };
-    visit(file);
+    visit(current);
   }
   if (unresolved.length > 0) {
     const lines = unresolved.map(
@@ -507,6 +567,17 @@ function read(
     if (module === undefined) continue;
     new Reader(unit.name, checker, outputs, entries).walk(module, "");
   }
+}
+
+function untypedSource(exported: ts.Symbol): string | undefined {
+  for (const declaration of exported.declarations ?? []) {
+    for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
+      if ((ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier) {
+        return ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+      }
+    }
+  }
+  return undefined;
 }
 
 // The module a declaration imports from; a side-effect import brings in no names, so it is not one.
@@ -544,7 +615,11 @@ class Reader {
     for (const exported of this.checker.getExportsOfModule(container)) {
       const target =
         exported.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(exported) : exported;
-      this.symbol(target, exported.getName(), parent);
+      // tsc types a name re-exported from an untyped JS module as any; it has no declaration to print.
+      const from = (target.declarations ?? []).length === 0 ? untypedSource(exported) : undefined;
+      if (from !== undefined)
+        this.add(parent, "alias", exported.getName(), `any from ${JSON.stringify(from)}`);
+      else this.symbol(target, exported.getName(), parent);
     }
   }
 

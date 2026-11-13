@@ -230,6 +230,25 @@ describe("exports forms", () => {
     );
   });
 
+  it("a name re-exported from an untyped JS module is an any alias, as tsc types it", () => {
+    const entries = generate(path.join(TESTDATA, "untyped"));
+    assert.deepEqual(
+      entries.map((e) => [e.kind, e.name, e.signature]),
+      [
+        ["alias", "foo", 'any from "untyped"'],
+        ["const", "own", "const own = 1"],
+      ],
+    );
+  });
+
+  it("a declaration file the units never reach is not checked, as tsc skips it", () => {
+    const entries = generate(path.join(TESTDATA, "unrelated"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.signature]),
+      [["unrelated", "const v = 1"]],
+    );
+  });
+
   it("a solution tsconfig builds its referenced projects", () => {
     const entries = generate(path.join(TESTDATA, "solution"));
     assert.deepEqual(

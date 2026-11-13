@@ -1,5 +1,7 @@
 import io
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -456,6 +458,120 @@ class Check(unittest.TestCase):
         self.assertIn("--base", repo.output)
 
 
+class MoreChecks(Check):
+    def test_other_languages_layers_are_not_checked(self):
+        files = {**BASE, "web/index.ts": "", "web/inner.ts": ""}
+        bad_ui = '{ name = "ui", paths = ["../web/**"], exits = 1, exit = "web/index.ts" },'
+        repo = Repo(self, files, config().replace("layers = [\n", "layers = [\n  " + bad_ui + "\n"))
+        repo.commit({"src/api/a.py": "import store\n"})
+        self.assert_exit(repo, 1)
+        repo = Repo(self, files, '[project."."]\nlayers = [\n  ' + bad_ui + "\n]\n")
+        self.assert_exit(repo, 0)
+        self.assertIn("没有 python 的 layers", repo.output)
+
+    def test_hash_in_worker_paths_is_escaped_everywhere(self):
+        name = "src/api/##[error]forged.py"
+        repo = self.repo(head={name: "import store.inner\n", "src/core/##[warning]bad.py": "def (:\n"})
+        self.assert_exit(repo, 2)
+        self.assertNotIn("##[", repo.output)
+        repo = self.repo(base={name: "def (:\n"}, head={name: "import store.inner\n"})
+        self.assert_exit(repo, 1)
+        for line in repo.output.splitlines():
+            if not line.startswith("::error "):
+                self.assertNotIn("##[", line)
+        self.assertNotIn("##[", repo.summary)
+
+    def test_only_scanned_and_resolution_files_are_written(self):
+        seen = {}
+
+        def runner(argv, **kwargs):
+            side = Path(argv[-1])
+            if "request" not in seen:
+                seen["written"] = sorted(str(p.relative_to(side)) for p in side.rglob("*") if p.is_file())
+                seen["request"] = json.loads(kwargs["input"])
+                seen["cwd"] = kwargs["cwd"]
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        repo = self.repo(head={"src/other/x.py": "", "pyproject.toml": ""})
+        out = io.StringIO()
+        self.assertEqual(lr.check(repo.root, "python", ".", "main", out, None, runner), 0, out.getvalue())
+        self.assertEqual(seen["cwd"], "/")
+        self.assertNotIn("src/other/x.py", seen["written"])
+        self.assertIn("src/other/x.py", seen["request"]["files"])
+        self.assertEqual(seen["request"]["context"], [])
+        self.assertEqual(seen["request"]["settings"], {"source-dirs": ["src"]})
+
+    def test_local_command_matches_the_library_call(self):
+        repo = self.repo(base={"src/api/a.py": "import store.inner\n"}, head={"src/api/a.py": "import store.inner\n" * 2})
+        repo.run()
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", str(Path(lr.__file__)), "python", "--working-directory", ".", "--base", "main"],
+            cwd=repo.root,
+            capture_output=True,
+            text=True,
+            env={k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"},
+        )
+        self.assertEqual((result.returncode, result.stdout), (repo.code, repo.output))
+
+
+class PackageUnits(unittest.TestCase):
+    """Go's unit is the package directory: pairs and edges name it, and its exit is the directory."""
+
+    def config(self):
+        layers = (
+            lr.Layer("api", ("api/**",), "api", "api", "go"),
+            lr.Layer("core", ("core/**",), "core", "core", "go"),
+        )
+        return lr.Config(layers, (), ())
+
+    def test_targets_map_to_their_package(self):
+        config, spec, side = self.config(), lr.LANGUAGES["go"], lr.Side()
+        lr.add(side, config, spec, "api/a.go", 3, ["core/x.go", "core/inner/y.go", "api/b.go"])
+        lr.add(side, config, spec, "core/inner/y.go", 4, ["core/x.go"])
+        self.assertEqual(dict(side.pairs), {("api/a.go", "core/inner"): [3]})
+        self.assertEqual(dict(side.edges), {("core/inner", "core"): [("core/inner/y.go", 4)]})
+        report = lr.judge(config, "", side, lr.Side())
+        self.assertIn("绕开出口", report.lines[0])
+        self.assertIn("api/a.go 引用 core/inner", report.lines[0])
+
+
+class Workflow(unittest.TestCase):
+    WORKFLOW = lr.CI_CHECKS.parent / ".github/workflows/python.yml"
+
+    def steps(self):
+        job = self.WORKFLOW.read_text().split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
+        return re.split(r"\n      - (?=name: |&|\*)", job)[1:]
+
+    def test_s21_s22_layer_rules_follows_inline_exemptions_and_blocks_nothing(self):
+        steps = self.steps()
+        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", step, re.M)) else step for step in steps]
+        at = names.index("Inline exemptions")
+        self.assertEqual(names[at + 1], "Layer rules")
+        step = steps[at + 1]
+        self.assertIn("if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}", step)
+        self.assertNotIn("continue-on-error", step)
+        self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
+        self.assertIn("python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)", step)
+        self.assertIn('"$python" -I -S "$RG/layer-rules/layer_rules.py" python --working-directory "$PROJECT_DIR" --base "$BASE_REF"', step)
+        for later in steps[at + 2 :]:
+            self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
+
+
+class Docs(unittest.TestCase):
+    ROOT = lr.CI_CHECKS.parent
+
+    def test_s26_docs_name_the_keys_and_the_step(self):
+        ci = (self.ROOT / "ci-checks/README.md").read_text()
+        section = ci.split("### 覆盖默认配置", 1)[1].split("\n## ", 1)[0]
+        self.assertIn("  - `layers`：", section)
+        self.assertIn("  - `test-paths`：", section)
+        self.assertIn('layers = [\n  { name = "api"', section)
+        self.assertIn("| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
+        arch = (self.ROOT / "architecture/README.md").read_text()
+        self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
+        self.assertIn("\n### 第 2 项分层规则\n", arch)
+
+
 class Output(unittest.TestCase):
     def test_workflow_commands_cannot_be_injected(self):
         line = lr.annotation("a,b:c%.py", 3, "x\n::warning::y %0A")
@@ -466,7 +582,8 @@ class Output(unittest.TestCase):
         self.assertEqual(lr.code("a|b"), "`a\\|b`")
         self.assertEqual(lr.code("a``b"), "```a``b```")
         self.assertEqual(lr.code("`x"), "`` `x ``")
-        self.assertEqual(lr.code("a\n##[error]b"), "`a\\n##[error]b`")
+        self.assertEqual(lr.code("a\n##[error]b"), "`a\\n\\u0023\\u0023[error]b`")
+        self.assertEqual(lr.quote("x ##[add-mask]y"), '"x \\u0023\\u0023[add-mask]y"')
 
     def test_command_line(self):
         repo = Repo(self, BASE, config())

@@ -2,6 +2,7 @@ import argparse
 import functools
 import json
 import os
+import posixpath
 import re
 import subprocess
 import sys
@@ -29,10 +30,21 @@ from config_overrides import (
 LAYER_KEYS = ("name", "paths", "exit")
 
 
+def quote(text: str) -> str:
+    # A TOML string has no raw line breaks; "#" is escaped too because the runner reads the legacy "##[command]"
+    # syntax anywhere in a line.
+    return toml_string(text).replace("#", "\\u0023")
+
+
 class ConfigError(Exception):
     def __init__(self, problems: list[str]):
         super().__init__("\n".join(problems))
         self.problems = problems
+
+
+def python_scanner(side_root: Path) -> list[str]:
+    # -I -S: no site-packages, .pth, sitecustomize, PYTHON* variables or script-directory imports.
+    return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py"), str(side_root)]
 
 
 @dataclass(frozen=True)
@@ -41,14 +53,20 @@ class Language:
     # A directory exit is a package: Python's is marked by __init__.py and holds its subpackages, Go's is its own files.
     marker: str | None = None
     recursive: bool = False
-    scanner: str | None = None
+    # Go counts and cycles go between package directories; the other languages' unit is the file.
+    package_unit: bool = False
+    # Globs of the files besides source files that the scanner reads to resolve imports.
+    context: tuple[str, ...] = ()
+    scanner: Callable[[Path], list[str]] | None = None
 
 
 LANGUAGES = {
-    "python": Language((".py", ".pyi"), marker="__init__.py", recursive=True, scanner="python/layer-rules/imports.py"),
-    "typescript": Language((".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")),
-    "rust": Language((".rs",)),
-    "go": Language((".go",)),
+    "python": Language((".py", ".pyi"), marker="__init__.py", recursive=True, scanner=python_scanner),
+    "typescript": Language(
+        (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"), context=("**/tsconfig*.json", "**/package.json")
+    ),
+    "rust": Language((".rs",), context=("**/Cargo.toml",)),
+    "go": Language((".go",), package_unit=True, context=("**/go.mod",)),
 }
 
 
@@ -133,6 +151,14 @@ def string_list(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def other_language(item: Any, language: str, files: frozenset[str]) -> bool:
+    exit_path = item.get("exit") if isinstance(item, dict) else None
+    if not isinstance(exit_path, str) or path_problem(exit_path):
+        return False
+    found = exit_target(exit_path, files)
+    return not isinstance(found, str) and found[0] != language
+
+
 def read_layers(raw: Any, where: str, problems: list[str]) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         problems.append(f"{where} layers 不是表的数组")
@@ -143,10 +169,10 @@ def read_layers(raw: Any, where: str, problems: list[str]) -> list[dict[str, Any
             problems.append(f"{where} layers 第 {index} 项不是表")
             continue
         name = item.get("name")
-        label = f"层 {toml_string(name)}" if isinstance(name, str) else f"layers 第 {index} 项"
+        label = f"层 {quote(name)}" if isinstance(name, str) else f"layers 第 {index} 项"
         before = len(problems)
-        problems += [f"{where} {label} 有未知键 {toml_string(k)}" for k in sorted(set(item) - set(LAYER_KEYS))]
-        problems += [f"{where} {label} 缺少键 {toml_string(k)}" for k in LAYER_KEYS if k not in item]
+        problems += [f"{where} {label} 有未知键 {quote(k)}" for k in sorted(set(item) - set(LAYER_KEYS))]
+        problems += [f"{where} {label} 缺少键 {quote(k)}" for k in LAYER_KEYS if k not in item]
         if "name" in item and (not isinstance(name, str) or not name):
             problems.append(f"{where} {label} 的 name 不是非空字符串")
         if "paths" in item and not string_list(item["paths"]):
@@ -158,12 +184,12 @@ def read_layers(raw: Any, where: str, problems: list[str]) -> list[dict[str, Any
         for key, path in [*(("paths", p) for p in item["paths"]), ("exit", item["exit"])]:
             problem = path_problem(path)
             if problem:
-                problems.append(f"{where} {label} 的 {key} {toml_string(path)}：{problem}")
+                problems.append(f"{where} {label} 的 {key} {quote(path)}：{problem}")
         layers.append(item)
     seen: set[str] = set()
     for item in layers:
         if item["name"] in seen:
-            problems.append(f"{where} 层名 {toml_string(item['name'])} 重复")
+            problems.append(f"{where} 层名 {quote(item['name'])} 重复")
         seen.add(item["name"])
     return layers
 
@@ -178,7 +204,10 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
         return None
     where = section_header(working_directory)
     problems: list[str] = []
-    raw = read_layers(section["layers"], where, problems)
+    raw = section["layers"]
+    if isinstance(raw, list):
+        raw = [item for item in raw if not other_language(item, language, files)]
+    raw = read_layers(raw, where, problems)
     test_paths = section.get("test-paths", [])
     if not string_list(test_paths):
         problems.append(f"{where} test-paths 不是字符串列表")
@@ -186,7 +215,7 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
     for path in test_paths:
         problem = path_problem(path)
         if problem:
-            problems.append(f"{where} test-paths {toml_string(path)}：{problem}")
+            problems.append(f"{where} test-paths {quote(path)}：{problem}")
     source_dirs = section.get("source-dirs", DEFAULT_SOURCE_DIRS)
     if not string_list(source_dirs):
         problems.append(f"{where} source-dirs 不是字符串列表")
@@ -195,7 +224,7 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
         raise ConfigError(problems)
     layers = []
     for item in raw:
-        label = f"{where} 层 {toml_string(item['name'])} 的 exit {toml_string(item['exit'])}"
+        label = f"{where} 层 {quote(item['name'])} 的 exit {quote(item['exit'])}"
         found = exit_target(item["exit"], files)
         if isinstance(found, str):
             problems.append(f"{label}：{found}")
@@ -204,7 +233,7 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
     if problems:
         raise ConfigError(problems)
     config = Config(
-        tuple(layer for layer in layers if layer.language == language),
+        tuple(layers),
         tuple(test_paths),
         tuple(normalized(d) for d in source_dirs),
     )
@@ -221,26 +250,26 @@ def layer_problems(config: Config, where: str, language: str, files: frozenset[s
     mine = sorted(f for f in files if language_of(f) == language)
     problems = []
     for layer in config.layers:
-        label = f"{where} 层 {toml_string(layer.name)}"
+        label = f"{where} 层 {quote(layer.name)}"
         if layer.exit in files:
             outside = [] if matches(layer.paths, layer.exit) else [layer.exit]
         else:
             directory = normalized(layer.exit)
             outside = [f for f in mine if under(directory, f, spec.recursive) and not matches(layer.paths, f)]
         if outside:
-            problems.append(f"{label} 的 exit {toml_string(layer.exit)}：不被本层 paths 匹配（{toml_string(outside[0])}）")
+            problems.append(f"{label} 的 exit {quote(layer.exit)}：不被本层 paths 匹配（{quote(outside[0])}）")
         if config.is_test(layer.exit_file) or config.is_test(layer.exit):
-            problems.append(f"{label} 的 exit {toml_string(layer.exit)} 在 test-paths 里")
+            problems.append(f"{label} 的 exit {quote(layer.exit)} 在 test-paths 里")
         if language == "python":
             for pattern in layer.paths:
                 if not any(d == "" or pattern == d or pattern.startswith(f"{d}/") for d in config.source_dirs):
-                    shown = "[" + ", ".join(toml_string(d or ".") for d in config.source_dirs) + "]"
-                    problems.append(f"{label} 的 paths {toml_string(pattern)} 不在 source-dirs {shown} 里")
+                    shown = "[" + ", ".join(quote(d or ".") for d in config.source_dirs) + "]"
+                    problems.append(f"{label} 的 paths {quote(pattern)} 不在 source-dirs {shown} 里")
     for path in mine:
         names = [layer.name for layer in config.layers if matches(layer.paths, path)]
         if len(names) > 1:
-            shown = "、".join(toml_string(n) for n in names)
-            problems.append(f"{where} 文件 {toml_string(path)} 同时被层 {shown} 匹配")
+            shown = "、".join(quote(n) for n in names)
+            problems.append(f"{where} 文件 {quote(path)} 同时被层 {shown} 匹配")
     return problems
 
 
@@ -306,7 +335,10 @@ def blobs(root: Path, ids: set[str]) -> dict[str, bytes]:
 @dataclass
 class Side:
     pairs: dict[Pair, list[int]] = field(default_factory=lambda: defaultdict(list))
-    edges: dict[Pair, list[int]] = field(default_factory=lambda: defaultdict(list))
+    # Edges go between units; each holds the (file, line) of its references.
+    edges: dict[Pair, list[tuple[str, int]]] = field(default_factory=lambda: defaultdict(list))
+    # The layer of each source file and unit named in pairs and edges.
+    layer: dict[str, int] = field(default_factory=dict)
     unassigned: int = 0
     broken: list[tuple[str, str]] = field(default_factory=list)
 
@@ -319,40 +351,54 @@ def rule(source: int, target: int, to_exit: bool) -> str | None:
     return SKIP if target > source + 1 else None
 
 
-def scanner_records(language: str, side_root: Path, request: dict[str, Any], runner: Runner) -> list[dict[str, Any]]:
-    scanner = CI_CHECKS / str(LANGUAGES[language].scanner)
-    # -I -S: no site-packages, .pth, sitecustomize, PYTHON* variables or script-directory imports.
-    argv = [sys.executable, "-I", "-S", str(scanner), str(side_root)]
-    result = runner(argv, input=json.dumps(request), capture_output=True, text=True, cwd=scanner.parent, check=False)
+def unit(spec: Language, path: str) -> str:
+    return posixpath.dirname(path) if spec.package_unit else path
+
+
+def json_line(language: str, line: str) -> Any:
+    try:
+        return json.loads(line)
+    except json.JSONDecodeError as error:
+        raise Error(f"{language} scanner wrote a line that is not JSON: {line[:200]}") from error
+
+
+def scanner_records(language: str, side_root: Path, request: dict[str, Any], runner: Runner) -> list[Any]:
+    """Run the language's scanner on one side (protocol: ci-checks/python/layer-rules/imports.py)."""
+    scanner = LANGUAGES[language].scanner
+    assert scanner is not None
+    # From /, outside the caller's tree and the side's directory.
+    result = runner(scanner(side_root), input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False)
     if result.returncode != 0:
         last = (result.stderr or "").strip().splitlines()[-1:] or [""]
         raise Error(f"{language} scanner exited with {result.returncode}: {last[0]}")
-    records = []
-    for line in result.stdout.splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as error:
-            raise Error(f"{language} scanner wrote a line that is not JSON: {line[:200]}") from error
-        records.append(record)
-    return records
+    return [json_line(language, line) for line in result.stdout.splitlines()]
 
 
-def scan_side(
-    root: Path, rev: str, prefix: str, config: Config, language: str, runner: Runner
-) -> tuple[Side, dict[str, str]]:
-    files = {p: b for p, b in tree(root, rev, prefix).items() if language_of(p) == language}
+def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, runner: Runner) -> Side:
+    spec = LANGUAGES[language]
+    everything = tree(root, rev, prefix)
+    files = {p: b for p, b in everything.items() if language_of(p) == language}
     todo = sorted(p for p in files if config.layer_of(p) is not None and not config.is_test(p))
     side = Side()
     if not todo:
-        return side, files
-    contents = blobs(root, set(files.values()))
+        return side
+    context = sorted(p for p in everything if matches(spec.context, p))
+    written = {p: everything[p] for p in [*todo, *context]}
+    contents = blobs(root, set(written.values()))
     with tempfile.TemporaryDirectory(prefix="layer-rules-") as tmp:
-        for path, blob in files.items():
+        for path, blob in written.items():
             target = Path(tmp) / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(contents[blob])
-        request = {"files": sorted(files), "scan": todo, "source-dirs": list(config.source_dirs) or ["."]}
+        request = {
+            "files": sorted(files),
+            "scan": todo,
+            "context": context,
+            "settings": {"source-dirs": list(config.source_dirs)},
+        }
         records = scanner_records(language, Path(tmp), request, runner)
+    # A package-unit language may name the package directory instead of one of its files.
+    packages = {posixpath.dirname(p): p for p in sorted(files, reverse=True)} if spec.package_unit else {}
     scanned = set(todo)
     for record in records:
         if not isinstance(record, dict) or record.get("file") not in scanned:
@@ -364,32 +410,43 @@ def scan_side(
         line, targets = record.get("line"), record.get("targets")
         if set(record) != {"file", "line", "targets"} or not isinstance(line, int) or not isinstance(targets, list):
             raise Error(f"{language} scanner wrote a malformed record: {str(record)[:200]}")
-        if not all(isinstance(t, str) and t in files for t in targets):
+        if not all(isinstance(t, str) and (t in files or t in packages) for t in targets):
             raise Error(f"{language} scanner named a file that is not in the project: {str(record)[:200]}")
-        add(side, config, path, line, targets)
-    return side, files
+        add(side, config, spec, path, line, [t if t in files else packages[t] for t in targets])
+    return side
 
 
-def add(side: Side, config: Config, path: str, line: int, targets: list[str]) -> None:
+def add(side: Side, config: Config, spec: Language, path: str, line: int, targets: list[str]) -> None:
     source = config.layer_of(path)
     assert source is not None
+    origin = unit(spec, path)
+    side.layer[path] = side.layer[origin] = source
     for target in dict.fromkeys(targets):
-        if config.is_test(target) or target == path:
+        if config.is_test(target):
             continue
         layer = config.layer_of(target)
+        destination = unit(spec, target)
         if layer is None:
             side.unassigned += 1
+        elif destination == origin:
+            continue
         elif layer == source:
-            side.edges[path, target].append(line)
-        elif rule(source, layer, target == config.layers[layer].exit_file):
-            side.pairs[path, target].append(line)
+            side.layer[destination] = layer
+            side.edges[origin, destination].append((path, line))
+        elif rule(source, layer, destination == config.layers[layer].exit_file):
+            side.layer[destination] = layer
+            side.pairs[path, destination].append(line)
 
 
-def components(edges: set[Pair]) -> dict[str, str]:
-    """Each node's strongly connected component (Tarjan, iterative)."""
+def adjacency(edges: set[Pair]) -> dict[str, list[str]]:
     graph: dict[str, list[str]] = defaultdict(list)
     for source, target in sorted(edges):
         graph[source].append(target)
+    return graph
+
+
+def components(graph: dict[str, list[str]]) -> dict[str, str]:
+    """Each node's strongly connected component (Tarjan, iterative)."""
     index: dict[str, int] = {}
     low: dict[str, int] = {}
     stack: list[str] = []
@@ -427,10 +484,7 @@ def components(edges: set[Pair]) -> dict[str, str]:
     return component
 
 
-def path_between(edges: set[Pair], start: str, goal: str) -> list[str]:
-    graph: dict[str, list[str]] = defaultdict(list)
-    for source, target in sorted(edges):
-        graph[source].append(target)
+def path_between(graph: dict[str, list[str]], start: str, goal: str) -> list[str]:
     previous: dict[str, str | None] = {start: None}
     queue = deque([start])
     while queue:
@@ -452,11 +506,12 @@ def path_between(edges: set[Pair], start: str, goal: str) -> list[str]:
 def new_cycle_edges(head: Side, base: Side) -> list[tuple[Pair, list[str]]]:
     """Each head edge merge-base lacks that closes a cycle, with the cycle from its target round to its source."""
     edges = set(head.edges)
-    component = components(edges)
+    graph = adjacency(edges)
+    component = components(graph)
     found = []
     for source, target in sorted(edges - set(base.edges)):
         if component.get(source) == component.get(target):
-            found.append(((source, target), path_between(edges, target, source)))
+            found.append(((source, target), path_between(graph, target, source)))
     return found
 
 
@@ -474,7 +529,7 @@ def annotation(path: str, line: int, message: str) -> str:
 
 def code(text: str) -> str:
     """A markdown code span safe inside a table cell: no newline, pipe or backtick run can end it."""
-    text = toml_string(text)[1:-1].replace("|", "\\|")
+    text = quote(text)[1:-1].replace("|", "\\|")
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     fence = "`" * (longest + 1)
     pad = " " if text.startswith("`") or text.endswith("`") else ""
@@ -495,16 +550,11 @@ def judge(config: Config, prefix: str, head: Side, base: Side) -> Report:
     def shown(path: str) -> str:
         return prefix + path
 
-    def layer_name(path: str) -> str:
-        index = config.layer_of(path)
-        assert index is not None
-        return names[index]
-
+    layer_of = {**base.layer, **head.layer}
     rows = []
     for pair in sorted(set(head.pairs) | set(base.pairs)):
         source, target = pair
-        top, bottom = config.layer_of(source), config.layer_of(target)
-        assert top is not None and bottom is not None
+        top, bottom = layer_of[source], layer_of[target]
         exit_file = config.layers[bottom].exit_file
         name = rule(top, bottom, target == exit_file)
         before, now = len(base.pairs.get(pair, [])), len(head.pairs.get(pair, []))
@@ -520,10 +570,10 @@ def judge(config: Config, prefix: str, head: Side, base: Side) -> Report:
     cycles = new_cycle_edges(head, base)
     for (source, target), chain in cycles:
         report.new += 1
-        layer = layer_name(source)
         ring = " → ".join(shown(p) for p in [*chain, chain[0]])
-        message = f"{CYCLE}：{layer} 层里 {ring}（{shown(source)} 引用 {shown(target)} 是 merge-base 没有的边）"
-        report.lines += [annotation(shown(source), line, message) for line in sorted(head.edges[source, target])]
+        message = f"{CYCLE}：{names[layer_of[source]]} 层里 {ring}（{shown(source)} 引用 {shown(target)} 是 merge-base 没有的边）"
+        sites = sorted(head.edges[source, target])
+        report.lines += [annotation(shown(path), line, message) for path, line in sites]
     report.summary = summary_lines(rows, len(cycles), head.unassigned)
     return report
 
@@ -580,24 +630,24 @@ def check(
         overrides = read_overrides(root)
         config = load_config(overrides, working_directory, language, frozenset(tree(root, "HEAD", prefix)))
         if config is None:
-            keys = "、".join(toml_string(k) for k in layered_projects(overrides)) or "（无）"
+            keys = "、".join(quote(k) for k in layered_projects(overrides)) or "（无）"
             where = section_header(working_directory)
             say(f"Layer rules: {where} 没有 {language} 的 layers，不检查。repo-guards.toml 里设了 layers 的项目：{keys}")
             return 0
         fork = git(root, "merge-base", base or default_base(root), "HEAD").decode().strip()
-        head, _ = scan_side(root, "HEAD", prefix, config, language, runner)
+        head = scan_side(root, "HEAD", prefix, config, language, runner)
         if head.broken:
-            say(*(f"error: head 上 {toml_string(prefix + p)} 解析不了：{toml_string(e)}" for p, e in head.broken))
+            say(*(f"error: head 上 {quote(prefix + p)} 解析不了：{quote(e)}" for p, e in head.broken))
             return 2
-        before, _ = scan_side(root, fork, prefix, config, language, runner)
+        before = scan_side(root, fork, prefix, config, language, runner)
     except ConfigError as error:
         say(*(f"error: {problem}" for problem in error.problems))
         return 2
     except Error as error:
-        say(f"error: {toml_string(str(error))}")
+        say(f"error: {quote(str(error))}")
         return 2
     for path, message in before.broken:
-        say(f"Layer rules: merge-base 上 {toml_string(prefix + path)} 解析不了，按没有 import 算：{toml_string(message)}")
+        say(f"Layer rules: merge-base 上 {quote(prefix + path)} 解析不了，按没有 import 算：{quote(message)}")
     report = judge(config, prefix, head, before)
     title = f"### Layer rules（{language}，working-directory {code(working_directory)}，merge-base {fork[:12]}）"
     summary = [title, "", *report.summary]

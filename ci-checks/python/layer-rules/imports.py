@@ -1,8 +1,12 @@
 """Layer rules scanner for Python: lists each import statement and the project files it resolves to.
 
-Protocol (shared with ci-checks/layer-rules/layer_rules.py): argv is the side's root directory; stdin is
-{"files": [...], "scan": [...], "source-dirs": [...]}, paths relative to that root; stdout has one JSON line per
-statement, {"file", "line", "targets"}, or {"file", "error"} for a file that does not parse.
+Protocol for every language's scanner (ci-checks/layer-rules/layer_rules.py runs it once per side): argv ends with
+the side's root directory, which holds the "scan" and "context" files. stdin is one JSON object, paths relative to
+the root: "files" names every source file of the language (not all are written), "scan" the ones to parse, "context"
+the language's resolution files (go.mod, tsconfig.json, Cargo.toml; none for Python), "settings" the project
+settings ("source-dirs"). stdout has one JSON line per statement, {"file", "line", "targets"}, targets being the
+"files" it resolves to (a package-unit language may name the package directory), or {"file", "error"} for a file
+that does not parse. References outside the project are left out.
 """
 
 import ast
@@ -17,7 +21,7 @@ class Error(Exception):
     pass
 
 
-def roots(source_dirs):
+def bases_of(source_dirs):
     out = []
     for directory in source_dirs:
         parts = [p for p in PurePosixPath(directory).parts if p != "."]
@@ -105,7 +109,7 @@ def main(argv):
         request = json.loads(sys.stdin.read())
         files = {relative(p) for p in request["files"]}
         todo = [relative(p) for p in request["scan"]]
-        bases = roots(request["source-dirs"])
+        bases = bases_of(request["settings"]["source-dirs"])
         for path in todo:
             for record in scan(path, (root / path).read_bytes(), bases, files):
                 print(json.dumps(record))

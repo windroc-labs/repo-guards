@@ -21,7 +21,8 @@ class Scan(unittest.TestCase):
         request = {
             "files": sorted(files),
             "scan": sorted(files if scan is None else scan),
-            "source-dirs": list(source_dirs),
+            "context": [],
+            "settings": {"source-dirs": list(source_dirs)},
         }
         result = subprocess.run(
             [sys.executable, "-I", "-S", str(SCANNER), str(root)],

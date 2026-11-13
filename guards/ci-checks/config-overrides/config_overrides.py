@@ -230,19 +230,12 @@ def checkout_mode(root: Path) -> Mode:
     return mode
 
 
-def snapshot_path_error(path: str, mode: Mode) -> str | None:
-    # Paths are compared with git's output, so only one spelling of each file is accepted.
+def snapshot_path_error(path: str, language: str, mode: Mode) -> str | None:
+    # github-dir-pr lets this file change beside code, so no other .github/ file may be named here.
+    expected = f".github/checks/api-{language}.json"
+    if path != expected:
+        return f"must be {json.dumps(expected)}"
     parts = path.split("/")
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in path):
-        return "must not contain control characters"
-    if any(part in ("", ".", "..") for part in parts):
-        return 'must be a relative path without empty, "." or ".." parts'
-    if parts[0] != ".github" or len(parts) < 2:
-        return "must be a file under .github/"
-    if parts[1] == "workflows":
-        return "must not be under .github/workflows/"
-    if path == OVERRIDES:
-        return f"must not be {OVERRIDES}"
     for end in range(1, len(parts) + 1):
         prefix = "/".join(parts[:end])
         found = mode(prefix)
@@ -262,7 +255,7 @@ def snapshot_path(root: Path, working_directory: str, language: str) -> str | No
         language_table(section, API_SNAPSHOT_SCOPE, section_directory)
     if path is None:
         return None
-    error = snapshot_path_error(path, checkout_mode(root))
+    error = snapshot_path_error(path, language, checkout_mode(root))
     if error:
         where = f"{section_header(working_directory)} {API_SNAPSHOT}.{language}"
         raise Error(f"{where} = {json.dumps(path, ensure_ascii=False)}: {error}")

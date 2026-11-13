@@ -579,33 +579,38 @@ function read(
 type Imported =
   { kind: "file" | "ambient"; nodes: ts.Node[] } | { kind: "untyped" } | { kind: "unresolved" };
 
-// The import a name came from, following local aliases (import { x } from "m"; export { x }).
+// The import where tsc lost a name's declaration: follow the whole alias chain (re-exports, local
+// import-then-export, barrels) to the hop whose target has no declaration, and return that hop's import.
 function importOrigin(
   exported: ts.Symbol,
   checker: ts.TypeChecker,
 ): { file: ts.SourceFile; specifier: ts.StringLiteral } | undefined {
   const visited = new Set<ts.Symbol>();
-  for (
-    let symbol: ts.Symbol | undefined = exported;
-    symbol !== undefined && !visited.has(symbol);
-  ) {
-    visited.add(symbol);
-    for (const declaration of symbol.declarations ?? []) {
-      for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
-        const specifier =
-          (ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier
-            ? node.moduleSpecifier
-            : ts.isImportEqualsDeclaration(node) &&
-                ts.isExternalModuleReference(node.moduleReference)
-              ? node.moduleReference.expression
-              : undefined;
-        if (specifier !== undefined && ts.isStringLiteral(specifier)) {
-          return { file: declaration.getSourceFile(), specifier };
-        }
-      }
+  for (let hop = exported; hop.flags & ts.SymbolFlags.Alias && !visited.has(hop);) {
+    visited.add(hop);
+    const next = checker.getImmediateAliasedSymbol(hop);
+    if (next !== undefined && (next.declarations ?? []).length > 0) {
+      hop = next;
+      continue;
     }
-    symbol =
-      symbol.flags & ts.SymbolFlags.Alias ? checker.getImmediateAliasedSymbol(symbol) : undefined;
+    for (const declaration of hop.declarations ?? []) {
+      const specifier = importedFrom(declaration);
+      if (specifier !== undefined) return { file: declaration.getSourceFile(), specifier };
+    }
+    return undefined;
+  }
+  return undefined;
+}
+
+function importedFrom(declaration: ts.Node): ts.StringLiteral | undefined {
+  for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
+    const specifier =
+      (ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier
+        ? node.moduleSpecifier
+        : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
+          ? node.moduleReference.expression
+          : undefined;
+    if (specifier !== undefined) return ts.isStringLiteral(specifier) ? specifier : undefined;
   }
   return undefined;
 }

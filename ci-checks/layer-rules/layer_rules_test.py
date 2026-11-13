@@ -723,25 +723,45 @@ class GoProtocol(unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    WORKFLOW = lr.CI_CHECKS.parent / ".github/workflows/python.yml"
+    WORKFLOWS = lr.CI_CHECKS.parent / ".github/workflows"
 
-    def steps(self):
-        job = self.WORKFLOW.read_text().split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
-        return re.split(r"\n      - (?=name: |&|\*)", job)[1:]
+    def steps(self, language):
+        text = (self.WORKFLOWS / f"{language}.yml").read_text()
+        job = text.split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
+        steps = re.split(r"\n      - (?=name: |&|\*)", job)[1:]
+        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", step, re.M)) else step for step in steps]
+        return names, steps
 
     def test_s21_s22_layer_rules_follows_inline_exemptions_and_blocks_nothing(self):
-        steps = self.steps()
-        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", step, re.M)) else step for step in steps]
-        at = names.index("Inline exemptions")
-        self.assertEqual(names[at + 1], "Layer rules")
-        step = steps[at + 1]
-        self.assertIn("if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}", step)
-        self.assertNotIn("continue-on-error", step)
-        self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
-        self.assertIn("python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)", step)
-        self.assertIn('"$python" -I -S "$RG/layer-rules/layer_rules.py" python --working-directory "$PROJECT_DIR" --base "$BASE_REF"', step)
-        for later in steps[at + 2 :]:
-            self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
+        for language in ("python", "typescript"):
+            with self.subTest(language=language):
+                names, steps = self.steps(language)
+                at = names.index("Inline exemptions")
+                self.assertEqual(names[at + 1], "Layer rules")
+                step = steps[at + 1]
+                self.assertIn("if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}", step)
+                self.assertNotIn("continue-on-error", step)
+                self.assertIn("working-directory: repo\n", step)
+                self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
+                if language == "typescript":
+                    self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
+                self.assertIn(
+                    "python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)",
+                    step,
+                )
+                command = f'"$python" -I -S "$RG/layer-rules/layer_rules.py" {language} --working-directory "$PROJECT_DIR" --base "$BASE_REF"'
+                self.assertIn(command, step)
+                for later in steps[at + 2 :]:
+                    self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
+
+    def test_typescript_scanner_is_installed_and_only_repo_guards_steps_set_the_environment(self):
+        names, steps = self.steps("typescript")
+        tools = steps[names.index("Install the shared tools")]
+        self.assertIn('npm ci --prefix "$RG/typescript/layer-rules" --omit=dev --no-audit --no-fund', tools)
+        writers = [name for name, step in zip(names[: names.index("Layer rules")], steps) if re.search(r"GITHUB_(ENV|PATH)", step)]
+        self.assertEqual(writers, ["Apply the shared .npmrc", "Install the shared tools"])
+        npmrc = (lr.CI_CHECKS / "typescript/.npmrc").read_text().splitlines()
+        self.assertIn("ignore-scripts=true", npmrc)
 
 
 class Docs(unittest.TestCase):

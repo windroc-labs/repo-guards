@@ -4,7 +4,7 @@
 
 Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。`go.mod` 的 `ignore` 指令（Go 1.25 起）让 `./...` 跳过目录，`go.yml` 各步就都不查那里，所以算行内豁免，`go.mod` 进 CODEOWNERS（见 [CODEOWNERS](../README.md#codeowners)）。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
 
-工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译。
+工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译；接口快照的生成器 [`api-snapshot/`](api-snapshot/) 由 API snapshot job 的 Generate 步同样编译（见[接口快照生成](#接口快照生成api-snapshot)）。
 
 ## formatter（gofmt）
 
@@ -105,3 +105,33 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 覆盖率只量单元测试。`unit-tests` 输入写 `go test` 的参数，空格分开，原样传过去：包模式（默认 `./...`），也可以加 `-run=<正则>` 按测试名选。集成测试放在 build tag（如 `//go:build integration`）后面，不参与默认编译；或者不把它们的包列进 `unit-tests`。分片（见[覆盖率](../README.md#覆盖率)）时每片写自己的包模式，如 `"./a/..."`、`"./b/..."`，也可以用 `-run=<正则>` 把一个包按测试名拆成几片；各片的 profile 由 Coverage job 合并。
 
 单元测试只在 Coverage 步里跑一遍，有测试失败这一步就失败；`go.yml` 不另跑测试。带 `// Output:` 的 `Example` 函数也是测试，在选中的包里一起跑。集成测试由 repo 自己的 job 跑。让文件不参与默认构建的 `//go:build`，和 `-coverpkg=./...` 之外的代码（带自己 `go.mod` 的子目录是另一个模块），都不进分母，算行内豁免。
+
+## 接口快照生成（api-snapshot）
+
+[`api-snapshot/`](api-snapshot/) 是[第 4 层](../../architecture/README.md#第-1-项接口快照)第 1 项接口快照的 Go 生成器：一个 Go 小程序，只用标准库，在自己的模块里，`go.mod` 没有 `require`，所以没有 `go.sum`。工具的版本就是本目录的源码加 [`.go-version`](.go-version) 的 Go。`go.yml` 的 API snapshot job 只在设了 `api-snapshot.go` 时装 Go，Generate 步用 `go build` 编译它，在项目目录里跑，把条目写进 `$RUNNER_TEMP/api-entries.json`，交给[接口快照比对](../README.md#接口快照比对)。
+
+| 项 | 内容 |
+|---|---|
+| 构建 | `go list -export -deps ./...`：编译模块里每个包和它的依赖，从编译器写出的 export data（编译后的类型信息）读接口，不读源码。编译不过就退出 2，编译器的报错原样输出 |
+| 单元 | `go list ./...` 找到的包，名字不是 `main`，且有非测试的 Go 文件；`internal/` 下的包也算。`unit` 是包的完整 import path |
+| 条目 | 包里导出的 `const`、`var`、`func`、`type`。导出的类型下还有 `method`（`*T` 方法集里导出的方法，含嵌入带来的）和 `field`（在 `T` 上能选到的导出字段，含嵌入带来的，按 Go 的选择规则），`parent` 是类型名；接口下是它方法集里导出的方法。测试文件、文档注释、文件位置、非导出的名字都不进 |
+| 签名 | 见下表。不写参数名和返回值名，调用方用不到它们；别名都换成它指向的类型，`interface{}` 写成 `any`；别的包的类型名带完整 import path，本包的不带；union 的各项排序；`[T ~int]` 和 `[T interface{~int}]` 写法相同 |
+| 退出码 | 0 写出条目（没有条目时是 `[]`）；2 跑不了：不在模块里、编译不过、export data 读不了、多给了参数 |
+| 测试 | 在该目录跑 `go test ./...`；fixture 在 `testdata/` |
+
+| 种类 | 签名 |
+|---|---|
+| `const` | `const N T`；无类型常量写 `untyped int` 这样的名字。不写值 |
+| `var` | `var N T` |
+| `func` | `func N[P 约束](参数类型) 返回类型` |
+| `type` | `type N[P 约束] <底层类型>`：struct 写 `struct`，不能用 `==` 比较时写 `struct; not comparable`；只有方法的接口写 `interface`，有非导出方法（包外实现不了）时写 `interface; sealed`；别的写完整类型。后面跟实现的接口：`; implements error, …`，只有 `*N` 实现的写 `; *N implements …`。别名写 `type N = <类型>` |
+| `method` | `func (N) M(…) …`；只在 `*N` 的方法集里时写 `func (*N) M(…) …`。泛型类型的方法用类型声明里的类型参数名 |
+| `field` | `Name T`；嵌入的字段写 `embedded T` |
+
+实现的接口只在候选里找：`error`，和各单元里导出的、非泛型、至少有一个方法的普通接口。所以在模块的任何一个包里加一个导出接口，别的包里正好实现它的类型，签名也会变。泛型类型不列实现的接口。
+
+限制：
+
+- 只读 runner 平台（GOOS、GOARCH）上编进来的文件：只在别的平台或别的 build tag 下编译的接口查不到。
+- 非导出类型的成员不进：经由别名（`type P = hidden`）或返回值（`func New() *hidden`）能用到的方法和字段改了，查不到。
+- 用 cgo 的包要 runner 上有 C 编译器，没有就编译不过，退出 2。

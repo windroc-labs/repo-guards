@@ -5,6 +5,7 @@ mod cargo;
 mod render;
 mod rustdoc;
 mod signature;
+mod walk;
 
 use std::ffi::OsString;
 use std::path::PathBuf;

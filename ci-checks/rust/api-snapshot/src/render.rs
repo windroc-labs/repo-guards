@@ -1,6 +1,7 @@
 //! Turns one crate's rustdoc JSON into entries: one per item at each public path.
 
 use crate::signature::Printer;
+use crate::walk::walk;
 use rustdoc_types::{
     Crate, Id, Item, ItemEnum, ItemKind, MacroKind, StructKind, Variant, VariantKind, Visibility,
 };
@@ -55,7 +56,7 @@ struct Renderer<'a> {
     krate: &'a Crate,
     printer: Printer<'a>,
     entries: Vec<Entry>,
-    /// Where each item was first emitted, for an impl's parent.
+    /// Each item's canonical path, for the parent of its impls.
     paths: HashMap<Id, String>,
     /// Impls of the emitted types and traits, in walk order, each once.
     impls: Vec<Id>,
@@ -75,7 +76,35 @@ pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
         impls: Vec::new(),
         seen_impls: HashSet::new(),
     };
-    renderer.module(&krate.root, &[])?;
+    let public = walk(krate)?;
+    let crate_name = renderer.item(&krate.root)?.name.clone().unwrap_or_default();
+    renderer.printer.public = public
+        .canonical
+        .iter()
+        .map(|(id, path)| {
+            (
+                *id,
+                [vec![crate_name.clone()], path.clone()].concat().join("::"),
+            )
+        })
+        .collect();
+    for (path, item) in &public.items {
+        let (name, parent) = path.split_last().expect("a public path has a name");
+        let signature = renderer.signature(item, name)?;
+        renderer.push(
+            kind_name(item.inner.item_kind()),
+            &parent.join("::"),
+            name,
+            signature,
+        );
+        if public.canonical.get(&item.id) == Some(path) {
+            renderer.children(item, path)?;
+        }
+    }
+    for (module, re_export) in &public.external {
+        let (kind, name, signature) = renderer.external(re_export);
+        renderer.push(kind, &module.join("::"), &name, signature);
+    }
     renderer.render_impls()?;
     Ok(renderer.entries)
 }
@@ -98,40 +127,30 @@ impl<'a> Renderer<'a> {
         });
     }
 
-    fn module(&mut self, id: &Id, path: &[String]) -> Result<(), String> {
-        let ItemEnum::Module(module) = &self.item(id)?.inner else {
-            return Err(format!("item {} is not a module", id.0));
-        };
-        for child in &module.items {
-            let item = self.item(child)?;
-            let Some(name) = item.name.clone() else {
-                continue;
-            };
-            if matches!(
-                item.inner,
-                ItemEnum::Use(_) | ItemEnum::Impl(_) | ItemEnum::Primitive(_)
-            ) {
-                continue;
-            }
-            let signature = self.signature(item, &name)?;
-            self.push(
-                kind_name(item.inner.item_kind()),
-                &path.join("::"),
-                &name,
-                signature,
-            );
-            let mut inner = path.to_vec();
-            inner.push(name);
-            self.children(item, &inner)?;
+    /// Another crate's item re-exported here: kind from rustdoc's paths table, as it reports it.
+    fn external(&self, re_export: &rustdoc_types::Use) -> (&'static str, String, String) {
+        if re_export.is_glob {
+            let name = format!("{}::*", re_export.source);
+            return ("use", name.clone(), format!("pub use {name}"));
         }
-        Ok(())
+        let summary = re_export.id.and_then(|id| self.krate.paths.get(&id));
+        let path = summary.map_or_else(|| re_export.source.clone(), |s| s.path.join("::"));
+        let rename = if path.rsplit("::").next() == Some(re_export.name.as_str()) {
+            String::new()
+        } else {
+            format!(" as {}", re_export.name)
+        };
+        (
+            summary.map_or("use", |s| kind_name(s.kind)),
+            re_export.name.clone(),
+            format!("pub use {path}{rename}"),
+        )
     }
 
-    /// What hangs under an item: a module's items, a trait's items, and the impls of types and traits.
+    /// What hangs under an item at its canonical path: a trait's items, and the impls of types and traits.
     fn children(&mut self, item: &'a Item, path: &[String]) -> Result<(), String> {
         self.paths.entry(item.id).or_insert_with(|| path.join("::"));
         let impls = match &item.inner {
-            ItemEnum::Module(_) => return self.module(&item.id, path),
             ItemEnum::Struct(s) => &s.impls,
             ItemEnum::Enum(e) => &e.impls,
             ItemEnum::Union(u) => &u.impls,

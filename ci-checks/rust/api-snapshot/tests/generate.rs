@@ -423,3 +423,101 @@ fn signature_rendering() {
         );
     }
 }
+
+#[test]
+fn reexports_keys_unique() {
+    let run = generate("reexports", "reexports");
+    let entries = run.entries();
+    assert_keys_unique(&entries);
+    assert!(!run.text().contains("private"), "{}", run.text());
+    assert!(!run.text().contains("globbed"), "{}", run.text());
+    assert_eq!(
+        signature(&entries, "struct", "", "Hidden"),
+        "pub struct Hidden(pub u8)"
+    );
+    assert_eq!(
+        signature(&entries, "function", "impl reexports::Hidden", "get"),
+        "pub fn get(&self) -> u8"
+    );
+    assert_eq!(
+        signature(&entries, "impl", "Hidden", "impl reexports::Hidden"),
+        "impl reexports::Hidden"
+    );
+    assert_eq!(
+        signature(&entries, "function", "", "build"),
+        "pub fn build() -> reexports::Hidden"
+    );
+    assert_eq!(
+        signature(&entries, "struct", "", "Twice"),
+        "pub struct Twice"
+    );
+    assert_eq!(
+        signature(&entries, "struct", "public", "Twice"),
+        "pub struct Twice"
+    );
+    assert_eq!(
+        signature(&entries, "function", "public", "takes"),
+        "pub fn takes(&reexports::Twice)"
+    );
+    assert_eq!(
+        signature(
+            &entries,
+            "impl",
+            "Twice",
+            "impl core::marker::Send for reexports::Twice"
+        ),
+        "impl core::marker::Send for reexports::Twice"
+    );
+    assert_eq!(
+        signature(&entries, "struct", "", "FromGlob"),
+        "pub struct FromGlob"
+    );
+    assert!(signature(&entries, "trait", "", "Debug").starts_with("pub use core::fmt::"));
+    assert!(signature(&entries, "proc_derive", "", "Debug").starts_with("pub use core::fmt::"));
+    assert_eq!(
+        signature(&entries, "use", "prelude", "core::fmt::*"),
+        "pub use core::fmt::*"
+    );
+    assert_eq!(
+        signature(&entries, "use", "prelude", "core::ops::*"),
+        "pub use core::ops::*"
+    );
+    assert_eq!(signature(&entries, "module", "", "root"), "pub mod root");
+    assert!(
+        entries
+            .iter()
+            .all(|e| !e["parent"].as_str().unwrap().starts_with("root")),
+        "{entries:#?}"
+    );
+}
+
+#[test]
+fn doc_change_and_move_are_identical() {
+    let old = generate("moved_v1", "moved-old");
+    let new = generate("moved_v2", "moved-new");
+    assert_eq!(old.text(), new.text());
+    assert_eq!(
+        signature(&new.entries(), "function", "", "open"),
+        "pub fn open(&moved::Config) -> u8"
+    );
+
+    let (_, _, snapshot) = compare(
+        &old.output,
+        &temp("moved-none").join("none.json"),
+        "moved-first",
+    );
+    let snapshot_file = temp("moved-snapshot").join("api-rust.json");
+    fs::write(&snapshot_file, snapshot.unwrap()).unwrap();
+    let (code, log, _) = compare(&new.output, &snapshot_file, "moved-second");
+    assert_eq!(code, 0, "{log}");
+}
+
+#[test]
+fn two_runs_byte_identical() {
+    let first = generate("reexports", "twice-first").text();
+    let second = generate("reexports", "twice-second").text();
+    assert_eq!(first, second);
+    let root = fixture("reexports");
+    assert!(!first.contains(root.to_str().unwrap()));
+    assert!(!first.contains(std::env::temp_dir().to_str().unwrap()));
+}

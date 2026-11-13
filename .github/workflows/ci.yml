@@ -177,6 +177,11 @@ jobs:
         with:
           go-version-file: repo/ci-checks/go/.go-version
           cache: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
       - name: Scanner tests
         id: scanner
         if: ${{ !cancelled() }}
@@ -248,6 +253,14 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/api-snapshot
         run: python3 -m unittest api_snapshot_test snapshot_artifact_test
+      - name: Python API snapshot tests
+        id: python-api-snapshot
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/api-snapshot
+        run: |
+          uv venv -q --python 3.14 "$RUNNER_TEMP/python-api-venv"
+          uv pip install -q --python "$RUNNER_TEMP/python-api-venv/bin/python" --require-hashes -r requirements.txt
+          "$RUNNER_TEMP/python-api-venv/bin/python" -m unittest python_api_test
       - name: shard-artifact tests
         id: shard-artifact
         if: ${{ !cancelled() }}
@@ -327,6 +340,7 @@ jobs:
           GO_COVERAGE_PROFILE: ${{ steps.go-coverage-profile.outcome }}
           LANGUAGE_GATE: ${{ steps.language-gate.outcome }}
           API_SNAPSHOT: ${{ steps.api-snapshot.outcome }}
+          PYTHON_API_SNAPSHOT: ${{ steps.python-api-snapshot.outcome }}
           SHARD_ARTIFACT: ${{ steps.shard-artifact.outcome }}
           RUST_COVERAGE_LCOV: ${{ steps.rust-coverage-lcov.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
@@ -339,7 +353,7 @@ jobs:
           PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

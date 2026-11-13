@@ -795,6 +795,11 @@ class Docs(unittest.TestCase):
         arch = (self.ROOT / "architecture/README.md").read_text()
         self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
         self.assertIn("\n### 第 2 项分层规则\n", arch)
+        rust = "| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、"
+        self.assertIn(rust, ci)
+        self.assertIn("现在 `python.yml` 和 `rust.yml` 有这一步。", arch)
+        self.assertIn("\n- 什么算 import（Rust）：", arch)
+        self.assertIn("`ci-checks/rust/layer-rules/` 跑 `cargo test --locked`", arch)
 
 
 class Output(unittest.TestCase):

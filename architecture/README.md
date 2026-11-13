@@ -42,7 +42,7 @@
 
 ### 第 2 项分层规则
 
-由语言 workflow 的 Checks job 里的 Layer rules 步跑，紧跟 Inline exemptions，`ci.yml` 不用改。现在只有 `python.yml` 有这一步。
+由语言 workflow 的 Checks job 里的 Layer rules 步跑，紧跟 Inline exemptions，`ci.yml` 不用改。现在 `python.yml` 和 `rust.yml` 有这一步。
 
 - 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节写 `layers`，测试代码写进 `test-paths`（见[覆盖默认配置](../ci-checks/README.md#覆盖默认配置)）。没写 `layers`，或没有本语言的层时，这一步打印一行提示，列出设了 `layers` 的项目键，然后通过。
 
@@ -56,11 +56,19 @@ layers = [
 ]
 ```
 
-- 配置：`layers` 从上层到下层排。`paths`、`exit`、`test-paths` 都相对 `working-directory`；glob 里 `**` 跨目录，`*` 不跨。`exit` 是层的出口，一个路径：Python 是模块文件或包目录（指它的 `__init__.py`），包目录下的 Python 文件都要被本层 `paths` 匹配。一层属于它的 `exit` 的语言，每种语言按列出的顺序只取自己的层，所以一个 `layers` 里可以有几种语言各一套；别的语言的层不看，写错了也不让本语言这一步失败。`exit` 不存在、看不出是哪种语言的层，每种语言都报错。Python 的层 `paths` 要在 `source-dirs` 里。配置无效时退出 2，写明层名和键：一个文件被同一语言的两层匹配；`exit` 不存在、不是 Rust、Python、TypeScript 或 Go 的模块、不被本层 `paths` 匹配、在 `test-paths` 里、不是一个字符串；层名重复；层里有未知键；路径为空、是绝对路径或带 `..`。
-- 规则：每次运行只查本 `working-directory` 下本语言的文件，只判起点和终点都在层里、都不是测试代码的 import。第 N 层到第 N+1 层只能 import 它的出口，否则是"绕开出口"；到第 N+2 层及更下层是"越层"；到上层是"向上"；同一层随便 import，但同一层文件之间的 import 环是"循环"。终点在项目里但不属于任何层的计入"未归层"数，不失败；标准库和第三方包不管。
+- 配置：`layers` 从上层到下层排。`paths`、`exit`、`test-paths` 都相对 `working-directory`；glob 里 `**` 跨目录，`*` 不跨。`exit` 是层的出口，一个路径：Python 是模块文件或包目录（指它的 `__init__.py`），包目录下的 Python 文件都要被本层 `paths` 匹配；Rust 是模块文件，如 `src/core/mod.rs`。一层属于它的 `exit` 的语言，每种语言按列出的顺序只取自己的层，所以一个 `layers` 里可以有几种语言各一套；别的语言的层不看，写错了也不让本语言这一步失败。`exit` 不存在、看不出是哪种语言的层，每种语言都报错。Python 的层 `paths` 要在 `source-dirs` 里。配置无效时退出 2，写明层名和键：一个文件被同一语言的两层匹配；`exit` 不存在、不是 Rust、Python、TypeScript 或 Go 的模块、不被本层 `paths` 匹配、在 `test-paths` 里、不是一个字符串；层名重复；层里有未知键；路径为空、是绝对路径或带 `..`。
+- 规则：每次运行只查本 `working-directory` 下本语言的文件，只判起点和终点都在层里、都不是测试代码的 import。第 N 层到第 N+1 层只能 import 它的出口，否则是"绕开出口"；到第 N+2 层及更下层是"越层"；到上层是"向上"；同一层随便 import，但同一层文件之间的 import 环是"循环"。终点在项目里但不属于任何层的，和 `working-directory` 之外的 crate，都计入"未归层"数，不失败；标准库和第三方包不管。
 - 什么算 import（Python）：所有 `import`、`from … import` 语句，在函数里、`if TYPE_CHECKING:` 下的也算；`importlib.import_module`、`__import__` 不算。模块按 `source-dirs` 和相对 import 解析到项目里的文件；`from 包 import 名字` 里名字是子模块时算那个子模块，否则算包的 `__init__.py`。一个语句算 1 条，指向几个文件时每个文件各 1 条。只用 `ast` 解析，不 import、不执行项目代码；解释器是 uv 自己装的 Python 3.14，在 `/` 下查找（在检出目录里查找时，uv 会运行项目的 `.venv` 里的 python，连带它的 `.pth` 文件），带 `-I -S` 运行，不读 site-packages；CI 里装在这一步自己的目录（`UV_PYTHON_INSTALL_DIR`），前面的 Install 步按项目的 uv 配置装进共用目录的 Python 不会被选中。
+- 什么算 import（Rust）：
+  - 每个 `use`（含 `pub use`）、`extern crate` 算 1 条，一个 `use` 的分组指向几个文件时每个文件各 1 条。
+  - 不经 `use` 的完整路径每处算 1 条，如 `crate::core::inner::f()`：两段以上，以 `crate`、`self`、`super`、`::`、子模块名或依赖的 crate 名开头。以 `use` 引入的名字开头的路径，走到 `use` 指向的文件之外才算，如 `use crate::core;` 之后的 `core::inner::f()`。
+  - 不算：`mod x;` 声明，属性（`#[…]`）和可见性（`pub(crate)`）里的路径，宏里的代码。
+  - `#[cfg(test)]`（含 `cfg(all(test, …))`）的项和语句、`#![cfg(test)]` 的文件是测试代码，不查。`#[cfg(test)] mod x;` 指向的文件只在声明它的文件在层里时才算测试代码。
+  - 路径按 Cargo 的布局解析到模块文件：`crate::a::b` 是 crate 根文件所在目录下的 `a/b.rs` 或 `a/b/mod.rs`，没有就往短里找；行内模块算所在文件，`#[path]` 不看。
+  - 别的 crate 按 `Cargo.toml` 里带 `path` 的依赖解析，含 `workspace = true` 和 `package` 改名。`working-directory` 之外的 crate 算未归层，标准库和 registry 上的 crate 不管。
+  - 只用 `syn` 解析，不构建、不运行项目代码。扫描器是 repo-guards 自己的 crate，`cargo run --release` 在 `/` 下构建并运行它；工具链用这个 job 的 `RUSTUP_TOOLCHAIN`，没设时用 repo-guards 固定的版本。
 - 只挡新增：HEAD 和它与 `BASE_REF` 的 merge-base 各算一次，两边都用 HEAD 的配置；两边的文件都从 git 对象读，不读工作区，符号链接和 submodule 不读。绕开出口、越层、向上按（发起文件、目标文件）比条数，HEAD 比 merge-base 多就失败，相等或减少都通过；改名或移动过的文件在 merge-base 一边是 0 条。循环看边：一个环里有 merge-base 没有的边（发起文件、目标文件）才失败，已有的边上再加 import 不算。
 - 输出：条数增加的文件对，HEAD 上它的每处引用一条 `::error` 注解，写明规则、起止层名、两边的条数和要减到不超过几条，绕开出口的还写应走的出口。新环里每条新边的每处引用一条"循环"注解，写出从这条边的终点起、按 import 方向的整个环。job summary 列出所有违反层规则的文件对（含条数减少和减到 0 的）、新增的循环边数和未归层 import 数。
 - 退出码：0 通过；1 有新增违规；2 配置无效、HEAD 上层里的文件解析不了（写明文件）或跑不了。merge-base 上层里的文件解析不了时只打印提示，那个文件在 merge-base 一边当作没有 import。失败不挡同一 job 后面的步。
-- 本地：跑过 `fetch_ci_checks.py` 后，在 repo 根目录跑 `python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)`，再跑 `"$python" -I -S .repo-guards/ci-checks/layer-rules/layer_rules.py python --working-directory <working-directory>`，同 CI 的这一步（CI 另设 `UV_PYTHON_INSTALL_DIR`）。`--base` 默认是 `origin/HEAD`；给和 CI 的 `BASE_REF` 同一个 commit 时，输出和退出码同 CI。工作区有未提交的改动时先提示，检查的仍是 HEAD commit。
-- 实现：共用部分 [`ci-checks/layer-rules/layer_rules.py`](../ci-checks/layer-rules/layer_rules.py)（只用标准库）读配置、读两边的文件、判定、输出；各语言的扫描器只报每个 import 语句解析到的项目文件（Go 可以报包目录，按包里第一个不是测试代码的文件判层；一个包的文件分在两层算配置无效），解析要读的文件（`go.mod`、`tsconfig*.json`、`Cargo.toml`）由共用部分一起交给它，协议写在 Python 扫描器 [`ci-checks/python/layer-rules/imports.py`](../ci-checks/python/layer-rules/imports.py) 的开头。测试：`ci-checks/layer-rules/` 跑 `python3 -m unittest layer_rules_test`，`ci-checks/python/layer-rules/` 跑 `python3 -m unittest imports_test`。
+- 本地：跑过 `fetch_ci_checks.py` 后，在 repo 根目录跑 `python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)`，再跑 `"$python" -I -S .repo-guards/ci-checks/layer-rules/layer_rules.py <语言> --working-directory <working-directory>`，同 CI 的这一步（CI 另设 `UV_PYTHON_INSTALL_DIR`）。`<语言>` 是 `python` 或 `rust`；`rust` 要装好 cargo。`--base` 默认是 `origin/HEAD`；给和 CI 的 `BASE_REF` 同一个 commit 时，输出和退出码同 CI。工作区有未提交的改动时先提示，检查的仍是 HEAD commit。
+- 实现：共用部分 [`ci-checks/layer-rules/layer_rules.py`](../ci-checks/layer-rules/layer_rules.py)（只用标准库）读配置、读两边的文件、判定、输出；各语言的扫描器只报每个 import 语句解析到的项目文件（`working-directory` 之外的 crate 报成以 `../` 开头的目录，算未归层；Go 可以报包目录，按包里第一个不是测试代码的文件判层；一个包的文件分在两层算配置无效），解析要读的文件（`go.mod`、`tsconfig*.json`、`Cargo.toml`）由共用部分一起交给它，协议写在 Python 扫描器 [`ci-checks/python/layer-rules/imports.py`](../ci-checks/python/layer-rules/imports.py) 的开头。Rust 扫描器在 [`ci-checks/rust/layer-rules/`](../ci-checks/rust/layer-rules/src/main.rs)。测试：`ci-checks/layer-rules/` 跑 `python3 -m unittest layer_rules_test`（Rust 的场景要有 cargo），`ci-checks/python/layer-rules/` 跑 `python3 -m unittest imports_test`，`ci-checks/rust/layer-rules/` 跑 `cargo test --locked`。

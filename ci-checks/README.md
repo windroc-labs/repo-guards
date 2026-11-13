@@ -441,3 +441,35 @@ reason = "只在 feature full 下用到"
 例外：PR 在 `.github/` 下只改了 `.github/checks/repo-guards.toml`，且这个文件和 merge-base 比只差 `["ci-checks/inline-exemptions/settings.toml"]` 节的 `exemption` 时，可以同时改别的文件：加或删豁免的代码和它的登记要一起合（见[行内豁免](#行内豁免)）。测试：在 `github-dir-pr/` 跑 `python3 -m unittest github_dir_pr_test`。
 
 为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
+
+### 接口快照比对
+
+[第 4 层](../architecture/README.md)第 1 项接口快照的比对部分，四个语言 workflow 共用：[`api-snapshot/api_snapshot.py`](api-snapshot/api_snapshot.py)（只用标准库，要 Python 3.11 及以上）。各语言的生成器把公开接口写成条目文件，脚本拿它和锁住的快照逐条比对。
+
+```
+api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新快照> --artifact <artifact 名字> --path <配置的路径>
+```
+
+`--snapshot` 可以不存在，脚本只读它，从不改写它。`--artifact`、`--path` 只写进输出，告诉 worker 新快照在哪个 artifact、该放到 repo 的哪个路径。
+
+- 条目：一个 JSON 对象，恰好五个字符串字段：`unit`（所属单元）、`parent`（上级条目，没有上级为 `""`）、`kind`（种类）、`name`（名字）、`signature`（完整签名）。`parent` 写什么由各语言的生成器定。键是（`unit`、`parent`、`kind`、`name`），同一份文件里不能重复。
+- 条目文件：生成器的输出，条目组成的 JSON 数组，顺序不限。
+- 快照文件：也是条目组成的 JSON 数组，第 7 项照这个形状读。条目按键排序（依次比 `unit`、`parent`、`kind`、`name`，按 Unicode 码位），字段按 `unit`、`parent`、`kind`、`name`、`signature` 的顺序，缩进 2 格，非 ASCII 字符原样写，UTF-8，以换行结尾；没有条目时是 `[]`。同样的条目写出来逐字节相同。读的时候只看内容，顺序或缩进不同的快照照样能比。
+
+```json
+[
+  {
+    "unit": "mypkg",
+    "parent": "",
+    "kind": "function",
+    "name": "open",
+    "signature": "def open(path: str) -> int"
+  }
+]
+```
+
+- 比对：按键比，不靠数个数。条目文件里有、快照里没有的键是"多"；快照里有、条目文件里没有的是"少"；两边都有、签名不同的是"变"。
+- 退出码：0 一致；1 不一致，或快照文件不存在；2 跑不了：条目文件或快照文件读不了、不是合法 JSON、形状不对（不是数组，或条目不是恰好那五个字符串字段）、键重复，新快照或 summary 写不了，参数不对，或别的意外错误。
+- 输出：log 先给一行各类的条数，再按多、少、变的顺序，每类按键序逐条列出；"变"给旧签名和新签名。设了 `$GITHUB_STEP_SUMMARY` 时，job summary 里列同样的内容。不一致或快照文件不存在时，把完整的新快照写到 `--output`，log 和 summary 写明 artifact 名字和该放的路径；快照文件不存在时只给条数，不逐条列。一致时不写新快照。
+- 转义：条目来自 PR 的代码，快照文件的内容也当作不可信。log 里的名字、签名、路径都写成 JSON 字符串，`#` 也转义成 `#`，所以 log 里没有以 `::` 开头的行（workflow 命令），也没有 runner 在行中也认的旧命令格式 `##[`。summary 里它们放在代码块里，显示原文，不渲染成链接、表格或其他 Markdown；代码块的围栏比内容里最长的一串反引号多一个，内容关不掉它。
+- 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test`。

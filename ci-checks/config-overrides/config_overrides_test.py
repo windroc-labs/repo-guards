@@ -563,6 +563,50 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", (self.WORKFLOWS / f"{language}.yml").read_text())
 
 
+class ScopeDocsTest(unittest.TestCase):
+    """The README is the contract the four language generators implement."""
+
+    ROOT = CI_CHECKS.parent
+
+    def section(self, text: str, heading: str) -> str:
+        return text.split(f"\n{heading}\n", 1)[1].split("\n### ", 1)[0]
+
+    def test_setting_is_documented_with_the_path(self) -> None:
+        ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
+        overrides = self.section(ci, "### 覆盖默认配置")
+        self.assertIn("  - `api-snapshot-scope.<语言>`：", overrides)
+        self.assertIn('api-snapshot-scope.rust = ["kvm_op::driver"]', overrides)
+        self.assertIn("`snapshot-scope ROOT WORKING_DIRECTORY 语言`", overrides)
+        for workflow in ("rust.yml", "python.yml"):
+            self.assertIn(f"| `{workflow}` |", ci)
+        self.assertEqual(ci.count("API snapshot（Read the snapshot settings、"), 2)
+        self.assertNotIn("Read the snapshot path", ci)
+
+    def test_generator_contract(self) -> None:
+        ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
+        contract = self.section(ci, "#### 冻结范围")
+        self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
+        self.assertIn("没设或为空", contract)
+        self.assertIn("退出 2", contract)
+        for language in ("Rust", "Python", "Go", "TypeScript"):
+            self.assertIn(f"- {language}：", contract)
+
+    def test_rust_impl_rules(self) -> None:
+        contract = self.section((self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8"), "#### 冻结范围")
+        # Blocker 1: a foreign trait on &LocalType belongs to LocalType's module.
+        self.assertIn("`impl core::fmt::Display for &kvm_op::driver::Id`", contract)
+        self.assertIn("去掉 `&`、`&mut`、`*const`、`*mut`", contract)
+        # Blocker 2: an impl whose self type and trait are both foreign.
+        self.assertIn("`impl core::convert::From<kvm_op::driver::Id> for u32`", contract)
+        self.assertIn("头里一个本地路径都没有的 impl 总在范围内", contract)
+
+    def test_architecture_item_points_at_the_setting(self) -> None:
+        arch = (self.ROOT / "architecture/README.md").read_text(encoding="utf-8")
+        item = self.section(arch, "### 第 1 项接口快照")
+        self.assertIn("`api-snapshot-scope.<语言>`", item)
+        self.assertIn("(../ci-checks/README.md#冻结范围)", item)
+
+
 class GetTest(unittest.TestCase):
     def file(self, name: str, text: str) -> str:
         tmp = tempfile.TemporaryDirectory()

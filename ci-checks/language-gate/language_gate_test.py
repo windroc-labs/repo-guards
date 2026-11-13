@@ -3,15 +3,19 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from language_gate import PATTERNS, PRETTIER, main, prettier_files, touches
+import prettier_files
+from language_gate import PATTERNS, PRETTIER, main, touches
 
-CI_CHECKS = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parent
+CI_CHECKS = HERE.parent
 INLINE_EXEMPTIONS = CI_CHECKS / "inline-exemptions/inline_exemptions.py"
 
 MATCHES = {
@@ -79,15 +83,67 @@ class Prettier(unittest.TestCase):
     def test_prettier_files_merges_every_language(self):
         info = {"languages": [{"extensions": [".b", ".a"], "filenames": ["Z"]}, {"extensions": [".a"]}, {}]}
         expected = {"prettier": "1.0.0", "extensions": [".a", ".b"], "filenames": ["Z"]}
-        self.assertEqual(prettier_files("1.0.0", info), expected)
+        self.assertEqual(prettier_files.prettier_files("1.0.0", info), expected)
 
-    def test_cli_writes_the_list_from_support_info_on_stdin(self):
-        out = io.StringIO()
-        info = '{"languages": [{"extensions": [".md"], "filenames": ["README"]}]}'
-        with mock.patch("sys.stdin", io.StringIO(info)), contextlib.redirect_stdout(out):
-            self.assertEqual(main(["prettier-files", "3.0.0"]), 0)
-        expected = {"prettier": "3.0.0", "extensions": [".md"], "filenames": ["README"]}
-        self.assertEqual(json.loads(out.getvalue()), expected)
+    def test_gate_has_no_generator_subcommand(self):
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["prettier-files", "3.0.0"]), 2)
+
+
+class Regenerate(unittest.TestCase):
+    """The documented command, `npx prettier@<v> --support-info | python3 prettier_files.py <v>`.
+
+    It runs a copy of the script alone in a temp dir, so it cannot import language_gate, which reads the file.
+    """
+
+    COMMITTED = (HERE / "prettier-files.json").read_bytes()
+
+    def setUp(self):
+        self.dir = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.dir)
+        shutil.copy(HERE / "prettier_files.py", self.dir)
+        self.output = self.dir / "prettier-files.json"
+
+    def regenerate(self, stdin: str, *args: str) -> subprocess.CompletedProcess:
+        script = self.dir / "prettier_files.py"
+        return subprocess.run([sys.executable, str(script), *args], input=stdin, capture_output=True, text=True)
+
+    def committed_support_info(self) -> tuple[str, str]:
+        record = json.loads(self.COMMITTED)
+        info = {"languages": [{"extensions": record["extensions"], "filenames": record["filenames"]}]}
+        return record["prettier"], json.dumps(info)
+
+    def test_reproduces_the_committed_file_byte_for_byte_whatever_its_current_state(self):
+        version, info = self.committed_support_info()
+        for state in ("present", "empty", "malformed", "missing"):
+            with self.subTest(state=state):
+                if state == "missing":
+                    self.output.unlink(missing_ok=True)
+                else:
+                    self.output.write_bytes({"present": self.COMMITTED, "empty": b"", "malformed": b"{"}[state])
+                result = self.regenerate(info, version)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.output.read_bytes(), self.COMMITTED)
+
+    def test_written_file_is_readable_by_everyone(self):
+        version, info = self.committed_support_info()
+        self.assertEqual(self.regenerate(info, version).returncode, 0)
+        self.assertEqual(self.output.stat().st_mode & 0o644, 0o644)
+
+    def test_bad_support_info_fails_and_keeps_the_file(self):
+        self.output.write_bytes(self.COMMITTED)
+        for stdin in ("", "{", '{"no": "languages"}'):
+            with self.subTest(stdin=stdin):
+                self.assertNotEqual(self.regenerate(stdin, "3.0.0").returncode, 0)
+                self.assertEqual(self.output.read_bytes(), self.COMMITTED)
+                self.assertEqual(sorted(path.name for path in self.dir.iterdir()), ["prettier-files.json", "prettier_files.py"])
+
+    def test_wrong_arguments_exit_2_and_keep_the_file(self):
+        self.output.write_bytes(self.COMMITTED)
+        for args in ((), ("1", "2")):
+            with self.subTest(args=args):
+                self.assertEqual(self.regenerate("{}", *args).returncode, 2)
+                self.assertEqual(self.output.read_bytes(), self.COMMITTED)
 
 
 class Cli(unittest.TestCase):

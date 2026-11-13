@@ -8,9 +8,8 @@ from pathlib import Path
 # A glob starting with / is rooted at the repo root; any other matches at any depth. fnmatch's * also matches /.
 # Over-matching only runs checks that could have been skipped; missing a file skips checks that should run.
 SHARED = ("/.github/workflows/*", "/.github/checks/*")
-# Made by `prettier-files` from the support info of the prettier that typescript/package.json pins.
-PRETTIER_FILES = Path(__file__).resolve().parent / "prettier-files.json"
-PRETTIER = json.loads(PRETTIER_FILES.read_text())
+# Made by prettier_files.py from the support info of the prettier that typescript/package.json pins.
+PRETTIER = json.loads((Path(__file__).resolve().parent / "prettier-files.json").read_text())
 PATTERNS = {
     "python": (
         "*.py",
@@ -93,24 +92,9 @@ def changed(base: str) -> list[str]:
     return [name for name in result.stdout.decode(errors="surrogateescape").split("\0") if name]
 
 
-def prettier_files(version: str, support_info: dict) -> dict:
-    languages = support_info["languages"]
-    return {
-        "prettier": version,
-        "extensions": sorted({extension for language in languages for extension in language.get("extensions", [])}),
-        "filenames": sorted({name for language in languages for name in language.get("filenames", [])}),
-    }
-
-
 def main(argv: list[str]) -> int:
-    if len(argv) == 2 and argv[0] == "prettier-files":
-        # npx prettier@<version> --support-info | python3 language_gate.py prettier-files <version>
-        #   > prettier-files.json
-        print(json.dumps(prettier_files(argv[1], json.load(sys.stdin)), indent=2))
-        return 0
     if len(argv) != 2:
-        usage = f"language_gate.py {{{'|'.join(PATTERNS)}}} BASE  (run from the repo root)"
-        print(f"usage: {usage}\n       language_gate.py prettier-files VERSION < SUPPORT_INFO", file=sys.stderr)
+        print(f"usage: language_gate.py {{{'|'.join(PATTERNS)}}} BASE  (run from the repo root)", file=sys.stderr)
         return 2
     language, base = argv
     if language not in PATTERNS:

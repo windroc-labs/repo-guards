@@ -1,9 +1,54 @@
 //! Finds every public path of the crate's items: through public modules and `pub use` re-exports,
 //! breadth-first, so each item's first path is its shortest (its canonical path).
 
-use crate::render::kind_name;
-use rustdoc_types::{Crate, Id, Item, ItemEnum, Use};
+use crate::rustdoc::{item, kind_name};
+use rustdoc_types::{Crate, Id, Item, ItemEnum, ItemKind, StructKind, Use};
 use std::collections::{HashMap, HashSet};
+
+/// Rust's namespaces, as bits: one name can be bound once in each.
+const TYPE: u8 = 1;
+const VALUE: u8 = 2;
+const MACRO: u8 = 4;
+
+/// The namespaces a binding of this kind takes. A unit or tuple struct is also a value (its
+/// constructor); another crate's struct (no item to look at) is taken to be one, so it shadows both.
+fn namespaces(kind: ItemKind, item: Option<&Item>) -> u8 {
+    match kind {
+        ItemKind::Struct => match item.map(|i| &i.inner) {
+            Some(ItemEnum::Struct(s)) if matches!(s.kind, StructKind::Plain { .. }) => TYPE,
+            _ => TYPE | VALUE,
+        },
+        ItemKind::Variant => TYPE | VALUE,
+        ItemKind::Module
+        | ItemKind::ExternCrate
+        | ItemKind::Union
+        | ItemKind::Enum
+        | ItemKind::TypeAlias
+        | ItemKind::Trait
+        | ItemKind::TraitAlias
+        | ItemKind::ExternType
+        | ItemKind::AssocType
+        | ItemKind::Primitive
+        | ItemKind::Keyword => TYPE,
+        ItemKind::Function
+        | ItemKind::Constant
+        | ItemKind::Static
+        | ItemKind::AssocConst
+        | ItemKind::StructField => VALUE,
+        ItemKind::Macro | ItemKind::ProcAttribute | ItemKind::ProcDerive | ItemKind::Attribute => {
+            MACRO
+        }
+        ItemKind::Use | ItemKind::Impl => 0,
+    }
+}
+
+/// rustdoc's kind for a re-exported item of another crate, or `use` when rustdoc does not know it.
+pub fn external_kind(krate: &Crate, re_export: &Use) -> &'static str {
+    match re_export.id.and_then(|id| krate.paths.get(&id)) {
+        Some(summary) if !re_export.is_glob => kind_name(summary.kind),
+        _ => "use",
+    }
+}
 
 enum Binding<'a> {
     Local(&'a Item),
@@ -14,8 +59,8 @@ enum Binding<'a> {
 pub struct Public<'a> {
     /// Each (public path, item) pair once, shortest paths first.
     pub items: Vec<(Vec<String>, &'a Item)>,
-    /// Re-exports of other crates' items, with the path of the module re-exporting them.
-    pub external: Vec<(Vec<String>, &'a Use)>,
+    /// Re-exports of other crates' items: the re-exporting module's path, the `use`, its kind.
+    pub external: Vec<(Vec<String>, &'a Use, &'static str)>,
     /// Each reachable item's canonical path; the crate root's is empty.
     pub canonical: HashMap<Id, Vec<String>>,
 }
@@ -26,10 +71,7 @@ struct Walker<'a> {
 
 impl<'a> Walker<'a> {
     fn item(&self, id: &Id) -> Result<&'a Item, String> {
-        self.krate
-            .index
-            .get(id)
-            .ok_or_else(|| format!("rustdoc JSON has no item {}", id.0))
+        item(self.krate, id)
     }
 
     fn local(&self, id: Option<Id>) -> Option<&'a Item> {
@@ -37,8 +79,10 @@ impl<'a> Walker<'a> {
             .filter(|item| item.crate_id == 0)
     }
 
-    /// The names a module binds, with each binding's kind, sorted. A name bound explicitly shadows
-    /// the same name and kind from a glob; between globs, the first by source path wins.
+    /// The names a module binds, with each binding's kind, sorted by name and kind. A name bound
+    /// explicitly shadows a glob's binding of that name in the same namespace, as in Rust; between
+    /// globs, the first by source path wins. An external re-export whose kind rustdoc does not know
+    /// takes every namespace.
     fn bindings(
         &self,
         module: &Id,
@@ -48,30 +92,42 @@ impl<'a> Walker<'a> {
             return Err(format!("item {} is not a module", module.0));
         };
         let mut bound = Vec::new();
+        let mut taken: HashMap<String, u8> = HashMap::new();
         let mut globs = Vec::new();
         for id in &m.items {
             let item = self.item(id)?;
-            match &item.inner {
-                ItemEnum::Use(u) if u.is_glob => globs.push(u),
-                ItemEnum::Use(u) => match self.local(u.id) {
-                    Some(target) => bound.push((
-                        u.name.clone(),
-                        kind_name(target.inner.item_kind()),
-                        Binding::Local(target),
-                    )),
-                    None => bound.push((u.name.clone(), "use", Binding::External(u))),
-                },
-                ItemEnum::Impl(_) | ItemEnum::Primitive(_) => {}
-                _ => {
-                    if let Some(name) = &item.name {
-                        bound.push((
-                            name.clone(),
-                            kind_name(item.inner.item_kind()),
-                            Binding::Local(item),
-                        ));
-                    }
+            let (name, target) = match &item.inner {
+                ItemEnum::Use(u) if u.is_glob => {
+                    globs.push(u);
+                    continue;
                 }
-            }
+                ItemEnum::Use(u) => (u.name.clone(), self.local(u.id)),
+                ItemEnum::Impl(_) | ItemEnum::Primitive(_) => continue,
+                _ => match &item.name {
+                    Some(name) => (name.clone(), Some(item)),
+                    None => continue,
+                },
+            };
+            let (kind, spaces, binding) = match (target, &item.inner) {
+                (Some(target), _) => {
+                    let kind = target.inner.item_kind();
+                    (
+                        kind_name(kind),
+                        namespaces(kind, Some(target)),
+                        Binding::Local(target),
+                    )
+                }
+                (None, ItemEnum::Use(u)) => {
+                    let spaces = match u.id.and_then(|id| self.krate.paths.get(&id)) {
+                        Some(summary) => namespaces(summary.kind, None),
+                        None => TYPE | VALUE | MACRO,
+                    };
+                    (external_kind(self.krate, u), spaces, Binding::External(u))
+                }
+                (None, _) => continue,
+            };
+            *taken.entry(name.clone()).or_default() |= spaces;
+            bound.push((name, kind, binding));
         }
         globs.sort_by(|a, b| a.source.cmp(&b.source));
         for glob in globs {
@@ -81,9 +137,22 @@ impl<'a> Walker<'a> {
                         continue;
                     }
                     for (name, kind, binding) in self.bindings(&target.id, globbed)? {
-                        if !bound.iter().any(|(n, k, _)| *n == name && *k == kind) {
-                            bound.push((name, kind, binding));
+                        let spaces = match &binding {
+                            Binding::Local(item) => namespaces(item.inner.item_kind(), Some(item)),
+                            Binding::External(u) => {
+                                match u.id.and_then(|id| self.krate.paths.get(&id)) {
+                                    Some(summary) if !u.is_glob => namespaces(summary.kind, None),
+                                    _ if u.is_glob => 0,
+                                    _ => TYPE | VALUE | MACRO,
+                                }
+                            }
+                        };
+                        let taken = taken.entry(name.clone()).or_default();
+                        if spaces != 0 && spaces & !*taken == 0 {
+                            continue;
                         }
+                        *taken |= spaces;
+                        bound.push((name, kind, binding));
                     }
                 }
                 _ => bound.push((
@@ -114,7 +183,11 @@ pub fn walk(krate: &Crate) -> Result<Public<'_>, String> {
         for (module, path) in level {
             for (name, _, binding) in walker.bindings(&module, &mut HashSet::from([module]))? {
                 match binding {
-                    Binding::External(u) => public.external.push((path.clone(), u)),
+                    Binding::External(u) => {
+                        public
+                            .external
+                            .push((path.clone(), u, external_kind(krate, u)))
+                    }
                     Binding::Local(item) => {
                         let mut at = path.clone();
                         at.push(name);

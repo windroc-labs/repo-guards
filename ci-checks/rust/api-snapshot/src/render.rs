@@ -1,9 +1,10 @@
 //! Turns one crate's rustdoc JSON into entries: one per item at each public path.
 
+use crate::rustdoc::{item, kind_name};
 use crate::signature::Printer;
-use crate::walk::walk;
+use crate::walk::{Public, walk};
 use rustdoc_types::{
-    Crate, Id, Item, ItemEnum, ItemKind, MacroKind, StructKind, Variant, VariantKind, Visibility,
+    Crate, Id, Item, ItemEnum, MacroKind, StructKind, Type, Use, Variant, VariantKind, Visibility,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -21,74 +22,35 @@ pub struct Entry {
     pub signature: String,
 }
 
-/// rustdoc's own name for each kind, as its JSON spells it.
-pub fn kind_name(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Module => "module",
-        ItemKind::ExternCrate => "extern_crate",
-        ItemKind::Use => "use",
-        ItemKind::Struct => "struct",
-        ItemKind::StructField => "struct_field",
-        ItemKind::Union => "union",
-        ItemKind::Enum => "enum",
-        ItemKind::Variant => "variant",
-        ItemKind::Function => "function",
-        ItemKind::TypeAlias => "type_alias",
-        ItemKind::Constant => "constant",
-        ItemKind::Trait => "trait",
-        ItemKind::TraitAlias => "trait_alias",
-        ItemKind::Impl => "impl",
-        ItemKind::Static => "static",
-        ItemKind::ExternType => "extern_type",
-        ItemKind::Macro => "macro",
-        ItemKind::ProcAttribute => "proc_attribute",
-        ItemKind::ProcDerive => "proc_derive",
-        ItemKind::AssocConst => "assoc_const",
-        ItemKind::AssocType => "assoc_type",
-        ItemKind::Primitive => "primitive",
-        ItemKind::Keyword => "keyword",
-        ItemKind::Attribute => "attribute",
-    }
-}
-
 struct Renderer<'a> {
     unit: &'a str,
     krate: &'a Crate,
     printer: Printer<'a>,
     entries: Vec<Entry>,
-    /// Each item's canonical path, for the parent of its impls.
-    paths: HashMap<Id, String>,
+    /// Each reachable item's canonical path, segments after the crate name.
+    canonical: HashMap<Id, Vec<String>>,
     /// Impls of the emitted types and traits, in walk order, each once.
     impls: Vec<Id>,
     seen_impls: HashSet<Id>,
 }
 
 pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
+    let Public {
+        items,
+        external,
+        canonical,
+    } = walk(krate)?;
+    let crate_name = item(krate, &krate.root)?.name.clone().unwrap_or_default();
     let mut renderer = Renderer {
         unit,
         krate,
-        printer: Printer {
-            krate,
-            public: HashMap::new(),
-        },
+        printer: Printer::new(krate, &crate_name, &canonical),
         entries: Vec::new(),
-        paths: HashMap::new(),
+        canonical,
         impls: Vec::new(),
         seen_impls: HashSet::new(),
     };
-    let public = walk(krate)?;
-    let crate_name = renderer.item(&krate.root)?.name.clone().unwrap_or_default();
-    renderer.printer.public = public
-        .canonical
-        .iter()
-        .map(|(id, path)| {
-            (
-                *id,
-                [vec![crate_name.clone()], path.clone()].concat().join("::"),
-            )
-        })
-        .collect();
-    for (path, item) in &public.items {
+    for (path, item) in &items {
         let (name, parent) = path.split_last().expect("a public path has a name");
         let signature = renderer.signature(item, name)?;
         renderer.push(
@@ -97,24 +59,29 @@ pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
             name,
             signature,
         );
-        if public.canonical.get(&item.id) == Some(path) {
+        if renderer.canonical.get(&item.id) == Some(path) {
             renderer.children(item, path)?;
         }
     }
-    for (module, re_export) in &public.external {
-        let (kind, name, signature) = renderer.external(re_export);
+    for (module, re_export, kind) in &external {
+        let (name, signature) = renderer.external(re_export);
         renderer.push(kind, &module.join("::"), &name, signature);
     }
     renderer.render_impls()?;
     Ok(renderer.entries)
 }
 
+fn vis(item: &Item) -> &'static str {
+    if item.visibility == Visibility::Public {
+        "pub "
+    } else {
+        ""
+    }
+}
+
 impl<'a> Renderer<'a> {
     fn item(&self, id: &Id) -> Result<&'a Item, String> {
-        self.krate
-            .index
-            .get(id)
-            .ok_or_else(|| format!("rustdoc JSON has no item {}", id.0))
+        item(self.krate, id)
     }
 
     fn push(&mut self, kind: &str, parent: &str, name: &str, signature: String) {
@@ -127,29 +94,26 @@ impl<'a> Renderer<'a> {
         });
     }
 
-    /// Another crate's item re-exported here: kind from rustdoc's paths table, as it reports it.
-    fn external(&self, re_export: &rustdoc_types::Use) -> (&'static str, String, String) {
+    /// Another crate's item re-exported here, named by rustdoc's path for it; a glob by its source.
+    fn external(&self, re_export: &Use) -> (String, String) {
         if re_export.is_glob {
             let name = format!("{}::*", re_export.source);
-            return ("use", name.clone(), format!("pub use {name}"));
+            return (name.clone(), format!("pub use {name}"));
         }
-        let summary = re_export.id.and_then(|id| self.krate.paths.get(&id));
-        let path = summary.map_or_else(|| re_export.source.clone(), |s| s.path.join("::"));
+        let path = match re_export.id.and_then(|id| self.krate.paths.get(&id)) {
+            Some(summary) => summary.path.join("::"),
+            None => re_export.source.clone(),
+        };
         let rename = if path.rsplit("::").next() == Some(re_export.name.as_str()) {
             String::new()
         } else {
             format!(" as {}", re_export.name)
         };
-        (
-            summary.map_or("use", |s| kind_name(s.kind)),
-            re_export.name.clone(),
-            format!("pub use {path}{rename}"),
-        )
+        (re_export.name.clone(), format!("pub use {path}{rename}"))
     }
 
     /// What hangs under an item at its canonical path: a trait's items, and the impls of types and traits.
     fn children(&mut self, item: &'a Item, path: &[String]) -> Result<(), String> {
-        self.paths.entry(item.id).or_insert_with(|| path.join("::"));
         let impls = match &item.inner {
             ItemEnum::Struct(s) => &s.impls,
             ItemEnum::Enum(e) => &e.impls,
@@ -192,6 +156,8 @@ impl<'a> Renderer<'a> {
         })
     }
 
+    /// Blanket impls come from other crates' generic impls, not this crate's types; a synthetic impl is
+    /// kept only for a stable auto trait.
     fn kept(&self, imp: &rustdoc_types::Impl) -> bool {
         if imp.blanket_impl.is_some() {
             return false;
@@ -225,9 +191,11 @@ impl<'a> Renderer<'a> {
             }
             let header = self.impl_header(imp);
             let parent = match &imp.for_ {
-                rustdoc_types::Type::ResolvedPath(path) => {
-                    self.paths.get(&path.id).cloned().unwrap_or_default()
-                }
+                Type::ResolvedPath(path) => self
+                    .canonical
+                    .get(&path.id)
+                    .map(|p| p.join("::"))
+                    .unwrap_or_default(),
                 _ => String::new(),
             };
             // Two inherent impl blocks of one type print the same header; they are one entry.
@@ -277,11 +245,7 @@ impl<'a> Renderer<'a> {
 
     fn signature(&self, item: &Item, name: &str) -> Result<String, String> {
         let p = &self.printer;
-        let vis = if item.visibility == Visibility::Public {
-            "pub "
-        } else {
-            ""
-        };
+        let vis = vis(item);
         Ok(match &item.inner {
             ItemEnum::Module(_) => format!("{vis}mod {name}"),
             ItemEnum::ExternCrate {
@@ -444,14 +408,9 @@ impl<'a> Renderer<'a> {
         let ItemEnum::StructField(ty) = &field.inner else {
             return Err(format!("item {} is not a field", id.0));
         };
-        let vis = if field.visibility == Visibility::Public {
-            "pub "
-        } else {
-            ""
-        };
         Ok((
             field.name.clone().unwrap_or_default(),
-            format!("{vis}{}", self.printer.ty(ty)),
+            format!("{}{}", vis(field), self.printer.ty(ty)),
         ))
     }
 

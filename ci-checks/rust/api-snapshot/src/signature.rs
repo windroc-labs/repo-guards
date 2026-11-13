@@ -10,9 +10,9 @@ use rustdoc_types::{
 use std::collections::HashMap;
 
 pub struct Printer<'a> {
-    pub krate: &'a Crate,
+    krate: &'a Crate,
     /// Full paths (crate name first) of the crate's items reachable through public paths.
-    pub public: HashMap<Id, String>,
+    public: HashMap<Id, String>,
 }
 
 fn join<T>(items: &[T], separator: &str, mut render: impl FnMut(&T) -> String) -> String {
@@ -23,7 +23,23 @@ fn join<T>(items: &[T], separator: &str, mut render: impl FnMut(&T) -> String) -
         .join(separator)
 }
 
-impl Printer<'_> {
+impl<'a> Printer<'a> {
+    /// `canonical` holds each reachable item's canonical path after the crate name.
+    pub fn new(krate: &'a Crate, crate_name: &str, canonical: &HashMap<Id, Vec<String>>) -> Self {
+        let public = canonical
+            .iter()
+            .map(|(id, path)| {
+                (
+                    *id,
+                    [&[crate_name.to_owned()], path.as_slice()]
+                        .concat()
+                        .join("::"),
+                )
+            })
+            .collect();
+        Printer { krate, public }
+    }
+
     pub fn item_path(&self, id: &Id, written: &str) -> String {
         if let Some(path) = self.public.get(id) {
             return path.clone();
@@ -185,7 +201,7 @@ impl Printer<'_> {
         format!(
             "{}{}fn({}){}",
             self.for_params(&pointer.generic_params),
-            header(&pointer.header),
+            qualifiers(&pointer.header),
             self.inputs(&pointer.sig),
             self.ret(pointer.sig.output.as_ref())
         )
@@ -349,13 +365,13 @@ impl Printer<'_> {
     pub fn function(
         &self,
         name: &str,
-        header_: &FunctionHeader,
+        header: &FunctionHeader,
         generics: &Generics,
         sig: &FunctionSignature,
     ) -> String {
         format!(
             "{}fn {name}{}({}){}{}",
-            header(header_),
+            qualifiers(header),
             self.params(generics),
             self.inputs(sig),
             self.ret(sig.output.as_ref()),
@@ -364,7 +380,7 @@ impl Printer<'_> {
     }
 }
 
-fn header(header: &FunctionHeader) -> String {
+fn qualifiers(header: &FunctionHeader) -> String {
     let mut text = String::new();
     for (on, word) in [
         (header.is_const, "const "),

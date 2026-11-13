@@ -251,29 +251,82 @@ fn inherent_and_trait_len_distinct() {
     );
 }
 
-#[test]
-fn one_signature_change_is_one_changed_entry() {
-    let old = generate("same_name_v1", "same-name-old");
-    let missing = temp("same-name-none").join("none.json");
-    let (_, _, snapshot) = compare(&old.output, &missing, "same-name-first");
-    let snapshot_file = temp("same-name-snapshot").join("api-rust.json");
+/// Snapshots same_name_v1, then compares `changed` with it; returns the 多/少/变 lines of the log.
+fn changes_against_v1(changed: &str, tag: &str) -> Vec<String> {
+    let old = generate("same_name_v1", &format!("{tag}-old"));
+    let missing = temp(&format!("{tag}-none")).join("none.json");
+    let (_, _, snapshot) = compare(&old.output, &missing, &format!("{tag}-first"));
+    let snapshot_file = temp(&format!("{tag}-snapshot")).join("api-rust.json");
     fs::write(&snapshot_file, snapshot.unwrap()).unwrap();
 
-    let new = generate("same_name_v2", "same-name-new");
+    let new = generate(changed, &format!("{tag}-new"));
     assert_keys_unique(&new.entries());
-    let (code, log, _) = compare(&new.output, &snapshot_file, "same-name-second");
+    let (code, log, _) = compare(&new.output, &snapshot_file, &format!("{tag}-second"));
     assert_eq!(code, 1, "{log}");
-    let listed: Vec<&str> = log
-        .lines()
+    log.lines()
         .filter(|l| l.starts_with("多 ") || l.starts_with("少 ") || l.starts_with("变 "))
-        .collect();
-    assert_eq!(listed.len(), 1, "{log}");
-    assert!(listed[0].starts_with("变 "), "{log}");
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn one_signature_change_is_one_changed_entry() {
+    let listed = changes_against_v1("same_name_v2", "same-name-len-change");
+    assert_eq!(listed.len(), 1, "{listed:#?}");
+    assert!(listed[0].starts_with("变 "), "{listed:#?}");
     assert!(
         listed[0].contains(r#""parent": "impl same_name::Id""#),
-        "{log}"
+        "{listed:#?}"
     );
-    assert!(listed[0].contains(r#""name": "len""#), "{log}");
+    assert!(listed[0].contains(r#""name": "len""#), "{listed:#?}");
+}
+
+#[test]
+fn one_from_impl_change_is_one_changed_entry() {
+    let listed = changes_against_v1("same_name_v3", "same-name-from-change");
+    assert_eq!(listed.len(), 1, "{listed:#?}");
+    assert!(listed[0].starts_with("变 "), "{listed:#?}");
+    assert!(
+        listed[0].contains(&format!(r#""parent": "{FROM_STRING}""#)),
+        "{listed:#?}"
+    );
+    assert!(listed[0].contains(r#""name": "from""#), "{listed:#?}");
+}
+
+#[test]
+fn explicit_reexports_shadow_globs() {
+    let entries = generate("shadowing", "shadowing").entries();
+    assert_keys_unique(&entries);
+    assert_eq!(
+        signature(&entries, "struct", "", "Reverse"),
+        "pub use core::cmp::Reverse"
+    );
+    assert_eq!(
+        signature(&entries, "enum", "", "Ordering"),
+        "pub use core::cmp::Ordering"
+    );
+    assert_eq!(
+        signature(&entries, "enum", "", "Local"),
+        "pub enum Local { A }"
+    );
+    assert_eq!(
+        signature(&entries, "function", "", "only_glob"),
+        "pub fn only_glob()"
+    );
+    for (kind, name) in [("struct", "Ordering"), ("struct", "Local")] {
+        let at_root = entries
+            .iter()
+            .filter(|e| e["kind"] == kind && e["parent"] == "" && e["name"] == name);
+        assert_eq!(
+            at_root.count(),
+            0,
+            "{kind} {name} is shadowed at the root: {entries:#?}"
+        );
+    }
+    assert_eq!(
+        signature(&entries, "struct", "inner", "Reverse"),
+        "pub struct Reverse"
+    );
 }
 
 #[test]

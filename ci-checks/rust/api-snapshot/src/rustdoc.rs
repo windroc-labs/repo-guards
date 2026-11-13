@@ -1,4 +1,4 @@
-use rustdoc_types::{Crate, FORMAT_VERSION};
+use rustdoc_types::{Crate, FORMAT_VERSION, Id, Item, ItemKind};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -25,6 +25,43 @@ pub fn load(path: &Path) -> Result<Crate, String> {
             path.display()
         )
     })
+}
+
+pub fn item<'a>(krate: &'a Crate, id: &Id) -> Result<&'a Item, String> {
+    krate
+        .index
+        .get(id)
+        .ok_or_else(|| format!("rustdoc JSON has no item {}", id.0))
+}
+
+/// rustdoc's own name for each kind, as its JSON spells it.
+pub fn kind_name(kind: ItemKind) -> &'static str {
+    match kind {
+        ItemKind::Module => "module",
+        ItemKind::ExternCrate => "extern_crate",
+        ItemKind::Use => "use",
+        ItemKind::Struct => "struct",
+        ItemKind::StructField => "struct_field",
+        ItemKind::Union => "union",
+        ItemKind::Enum => "enum",
+        ItemKind::Variant => "variant",
+        ItemKind::Function => "function",
+        ItemKind::TypeAlias => "type_alias",
+        ItemKind::Constant => "constant",
+        ItemKind::Trait => "trait",
+        ItemKind::TraitAlias => "trait_alias",
+        ItemKind::Impl => "impl",
+        ItemKind::Static => "static",
+        ItemKind::ExternType => "extern_type",
+        ItemKind::Macro => "macro",
+        ItemKind::ProcAttribute => "proc_attribute",
+        ItemKind::ProcDerive => "proc_derive",
+        ItemKind::AssocConst => "assoc_const",
+        ItemKind::AssocType => "assoc_type",
+        ItemKind::Primitive => "primitive",
+        ItemKind::Keyword => "keyword",
+        ItemKind::Attribute => "attribute",
+    }
 }
 
 #[cfg(test)]

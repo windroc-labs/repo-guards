@@ -243,11 +243,6 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/coverage
         run: python3 -m unittest shard_artifact_test
-      - name: shard-targets tests
-        id: shard-targets
-        if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/shard-targets
-        run: python3 -m unittest shard_targets_test
       - name: Rust coverage LCOV tests
         id: rust-coverage-lcov
         if: ${{ !cancelled() }}
@@ -311,7 +306,6 @@ jobs:
           GO_COVERAGE_PROFILE: ${{ steps.go-coverage-profile.outcome }}
           LANGUAGE_GATE: ${{ steps.language-gate.outcome }}
           SHARD_ARTIFACT: ${{ steps.shard-artifact.outcome }}
-          SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           RUST_COVERAGE_LCOV: ${{ steps.rust-coverage-lcov.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
           WORKFLOW_CONFIG: ${{ steps.workflow-config.outcome }}
@@ -321,7 +315,7 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE LANGUAGE_GATE SHARD_ARTIFACT SHARD_TARGETS RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE LANGUAGE_GATE SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

@@ -63,7 +63,7 @@
 | 文件 | 作用 |
 |---|---|
 | [`coverage.toml`](coverage.toml) | `toolchain`：分支覆盖率（`--branch`）只有 nightly 支持，覆盖率几步用这个固定的 nightly，带 `llvm-tools-preview`，其余步仍用 [`rust-toolchain.toml`](rust-toolchain.toml)；`ignore-filename-regex`：排除 `tests/`、`benches/`、`examples/` 和 `*_test.rs`（cargo-llvm-cov 没有配置文件，`rust.yml` 把它传给 `--ignore-filename-regex`） |
-| [`shard-targets/`](shard-targets/) | 分片时，merge 那步从各片取 `--` 前面的测试目标，去重后交给 cargo-llvm-cov（同一个 flag 如 `--lib` 给两次它会报错）。测试：在该目录跑 `python3 -m unittest shard_targets_test` |
+| [`coverage-lcov/`](coverage-lcov/) | 把 cargo-llvm-cov 的 LCOV 报告合并（同一文件同一行、同一分支的次数相加，绝对路径改成相对 `--root`，不要函数记录，因为函数的符号名随目标平台变），写成 LCOV（分片时交给 Coverage job）或 Cobertura（给 Coverage gate 和 CRAP report）。不分片时也走这一步，所以分片和不分片算法相同。只用标准库。测试：在该目录跑 `python3 -m unittest coverage_lcov_test` |
 
 `src` 里的测试模块正则排除不了，每个都要加 `coverage(off)`，crate 根也要开这个 nightly 特性，还要在 `Cargo.toml` 里声明 `coverage_nightly` 这个 cfg，否则 stable 下的 Lint 步报 `unexpected_cfgs`：
 
@@ -82,7 +82,7 @@ mod tests { /* … */ }
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 ```
 
-`rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch`，加上 `unit-tests` 选的测试目标），Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。
+`rust.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 cargo-llvm-cov 0.9.1（`--workspace --all-features --branch --lcov`，加上 `unit-tests` 选的测试目标），用 `coverage-lcov` 转成 Cobertura，Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。加在测试模块之外的 `coverage(off)` 算行内豁免。
 
 覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，如 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`，原样传给 cargo-llvm-cov。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。目标后面可以接 `--` 和测试名过滤，原样传给测试程序：`--test=unit -- input::` 只跑 `unit` 里名字含 `input::` 的测试。分片（见[覆盖率](../README.md#覆盖率)）时用它把一个测试目标按测试名拆成几片。
 

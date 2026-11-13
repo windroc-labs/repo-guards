@@ -310,6 +310,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *apply-overrides
       - name: Read the snapshot path
         id: setting
         run: |
@@ -321,12 +322,27 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-      # Builds the project and writes its public API entries to $RUNNER_TEMP/api-entries.json; each language's generation replaces this stub.
+      # Installs the nightly pinned in api-snapshot.toml (rustdoc JSON is unstable) and builds repo-guards' generator
+      # from /, before any of the caller's code runs, so the caller's .cargo/config.toml cannot change how it is built.
+      - name: Build the API snapshot tool
+        if: ${{ steps.setting.outputs.path != '' }}
+        run: |
+          toolchain=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/rust/api-snapshot.toml" toolchain) || exit 2
+          if ! command -v rustup >/dev/null; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none --no-modify-path || exit 2
+            echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
+            export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+          fi
+          rustup toolchain install "$toolchain" --profile minimal || exit 2
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          cd / && RUSTUP_TOOLCHAIN=$toolchain cargo build --release --locked --manifest-path "$RG/rust/api-snapshot/Cargo.toml" \
+            --target-dir "$RUNNER_TEMP/api-snapshot-tool" || exit 2
+      # Builds every library crate of the workspace with all features (this runs the PR's build scripts and proc macros)
+      # and writes its public API entries to $RUNNER_TEMP/api-entries.json; exit 2 when it cannot.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
         run: |
-          echo "::error::API snapshot: $LANGUAGE generation is not wired up yet (本语言的生成还没接上)"
-          exit 2
+          "$RUNNER_TEMP/api-snapshot-tool/release/api-snapshot" --project "$PWD" --output "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

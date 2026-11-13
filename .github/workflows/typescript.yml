@@ -306,12 +306,24 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-      # Builds the project and writes its public API entries to $RUNNER_TEMP/api-entries.json; each language's generation replaces this stub.
+      - name: Install Node
+        if: ${{ steps.setting.outputs.path != '' }}
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "26.13.1"
+          package-manager-cache: false
+      # The generator builds every package's tsconfig.json in memory and writes the public API entries of each
+      # package.json exports or types entry to $RUNNER_TEMP/api-entries.json; a failed install, build or tool error exits 2 before Compare.
+      # The shared .npmrc (ignore-scripts) also covers both installs, so no PR code runs here.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
         run: |
-          echo "::error::API snapshot: $LANGUAGE generation is not wired up yet (本语言的生成还没接上)"
-          exit 2
+          while IFS='=' read -r key value; do
+            [[ -n "$key" ]] && export "npm_config_${key//-/_}=$value"
+          done < "$RG/typescript/.npmrc"
+          npm ci --prefix "$RG/typescript/api-snapshot" --no-audit --no-fund || exit 2
+          npm ci --no-audit --no-fund || exit 2
+          node "$RG/typescript/api-snapshot/api-snapshot.ts" . "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

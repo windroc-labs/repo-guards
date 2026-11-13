@@ -26,7 +26,7 @@
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml`、`requirements.txt`、`package.json` 或 `go.mod` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它。`unit-tests` 选覆盖率要量的单元测试：Rust 是测试目标，Go 是 `go test` 的参数（包模式），见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。别的设置都在共用配置文件里，项目用覆盖文件改，见[覆盖默认配置](#覆盖默认配置)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，四种语言共用；`exceptions` 是 Python、TypeScript、Go 不查许可证的包（Go 是模块路径，要完全相同），默认空；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。Rust 的例外是 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.exceptions`，cargo-deny 的写法。
 
-四个语言 workflow 各有两个并行的 job：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑；只有 Checks 的第一项 Inline exemptions（[第 13 项](#行内豁免)）例外，它失败时同一 job 后面的项都不跑。
+四个语言 workflow 各有两个并行的 job（PR 上它们之前先跑 Changes，见下文）：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑；只有 Checks 的第一项 Inline exemptions（[第 13 项](#行内豁免)）例外，它失败时同一 job 后面的项都不跑。
 
 | workflow | job（里面的步） |
 |---|---|
@@ -34,6 +34,8 @@
 | `python.yml` | Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
 | `typescript.yml` | Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
 | `go.yml` | Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+
+PR 上只在改到本语言时才跑检查：每个语言 workflow 先跑 Changes job，用 [`language-gate/language_gate.py`](language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件（检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算）。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage 和 Coverage shard 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。本语言的文件指任何目录下的本语言源码和会改变检查结果的配置（如 `pyproject.toml`、`uv.lock`、`Cargo.lock`、`.cargo/config.toml`、`package.json`、`tsconfig*.json`、`go.sum`、Go 的 `testdata/`），加上 repo 根目录 `.github/workflows/`、`.github/checks/` 下的文件（repo-guards 的调用和设置）；每种语言的名单只写在脚本的 `PATTERNS` 里。不是 PR 的事件（push 到默认分支、merge queue 等）不跑 Changes，后面的 job 全跑。Changes 自己失败时后面的 job 照跑，这次运行仍算失败。名单只看路径：测试读的数据文件（Go 的 `testdata/` 除外）、嵌进代码的文件不在名单里，只改它们的 PR 不跑该语言的检查，合进默认分支后那次 push 会跑。测试：在 `language-gate/` 跑 `python3 -m unittest language_gate_test`。
 
 覆盖率慢时，caller 用 `coverage-shards` 输入分片：JSON 字符串列表，每项是一片要跑的测试，Rust 是这片的 `unit-tests` 值（如 `"--lib"`、`"--test=unit"`，可在 `--` 后带测试名过滤，如 `"--test=unit -- input::"`，分片时代替 `unit-tests`），Python 是 pytest 的测试路径，TypeScript 是 vitest 的文件过滤词，Go 是这片的 `go test` 参数（包模式，如 `"./a/..."`，可带 `-run=<正则>` 按测试名拆，分片时代替 `unit-tests`），都用空格分开。每片一个 Coverage shard job 并行跑，Coverage job 合并各片的数据再判门槛、出 CRAP 报告；有一片失败，Coverage 就失败。没列进任何一片的测试不跑。默认 `[]`：一个 Coverage job，和以前一样。每片和 Coverage job 都要各自装工具、编译（Rust 的 Coverage job 还要按所有片的测试目标再编译一遍），所以只有跑测试的时间远多于编译时，分片才快。
 

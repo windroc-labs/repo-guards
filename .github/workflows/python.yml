@@ -19,11 +19,54 @@ on:
 permissions:
   contents: read
 
+# Changes runs first and decides whether a PR runs the other jobs.
 # Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
+  # Only on a PR: run=false when it changes no python file, config or repo-guards call or setting, and every other job skips.
+  # Skipped (other events) or failed, run is empty and the other jobs run.
+  changes:
+    name: Changes
+    if: ${{ github.event_name == 'pull_request' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.gate.outputs.run }}
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+    steps:
+      - name: Check out the merge ref and its parents
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: repo
+          fetch-depth: 2
+          persist-credentials: false
+      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
+      - &checkout-repo-guards
+        name: Check out repo-guards at the pinned commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
+          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
+          path: repo-guards
+          persist-credentials: false
+      - &install-uv
+        name: Install uv
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.13.7"
+          enable-cache: false
+      # The merge ref's first parent is the base branch, so HEAD^1..HEAD is what merging the PR changes.
+      - name: Match changed files
+        id: gate
+        shell: bash
+        working-directory: repo
+        run: uv run --no-project --python 3.12 "$RG/language-gate/language_gate.py" python HEAD^1 >> "$GITHUB_OUTPUT"
+
   checks:
     name: Checks
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -43,21 +86,8 @@ jobs:
           path: repo
           fetch-depth: 0
           persist-credentials: false
-      # job.workflow_* is this file's repo and commit; the toJSON round trip hides it from actionlint 1.7.12, which lacks it.
-      - &checkout-repo-guards
-        name: Check out repo-guards at the pinned commit
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ fromJSON(toJSON(job)).workflow_repository }}
-          ref: ${{ fromJSON(toJSON(job)).workflow_sha }}
-          path: repo-guards
-          persist-credentials: false
-      - &install-uv
-        name: Install uv
-        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: "0.13.7"
-          enable-cache: false
+      - *checkout-repo-guards
+      - *install-uv
       # SOURCE_DIRS is the project section's source-dirs for this working-directory.
       - &apply-overrides
         name: Apply caller overrides
@@ -152,8 +182,8 @@ jobs:
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
     name: Coverage
-    needs: coverage-shard
-    if: ${{ !cancelled() }}
+    needs: [changes, coverage-shard]
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
@@ -248,7 +278,8 @@ jobs:
   # One job per coverage-shards item, running only its test paths; Coverage combines their data.
   coverage-shard:
     name: Coverage shard ${{ matrix.tests }}
-    if: ${{ inputs.coverage-shards != '[]' }}
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' && inputs.coverage-shards != '[]' }}
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     outputs:

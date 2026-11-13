@@ -94,6 +94,18 @@ class Cli(unittest.TestCase):
         self.assertEqual((code, out), (0, "run=true\n"))
         self.assertIn("src/lib.rs", err)
 
+    def test_merge_ref_against_its_first_parent_is_only_the_prs_change(self):
+        # GitHub checks out a PR as a merge of its head into the base tip; the base moved on in Python meanwhile.
+        git(self.root, "checkout", "-q", "-b", "pr")
+        (self.root / "src/lib.rs").write_text("y\n")
+        self.commit()
+        git(self.root, "checkout", "-q", "main")
+        (self.root / "app.py").write_text("y\n")
+        self.commit()
+        git(self.root, "merge", "-q", "--no-ff", "-m", "merge", "pr")
+        self.assertEqual(self.run_gate("python", "HEAD^1")[:2], (0, "run=false\n"))
+        self.assertEqual(self.run_gate("rust", "HEAD^1")[:2], (0, "run=true\n"))
+
     def test_deleted_file_counts(self):
         (self.root / "app.py").unlink()
         self.commit()

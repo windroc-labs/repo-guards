@@ -31,6 +31,7 @@ PATTERNS = {
         "pytest.toml",
         ".pytest.toml",
         "tox.ini",
+        ".importlinter",
     ),
     "rust": (
         "*.rs",

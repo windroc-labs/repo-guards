@@ -32,7 +32,7 @@
 | workflow | job（里面的步） |
 |---|---|
 | `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
 | `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 | `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 

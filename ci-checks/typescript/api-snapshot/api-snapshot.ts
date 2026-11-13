@@ -572,48 +572,12 @@ function read(
     if (file === undefined) fail(`cannot load ${quote(unit.declaration)}`);
     const module = checker.getSymbolAtLocation(file);
     if (module === undefined) continue;
-    new Reader(unit.name, checker, outputs, entries, classify).walk(module, "");
+    new Reader(unit.name, checker, outputs, entries).walk(module, "");
   }
 }
 
 type Imported =
   { kind: "file" | "ambient"; nodes: ts.Node[] } | { kind: "untyped" } | { kind: "unresolved" };
-
-// The import where tsc lost a name's declaration: follow the whole alias chain (re-exports, local
-// import-then-export, barrels) to the hop whose target has no declaration, and return that hop's import.
-function importOrigin(
-  exported: ts.Symbol,
-  checker: ts.TypeChecker,
-): { file: ts.SourceFile; specifier: ts.StringLiteral } | undefined {
-  const visited = new Set<ts.Symbol>();
-  for (let hop = exported; hop.flags & ts.SymbolFlags.Alias && !visited.has(hop);) {
-    visited.add(hop);
-    const next = checker.getImmediateAliasedSymbol(hop);
-    if (next !== undefined && (next.declarations ?? []).length > 0) {
-      hop = next;
-      continue;
-    }
-    for (const declaration of hop.declarations ?? []) {
-      const specifier = importedFrom(declaration);
-      if (specifier !== undefined) return { file: declaration.getSourceFile(), specifier };
-    }
-    return undefined;
-  }
-  return undefined;
-}
-
-function importedFrom(declaration: ts.Node): ts.StringLiteral | undefined {
-  for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
-    const specifier =
-      (ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier
-        ? node.moduleSpecifier
-        : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
-          ? node.moduleReference.expression
-          : undefined;
-    if (specifier !== undefined) return ts.isStringLiteral(specifier) ? specifier : undefined;
-  }
-  return undefined;
-}
 
 // The module a declaration imports from; a side-effect import brings in no names, so it is not one.
 function moduleSpecifier(node: ts.Node): ts.StringLiteral | undefined {
@@ -632,7 +596,6 @@ class Reader {
   private readonly checker: ts.TypeChecker;
   private readonly outputs: Outputs;
   private readonly entries: Map<string, Entry>;
-  private readonly classify: (file: ts.SourceFile, specifier: ts.StringLiteralLike) => Imported;
   private readonly js = new Map<string, ts.SourceFile>();
 
   constructor(
@@ -640,29 +603,22 @@ class Reader {
     checker: ts.TypeChecker,
     outputs: Outputs,
     entries: Map<string, Entry>,
-    classify: (file: ts.SourceFile, specifier: ts.StringLiteralLike) => Imported,
   ) {
     this.unit = unit;
     this.checker = checker;
     this.outputs = outputs;
     this.entries = entries;
-    this.classify = classify;
   }
 
   walk(container: ts.Symbol, parent: string): void {
     for (const exported of this.checker.getExportsOfModule(container)) {
       const target =
         exported.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(exported) : exported;
-      // tsc types a name from an untyped JS module as any; it has no declaration to print.
-      const origin =
-        (target.declarations ?? []).length === 0 ? importOrigin(exported, this.checker) : undefined;
-      if (origin !== undefined && this.classify(origin.file, origin.specifier).kind === "untyped") {
-        this.add(
-          parent,
-          "alias",
-          exported.getName(),
-          `any from ${JSON.stringify(origin.specifier.text)}`,
-        );
+      // A name tsc resolved without a declaration (from untyped JS, through any alias chain) gets tsc's type for it.
+      // Unresolved imports never get here: read() exits 2 on them first.
+      if ((target.declarations ?? []).length === 0) {
+        const type = this.checker.typeToString(this.checker.getTypeOfSymbol(exported));
+        this.add(parent, "alias", exported.getName(), type);
       } else {
         this.symbol(target, exported.getName(), parent);
       }

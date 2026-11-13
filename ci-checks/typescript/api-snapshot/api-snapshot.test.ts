@@ -230,17 +230,19 @@ describe("exports forms", () => {
     );
   });
 
-  it("names from an untyped JS module are any aliases, as tsc types them: directly, imported then exported, and through 2 and 3 hops", () => {
+  it("names from an untyped JS module are any aliases, as tsc types them: directly, imported then exported, and through 2 and 3 hops, export = and import-equals aliases", () => {
     const entries = generate(path.join(TESTDATA, "untyped"));
     assert.deepEqual(
       entries.map((e) => [e.kind, e.name, e.signature]),
       [
-        ["alias", "bar", 'any from "untyped"'],
-        ["alias", "default", 'any from "untyped"'],
-        ["alias", "foo", 'any from "untyped"'],
-        ["alias", "hop", 'any from "untyped"'],
-        ["alias", "viaMid", 'any from "untyped"'],
-        ["alias", "viaMid2", 'any from "untyped"'],
+        ["alias", "bar", "any"],
+        ["alias", "default", "any"],
+        ["alias", "foo", "any"],
+        ["alias", "hop", "any"],
+        ["alias", "viaMid", "any"],
+        ["alias", "viaMid2", "any"],
+        ["alias", "x", "any"],
+        ["alias", "y", "any"],
         ["const", "own", "const own = 1"],
       ],
     );

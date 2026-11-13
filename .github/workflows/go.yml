@@ -24,7 +24,8 @@ permissions:
   contents: read
 
 # Changes runs first and decides whether a PR runs the other jobs.
-# Fast checks share one job; only the coverage run, which runs the tests, gets its own, in parallel.
+# Fast checks share one job; the coverage run, which runs the tests, and the API snapshot, which builds the project,
+# each get their own, in parallel.
 # Steps shared by jobs are YAML anchors (&name) defined at first use and reused by alias (*name).
 jobs:
   # Only on a PR: run=false when it changes no go file, config or repo-guards call or setting, and every other job skips.
@@ -324,3 +325,61 @@ jobs:
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
+
+  # Generating the snapshot builds the caller's code, so it gets a job of its own: read-only token, no secrets.
+  api-snapshot:
+    name: API snapshot
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.run != 'false' }}
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+    env:
+      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      PROJECT_DIR: ${{ inputs.working-directory }}
+      LANGUAGE: go
+      # Keeps a uv.toml or [tool.uv] in the PR from choosing the Python that reads the setting.
+      UV_NO_CONFIG: "1"
+    defaults: *defaults
+    steps:
+      - *checkout
+      - *checkout-repo-guards
+      - *install-uv
+      - name: Read the snapshot path
+        id: setting
+        run: |
+          snapshot=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-path "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
+          if [[ -z $snapshot ]]; then
+            echo "接口快照：未启用，repo-guards.toml 没有给这个 working-directory 设 api-snapshot.$LANGUAGE" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "path=$snapshot" >> "$GITHUB_OUTPUT"
+          echo "artifact=$(python3 "$RG/api-snapshot/snapshot_artifact.py" "$LANGUAGE" "$PROJECT_DIR")" >> "$GITHUB_OUTPUT"
+      # Builds the project and writes its public API entries to $RUNNER_TEMP/api-entries.json; each language's generation replaces this stub.
+      - name: Generate
+        if: ${{ steps.setting.outputs.path != '' }}
+        run: |
+          echo "::error::接口快照：$LANGUAGE 的生成还没接上"
+          exit 2
+      - name: Compare
+        id: compare
+        if: ${{ steps.setting.outputs.path != '' }}
+        env:
+          SNAPSHOT: ${{ steps.setting.outputs.path }}
+          ARTIFACT: ${{ steps.setting.outputs.artifact }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/api-snapshot"
+          code=0
+          uv run --no-project --python 3.12 "$RG/api-snapshot/api_snapshot.py" --entries "$RUNNER_TEMP/api-entries.json" \
+            --snapshot "$GITHUB_WORKSPACE/repo/$SNAPSHOT" --output "$RUNNER_TEMP/api-snapshot/${SNAPSHOT##*/}" \
+            --artifact "$ARTIFACT" --path "$SNAPSHOT" || code=$?
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          exit "$code"
+      # Exit 1: a mismatch or no snapshot file yet; the artifact holds the file to commit at the configured path.
+      - name: Upload the new snapshot
+        if: ${{ !cancelled() && steps.compare.outputs.code == '1' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.setting.outputs.artifact }}
+          path: ${{ runner.temp }}/api-snapshot
+          if-no-files-found: error

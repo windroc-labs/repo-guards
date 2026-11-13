@@ -49,17 +49,31 @@ impl Run {
     }
 }
 
-fn generate_in(project: &Path, tag: &str) -> Run {
+/// The working-directory the scoped tests' repo-guards.toml has a section for.
+const WORKING_DIRECTORY: &str = "crates/demo";
+
+/// Runs the generator; with `config`, writes it as the repo-guards.toml the generator reads (`None` inside: no file).
+fn generate_with(project: &Path, tag: &str, config: Option<Option<&str>>) -> Run {
     let dir = temp(tag);
     let output = dir.join("entries.json");
-    let result = Command::new(env!("CARGO_BIN_EXE_api-snapshot"))
+    let mut command = Command::new(env!("CARGO_BIN_EXE_api-snapshot"));
+    command
         .arg("--project")
         .arg(project)
         .arg("--output")
         .arg(&output)
-        .env("CARGO_TARGET_DIR", dir.join("target"))
-        .output()
-        .unwrap();
+        .env("CARGO_TARGET_DIR", dir.join("target"));
+    if let Some(text) = config {
+        let file = dir.join("repo-guards.toml");
+        if let Some(text) = text {
+            fs::write(&file, text).unwrap();
+        }
+        command
+            .arg("--config")
+            .arg(file)
+            .args(["--working-directory", WORKING_DIRECTORY]);
+    }
+    let result = command.output().unwrap();
     Run {
         code: result.status.code().unwrap_or(-1),
         stderr: String::from_utf8_lossy(&result.stderr).into_owned(),
@@ -67,8 +81,18 @@ fn generate_in(project: &Path, tag: &str) -> Run {
     }
 }
 
+fn generate_in(project: &Path, tag: &str) -> Run {
+    generate_with(project, tag, None)
+}
+
 fn generate(name: &str, tag: &str) -> Run {
     generate_in(&fixture(name), tag)
+}
+
+/// Runs the generator with `api-snapshot-scope.rust = <scope>` (a TOML value) for its working-directory.
+fn generate_scoped(name: &str, tag: &str, scope: &str) -> Run {
+    let config = format!("[project.\"{WORKING_DIRECTORY}\"]\napi-snapshot-scope.rust = {scope}\n");
+    generate_with(&fixture(name), tag, Some(Some(&config)))
 }
 
 fn signature<'a>(entries: &'a [Value], kind: &str, parent: &str, name: &str) -> &'a str {
@@ -612,4 +636,219 @@ fn partly_shadowed_and_repeated_globs_keep_keys_unique() {
         ),
         "impl core::marker::Send for globs::t0::Tie"
     );
+}
+
+const DRIVER_SCOPE: &str = r#"["scope_demo::driver"]"#;
+
+/// Each entry as `kind parent name`, sorted.
+fn keys(entries: &[Value]) -> Vec<String> {
+    let mut keys: Vec<String> = entries
+        .iter()
+        .map(|e| format!("{} {} {}", e["kind"], e["parent"], e["name"]))
+        .map(|k| k.replace('"', ""))
+        .collect();
+    keys.sort();
+    keys
+}
+
+#[test]
+fn scope_keeps_only_entries_under_its_modules() {
+    let entries = generate_scoped("scoped_v1", "scoped", DRIVER_SCOPE).entries();
+    assert_keys_unique(&entries);
+    assert!(entries.iter().all(|e| e["unit"] == "scope-demo"));
+    let keys = keys(&entries);
+    for key in [
+        // Items whose module is scope_demo::driver or below it.
+        "struct driver Id",
+        "trait driver Device",
+        "function driver::Device open",
+        "module driver io",
+        "function driver::io read",
+        // Another crate's item re-exported here sits in the re-exporting module.
+        "struct driver Cell",
+        // Impls with a local path in an in-scope module: the self type, `&` stripped, or a trait argument.
+        "impl driver::Id impl scope_demo::driver::Id",
+        "function impl scope_demo::driver::Id get",
+        "impl driver::Id impl scope_demo::driver::Device for scope_demo::driver::Id",
+        "function impl scope_demo::driver::Device for scope_demo::driver::Id open",
+        "impl driver::Id impl core::marker::Send for scope_demo::driver::Id",
+        "impl  impl scope_demo::net::Ping for &scope_demo::driver::Id",
+        "function impl scope_demo::net::Ping for &scope_demo::driver::Id ping",
+        "impl net::Socket impl core::convert::From<scope_demo::driver::Id> for scope_demo::net::Socket",
+        "impl  impl scope_demo::net::Wrap<scope_demo::driver::Id> for u8",
+        "function impl scope_demo::net::Wrap<scope_demo::driver::Id> for u8 wrap",
+    ] {
+        assert!(
+            keys.contains(&key.to_owned()),
+            "{key} missing from {keys:#?}"
+        );
+    }
+    for absent in [
+        // Module entries sit in their parent module, the crate root here.
+        "module  driver",
+        "module  driverx",
+        "function driverx other",
+        "function  top",
+        // Another path to an in-scope item counts on its own.
+        "function  read",
+        "struct net DriverId",
+        "struct net RefCell",
+        "struct net Socket",
+        "trait net Ping",
+        "function net::Ping ping",
+        "trait net Wrap",
+        "function impl core::clone::Clone for scope_demo::net::Socket clone",
+        "impl net::Socket impl core::clone::Clone for scope_demo::net::Socket",
+        "impl net::Socket impl scope_demo::net::Ping for scope_demo::net::Socket",
+        "impl net::Socket impl core::marker::Send for scope_demo::net::Socket",
+    ] {
+        assert!(!keys.contains(&absent.to_owned()), "{absent} in {keys:#?}");
+    }
+}
+
+#[test]
+fn no_scope_writes_every_entry() {
+    let unset = generate("scoped_v1", "scoped-unset").text();
+    let other_section = format!(
+        "[project.\".\"]\napi-snapshot-scope.rust = [\"scope_demo::driver\"]\n\n\
+         [project.\"{WORKING_DIRECTORY}\"]\napi-snapshot.rust = \".github/checks/api-rust.json\"\n\
+         api-snapshot-scope.python = [\"pkg\"]\n"
+    );
+    for (tag, config) in [
+        ("scoped-no-file", None),
+        ("scoped-empty-file", Some("")),
+        ("scoped-no-setting", Some(other_section.as_str())),
+    ] {
+        let run = generate_with(&fixture("scoped_v1"), tag, Some(config));
+        assert_eq!(run.text(), unset, "{config:?}");
+    }
+    let entries: Vec<Value> = serde_json::from_str(&unset).unwrap();
+    let keys = keys(&entries);
+    for key in [
+        "module  driverx",
+        "function  top",
+        "function  read",
+        "struct net Socket",
+        "struct net RefCell",
+        "impl net::Socket impl core::clone::Clone for scope_demo::net::Socket",
+    ] {
+        assert!(
+            keys.contains(&key.to_owned()),
+            "{key} missing from {keys:#?}"
+        );
+    }
+}
+
+#[test]
+fn scope_of_the_crate_writes_every_entry() {
+    let whole = generate("scoped_v1", "scoped-whole").text();
+    let crate_scope = generate_scoped("scoped_v1", "scoped-crate", r#"["scope_demo"]"#);
+    assert_eq!(crate_scope.text(), whole);
+    let other = generate_scoped("scoped_v1", "scoped-other", r#"["other_crate"]"#);
+    assert_eq!(other.text(), "[]\n");
+}
+
+#[test]
+fn invalid_scope_exits_2() {
+    for (tag, scope, error) in [
+        (
+            "scope-string",
+            r#""scope_demo::driver""#,
+            " is not an array of strings",
+        ),
+        (
+            "scope-number",
+            r#"["scope_demo::driver", 1]"#,
+            " is not an array of strings",
+        ),
+        (
+            "scope-empty",
+            "[]",
+            " = []: must list at least one module prefix",
+        ),
+        (
+            "scope-package",
+            r#"["scope-demo"]"#,
+            r#": "scope-demo": must be a module path"#,
+        ),
+        (
+            "scope-glob",
+            r#"["scope_demo::*"]"#,
+            r#": "scope_demo::*": must be a module path"#,
+        ),
+    ] {
+        let run = generate_scoped("scoped_v1", tag, scope);
+        assert_fails_with_2(&run);
+        let at = format!("[project.\"{WORKING_DIRECTORY}\"] api-snapshot-scope.rust");
+        assert!(
+            run.stderr.contains(&format!("{at}{error}")),
+            "{}",
+            run.stderr
+        );
+    }
+    let broken = generate_with(
+        &fixture("scoped_v1"),
+        "scope-broken-toml",
+        Some(Some("[project\n")),
+    );
+    assert_fails_with_2(&broken);
+    let half = Command::new(env!("CARGO_BIN_EXE_api-snapshot"))
+        .args([
+            "--project",
+            ".",
+            "--output",
+            "out.json",
+            "--config",
+            "repo-guards.toml",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(half.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&half.stderr).contains("usage: "));
+    let other_half = Command::new(env!("CARGO_BIN_EXE_api-snapshot"))
+        .args([
+            "--project",
+            ".",
+            "--output",
+            "out.json",
+            "--working-directory",
+            ".",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(other_half.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&other_half.stderr).contains("usage: "));
+}
+
+/// Compares `changed` against a snapshot of scoped_v1, both generated with the driver scope.
+fn scoped_compare(changed: &str, tag: &str) -> (i32, String) {
+    let old = generate_scoped("scoped_v1", &format!("{tag}-old"), DRIVER_SCOPE);
+    let missing = temp(&format!("{tag}-none")).join("none.json");
+    let (_, _, snapshot) = compare(&old.output, &missing, &format!("{tag}-first"));
+    let snapshot_file = temp(&format!("{tag}-snapshot")).join("api-rust.json");
+    fs::write(&snapshot_file, snapshot.unwrap()).unwrap();
+    let new = generate_scoped(changed, &format!("{tag}-new"), DRIVER_SCOPE);
+    assert_eq!(new.code, 0, "{}", new.stderr);
+    let (code, log, _) = compare(&new.output, &snapshot_file, &format!("{tag}-second"));
+    (code, log)
+}
+
+#[test]
+fn new_public_item_outside_scope_passes() {
+    let (code, log) = scoped_compare("scoped_v2", "scoped-outside");
+    assert_eq!(code, 0, "{log}");
+}
+
+#[test]
+fn new_public_item_inside_scope_fails() {
+    let (code, log) = scoped_compare("scoped_v3", "scoped-inside");
+    assert_eq!(code, 1, "{log}");
+    let listed: Vec<&str> = log
+        .lines()
+        .filter(|l| l.starts_with("多 ") || l.starts_with("少 ") || l.starts_with("变 "))
+        .collect();
+    assert_eq!(listed.len(), 1, "{log}");
+    assert!(listed[0].starts_with("多 "), "{log}");
+    assert!(listed[0].contains(r#""parent": "driver::io""#), "{log}");
+    assert!(listed[0].contains(r#""name": "added""#), "{log}");
 }

@@ -41,7 +41,7 @@
 - 只冻结一部分：在同一节设 `api-snapshot-scope.<语言>`，列出要冻结的模块前缀，如 `api-snapshot-scope.rust = ["kvm_op::driver"]`，项目自己的代码不用改。范围内仍是多、少、变都失败，范围外的条目不进快照。没设就冻结整个项目的公开接口。写法和生成器的约定见[冻结范围](../ci-checks/README.md#冻结范围)；改它也按第 21 项单独提 PR。
 - 第一次：文件还不存在，job 失败，并把完整快照作为 artifact 上传。把它原样放到配置的路径，提交进同一个 PR。
 - 改接口时：生成结果和快照对不上，job 失败，job summary 列出多、少、变的条目，并写明 artifact 名字和该放的路径。接口改动是有意的，就从这次运行的 artifact 下载新快照，原样放到配置的路径，和代码在同一个 PR 里提交；快照在 `.github/` 下，owner 审 PR 时逐条看快照的 diff。不是有意的，就改回代码。
-- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](../ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](../ci-checks/go/README.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](../ci-checks/README.md#接口快照typescript-生成)。冻结范围 Go 的生成器已接上；另外三种语言的还没接上，设了也照旧冻结整个项目。
+- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](../ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](../ci-checks/go/README.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](../ci-checks/README.md#接口快照typescript-生成)。冻结范围 Rust 和 Go 的生成器已接上；Python、TypeScript 的还没接上，设了也照旧冻结整个项目。
 
 ### 第 2 项分层规则
 

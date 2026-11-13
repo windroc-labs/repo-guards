@@ -595,8 +595,9 @@ class ScopeDocsTest(unittest.TestCase):
         ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
         contract = self.section(ci, "#### 冻结范围")
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
-        self.assertIn("没设或为空", contract)
-        self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
+        self.assertIn("- 没设：写整个项目的公开接口", contract)
+        self.assertIn("- 范围不合法时退出 2", contract)
+        self.assertIn("Rust 的生成器自己从 `.github/checks/repo-guards.toml`", contract)
         self.assertIn("- 现状：Rust 的生成器已接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)

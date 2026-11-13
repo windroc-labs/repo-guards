@@ -284,7 +284,8 @@ class Check(Helpers, unittest.TestCase):
         rows = [
             ("src/api/a.py", "from core import x\n", 0, None),
             ("src/api/a.py", "import core.inner\n", 1, "绕开出口"),
-            ("src/api/a.py", "import store\n", 1, "越层"),
+            ("src/api/a.py", "import store\n", 0, None),
+            ("src/api/a.py", "import store.inner\n", 1, "绕开出口"),
             ("src/store/inner.py", "import core\n", 1, "向上"),
             ("src/core/inner.py", "import core\nfrom core import inner\n", 0, None),
         ]
@@ -337,14 +338,14 @@ class Check(Helpers, unittest.TestCase):
     def test_s13_existing_violation_passes_and_is_summarised(self):
         repo = self.repo(base={"src/api/a.py": "import store.inner\n"}, head={"src/util.py": "x = 1\n"})
         self.assert_exit(repo, 0)
-        self.assertIn("| 越层 | `src/api/a.py` | `api` | `src/store/inner.py` | `store` | 1 | 1 |", repo.summary)
+        self.assertIn("| 绕开出口 | `src/api/a.py` | `api` | `src/store/inner.py` | `store` | 1 | 1 |", repo.summary)
 
     def test_s14_new_config_does_not_block_existing_code(self):
         repo = self.repo(base={"src/api/a.py": "import store.inner\n"}, toml="", head_toml=config())
         self.assert_exit(repo, 0)
 
     def test_s15_moved_file_counts_as_new(self):
-        repo = self.repo(base={"src/api/a.py": "import store\n"})
+        repo = self.repo(base={"src/api/a.py": "import store.inner\n"})
         repo.git("mv", "src/api/a.py", "src/api/b.py")
         repo.commit({})
         self.assert_exit(repo, 1)
@@ -392,7 +393,7 @@ class Check(Helpers, unittest.TestCase):
     def test_s24_only_the_working_directory(self):
         files = {**{f"a/{p}": t for p, t in BASE.items()}, **{f"b/{p}": t for p, t in BASE.items()}}
         repo = Repo(self, files, config(wd="a") + config(wd="b"))
-        repo.commit({"b/src/api/a.py": "import store\n"})
+        repo.commit({"b/src/api/a.py": "import store.inner\n"})
         self.assert_exit(repo, 0, wd="a")
         self.assert_exit(repo, 1, wd="b")
 
@@ -437,7 +438,7 @@ class Check(Helpers, unittest.TestCase):
         self.assert_exit(repo, 1)
         errors = repo.errors()
         self.assertEqual([e.split(",")[1] for e in errors], ["line=3", "line=20"])
-        for text in ("越层", "merge-base 1 处", "head 2 处", "不超过 1 处"):
+        for text in ("绕开出口", "应走 store 的出口 src/store", "merge-base 1 处", "head 2 处", "不超过 1 处"):
             self.assertIn(text, errors[0])
 
     def test_s32_shrinking_pairs_are_summarised(self):
@@ -454,7 +455,7 @@ class Check(Helpers, unittest.TestCase):
         repo = self.repo()
         os.symlink("../store/inner.py", repo.root / "src/api/link.py")
         repo.commit({})
-        (repo.root / "src/api/a.py").write_text("import store\n")
+        (repo.root / "src/api/a.py").write_text("import store.inner\n")
         self.assert_exit(repo, 0)
         self.assertIn("未提交的改动", repo.output)
 
@@ -631,7 +632,7 @@ class MoreChecks(Helpers, unittest.TestCase):
         files = {**BASE, "web/index.ts": "", "web/inner.ts": ""}
         bad_ui = '{ name = "ui", paths = ["../web/**"], exits = 1, exit = "web/index.ts" },'
         repo = Repo(self, files, config().replace("layers = [\n", "layers = [\n  " + bad_ui + "\n"))
-        repo.commit({"src/api/a.py": "import store\n"})
+        repo.commit({"src/api/a.py": "import store.inner\n"})
         self.assert_exit(repo, 1)
         repo = Repo(self, files, '[project."."]\nlayers = [\n  ' + bad_ui + "\n]\n")
         self.assert_exit(repo, 0)
@@ -710,7 +711,14 @@ class GoProtocol(unittest.TestCase):
         '  { name = "core", paths = ["core/**"], exit = "core" },\n'
         '  { name = "store", paths = ["store/**"], exit = "store" },\n]\n'
     )
-    FILES = {"go.mod": "module m\n", "api/a.go": "", "core/c.go": "", "store/a_test.go": "", "store/store.go": ""}
+    FILES = {
+        "go.mod": "module m\n",
+        "api/a.go": "",
+        "core/c.go": "",
+        "store/store.go": "",
+        "store/inner/a_test.go": "",
+        "store/inner/b.go": "",
+    }
 
     def test_package_target_is_judged_by_its_non_test_files(self):
         def runner(argv, **kwargs):
@@ -719,17 +727,17 @@ class GoProtocol(unittest.TestCase):
             self.assertEqual(request["context"], ["go.mod"])
             self.assertTrue((side / "go.mod").is_file())
             imports = (side / "api/a.go").read_text() if (side / "api/a.go").exists() else ""
-            out = json.dumps({"file": "api/a.go", "line": 1, "targets": ["store"]}) if "store" in imports else ""
+            out = json.dumps({"file": "api/a.go", "line": 1, "targets": ["store/inner"]}) if "store" in imports else ""
             return subprocess.CompletedProcess(argv, 0, out, "")
 
         repo = Repo(self, self.FILES, self.LAYERS)
-        repo.commit({"api/a.go": 'import "m/store"\n'})
+        repo.commit({"api/a.go": 'import "m/store/inner"\n'})
         go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda tools: ["scanner"], build=None)
         out = io.StringIO()
         with unittest.mock.patch.dict(lr.LANGUAGES, {"go": go}):
             code = lr.check(repo.root, "go", ".", "main", out, None, runner)
         self.assertEqual(code, 1, out.getvalue())
-        self.assertIn("越层：api → store，api/a.go 引用 store。", out.getvalue())
+        self.assertIn("绕开出口：api → store，api/a.go 引用 store/inner，应走 store 的出口 store。", out.getvalue())
 
     def test_package_split_across_layers_is_invalid(self):
         files = frozenset({"api/a.go", "core/c.go", "lib/x.go", "lib/y.go", "lib/z_test.go"})
@@ -1137,7 +1145,7 @@ class Output(unittest.TestCase):
 
     def test_command_line(self):
         repo = Repo(self, BASE, config())
-        repo.commit({"src/api/a.py": "import store\n"})
+        repo.commit({"src/api/a.py": "import store.inner\n"})
         script = Path(lr.__file__)
         result = subprocess.run(
             [sys.executable, "-I", "-S", str(script), "python", "--base", "main"],

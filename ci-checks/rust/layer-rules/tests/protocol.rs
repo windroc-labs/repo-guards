@@ -305,3 +305,84 @@ fn bad_usage_or_request_exits_2() {
     assert_eq!(run(&root, &[&root], request.to_string().as_bytes()).0, 2);
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn cfg_test_on_any_expression_statement_is_skipped() {
+    let text = "\
+fn w() {
+    #[cfg(test)]
+    for _ in crate::store::inner::it() {}
+    #[cfg(test)]
+    while crate::store::inner::w() {}
+    #[cfg(test)]
+    loop { crate::store::inner::f(); }
+    #[cfg(test)]
+    (crate::store::inner::f(), 1);
+    for _ in crate::store::other::it() {}
+}
+";
+    assert_eq!(
+        scan("cfg-expr", &app(&[(API, text)]), &[API]),
+        [site(API, 10, &[OTHER])]
+    );
+}
+
+#[test]
+fn a_use_alias_does_not_resolve_through_itself() {
+    let api = "\
+mod h;
+use h::h;
+use self::h as here;
+fn f() { here::g(); }
+";
+    let project = app(&[(API, api), ("src/api/h.rs", "")]);
+    assert_eq!(
+        scan("self-alias", &project, &[API]),
+        [
+            site(API, 2, &["src/api/h.rs"]),
+            site(API, 3, &["src/api/h.rs"])
+        ]
+    );
+    let project = [
+        (
+            "crates/api/Cargo.toml",
+            "[package]\nname = \"api\"\n[dependencies]\ncorelib = { path = \"../corelib\" }\n",
+        ),
+        (
+            "crates/corelib/Cargo.toml",
+            "[package]\nname = \"corelib\"\n",
+        ),
+        (
+            "crates/api/src/lib.rs",
+            "use corelib;\nfn f() {\n    corelib::inner::x();\n}\n",
+        ),
+        ("crates/corelib/src/lib.rs", ""),
+        ("crates/corelib/src/inner.rs", ""),
+    ];
+    let lib = "crates/api/src/lib.rs";
+    assert_eq!(
+        scan("self-extern", &project, &[lib]),
+        [
+            site(lib, 1, &["crates/corelib/src/lib.rs"]),
+            site(lib, 3, &["crates/corelib/src/inner.rs"])
+        ]
+    );
+}
+
+#[test]
+fn a_dependency_on_the_parent_directory_is_outside() {
+    let manifest = "[package]\nname = \"app\"\n[dependencies]\nup = { path = \"..\" }\ndots = { path = \"..dots\" }\n";
+    let project = [
+        ("Cargo.toml", manifest),
+        ("..dots/Cargo.toml", "[package]\nname = \"dots\"\n"),
+        ("src/lib.rs", "use up::x;\nuse dots::y;\n"),
+        ("..dots/src/lib.rs", ""),
+    ];
+    assert_eq!(
+        scan("parent", &project, &["src/lib.rs"]),
+        [
+            site("src/lib.rs", 1, &[".."]),
+            site("src/lib.rs", 2, &["..dots/src/lib.rs"])
+        ]
+    );
+}

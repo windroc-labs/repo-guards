@@ -252,7 +252,7 @@ impl Project {
                     continue;
                 };
                 let name = snake(key);
-                if location.starts_with("..") {
+                if location == ".." || location.starts_with("../") {
                     externs.insert(name, Base::Outside(location));
                 } else if let Some((lib_name, base)) = lib_of(&packages, &location) {
                     externs.insert(if renamed { name } else { lib_name }, base);
@@ -454,7 +454,8 @@ struct Binding {
 }
 
 enum Name<'a> {
-    Alias(&'a Binding),
+    /// A use binding in the scope at this index.
+    Alias(usize, &'a Binding),
     /// A child module of the scope at this index.
     Module(usize),
 }
@@ -538,11 +539,7 @@ impl Walker<'_> {
                         .rename
                         .as_ref()
                         .map_or_else(|| ident(&e.ident), |(_, r)| ident(r));
-                    let (global, segs) = if e.ident == "self" {
-                        (false, vec!["crate".into()])
-                    } else {
-                        (true, vec![ident(&e.ident)])
-                    };
+                    let (global, segs) = extern_crate_path(e);
                     if name != "_" {
                         aliases.insert(
                             name,
@@ -568,9 +565,16 @@ impl Walker<'_> {
         });
     }
 
-    fn absolute(&self, global: bool, segs: &[String], scope: usize, depth: usize) -> Option<Abs> {
+    /// `expanding` holds the aliases (scope, name) being expanded: a use never resolves through itself.
+    fn absolute(
+        &self,
+        global: bool,
+        segs: &[String],
+        scope: usize,
+        expanding: &[(usize, &str)],
+    ) -> Option<Abs> {
         let (first, rest) = segs.split_first()?;
-        if depth > MAX_ALIAS_DEPTH {
+        if expanding.len() > MAX_ALIAS_DEPTH {
             return None;
         }
         let own = |segs: Vec<String>| {
@@ -599,10 +603,11 @@ impl Walker<'_> {
             }
             _ => {}
         }
-        match self.lookup(first, scope) {
-            Some(Name::Alias(binding)) => {
+        match self.lookup(first, scope, expanding) {
+            Some(Name::Alias(at, binding)) => {
                 let expanded = [binding.segs.as_slice(), rest].concat();
-                self.absolute(binding.global, &expanded, binding.scope, depth + 1)
+                let expanding = [expanding, &[(at, first.as_str())]].concat();
+                self.absolute(binding.global, &expanded, binding.scope, &expanding)
             }
             Some(Name::Module(at)) => own([self.scopes[at].module.as_slice(), segs].concat()),
             None => Some(Abs {
@@ -613,11 +618,15 @@ impl Walker<'_> {
     }
 
     /// What a leading name binds in scope, searching outward to the enclosing module's scope.
-    fn lookup(&self, name: &str, scope: usize) -> Option<Name<'_>> {
+    fn lookup(&self, name: &str, scope: usize, expanding: &[(usize, &str)]) -> Option<Name<'_>> {
         for at in (0..=scope).rev() {
             let here = &self.scopes[at];
-            if let Some(binding) = here.aliases.get(name) {
-                return Some(Name::Alias(binding));
+            if let Some(binding) = here
+                .aliases
+                .get(name)
+                .filter(|_| !expanding.contains(&(at, name)))
+            {
+                return Some(Name::Alias(at, binding));
             }
             if here.mods.contains(name) {
                 return Some(Name::Module(at));
@@ -682,18 +691,14 @@ impl<'ast> Visit<'ast> for Walker<'_> {
                 let global = u.leading_colon.is_some();
                 let targets = leaves
                     .iter()
-                    .filter_map(|(segs, _)| self.absolute(global, segs, scope, 0))
+                    .filter_map(|(segs, _)| self.absolute(global, segs, scope, &[]))
                     .filter_map(|abs| self.project.resolve(&abs))
                     .collect();
                 self.site(u.use_token.span.start().line, targets);
             }
             Item::ExternCrate(e) => {
-                let segs = if e.ident == "self" {
-                    vec!["crate".to_string()]
-                } else {
-                    vec![ident(&e.ident)]
-                };
-                let abs = self.absolute(e.ident != "self", &segs, self.scope(), 0);
+                let (global, segs) = extern_crate_path(e);
+                let abs = self.absolute(global, &segs, self.scope(), &[]);
                 let targets = abs
                     .and_then(|a| self.project.resolve(&a))
                     .into_iter()
@@ -777,14 +782,14 @@ impl<'ast> Visit<'ast> for Walker<'_> {
             let scope = self.scope();
             let global = path.leading_colon.is_some();
             let target = self
-                .absolute(global, &segs, scope, 0)
+                .absolute(global, &segs, scope, &[])
                 .and_then(|abs| self.project.resolve(&abs));
             // Through a use alias, the path is a site only where it reaches past the file the alias names.
             let counts = global
-                || !matches!(self.lookup(&segs[0], scope), Some(Name::Alias(_)))
+                || !matches!(self.lookup(&segs[0], scope, &[]), Some(Name::Alias(..)))
                 || target
                     != self
-                        .absolute(false, &segs[..1], scope, 0)
+                        .absolute(false, &segs[..1], scope, &[])
                         .and_then(|abs| self.project.resolve(&abs));
             if let Some(target) = target.filter(|_| counts) {
                 self.site(path.span().start().line, BTreeSet::from([target]));
@@ -794,20 +799,60 @@ impl<'ast> Visit<'ast> for Walker<'_> {
     }
 }
 
+/// Every expression's attributes; only `Verbatim`, which syn could not parse, has none.
 fn expr_attrs(expr: &syn::Expr) -> Option<&Vec<Attribute>> {
     use syn::Expr::*;
     Some(match expr {
-        Call(e) => &e.attrs,
-        MethodCall(e) => &e.attrs,
-        Macro(e) => &e.attrs,
-        Path(e) => &e.attrs,
+        Array(e) => &e.attrs,
         Assign(e) => &e.attrs,
+        Async(e) => &e.attrs,
+        Await(e) => &e.attrs,
+        Binary(e) => &e.attrs,
         Block(e) => &e.attrs,
+        Break(e) => &e.attrs,
+        Call(e) => &e.attrs,
+        Cast(e) => &e.attrs,
+        Closure(e) => &e.attrs,
+        Const(e) => &e.attrs,
+        Continue(e) => &e.attrs,
+        Field(e) => &e.attrs,
+        ForLoop(e) => &e.attrs,
+        Group(e) => &e.attrs,
         If(e) => &e.attrs,
+        Index(e) => &e.attrs,
+        Infer(e) => &e.attrs,
+        Let(e) => &e.attrs,
+        Lit(e) => &e.attrs,
+        Loop(e) => &e.attrs,
+        Macro(e) => &e.attrs,
         Match(e) => &e.attrs,
+        MethodCall(e) => &e.attrs,
+        Paren(e) => &e.attrs,
+        Path(e) => &e.attrs,
+        Range(e) => &e.attrs,
+        RawAddr(e) => &e.attrs,
+        Reference(e) => &e.attrs,
+        Repeat(e) => &e.attrs,
+        Return(e) => &e.attrs,
+        Struct(e) => &e.attrs,
+        Try(e) => &e.attrs,
+        TryBlock(e) => &e.attrs,
+        Tuple(e) => &e.attrs,
+        Unary(e) => &e.attrs,
         Unsafe(e) => &e.attrs,
+        While(e) => &e.attrs,
+        Yield(e) => &e.attrs,
         _ => return None,
     })
+}
+
+/// `extern crate x` names the crate `x`; `extern crate self` names this crate.
+fn extern_crate_path(item: &syn::ItemExternCrate) -> (bool, Vec<String>) {
+    if item.ident == "self" {
+        (false, vec!["crate".to_string()])
+    } else {
+        (true, vec![ident(&item.ident)])
+    }
 }
 
 fn run(root: &Path, input: &str) -> Result<Vec<String>, String> {

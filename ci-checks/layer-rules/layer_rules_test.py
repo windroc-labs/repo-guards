@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -623,8 +624,9 @@ class RustProtocol(Helpers, unittest.TestCase):
         with unittest.mock.patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "x"}):
             self.assertEqual(lr.rust_scanner(Path("/side")), ["cargo", *tail])
         env = {k: v for k, v in os.environ.items() if k != "RUSTUP_TOOLCHAIN"}
+        pinned = tomllib.loads((lr.CI_CHECKS / "rust/rust-toolchain.toml").read_text())["toolchain"]["channel"]
         with unittest.mock.patch.dict(os.environ, env, clear=True):
-            self.assertEqual(lr.rust_scanner(Path("/side")), ["cargo", "+1.99.1", *tail])
+            self.assertEqual(lr.rust_scanner(Path("/side")), ["cargo", f"+{pinned}", *tail])
         self.assertIs(lr.LANGUAGES["rust"].scanner, lr.rust_scanner)
 
     def check(self, targets):
@@ -644,12 +646,12 @@ class RustProtocol(Helpers, unittest.TestCase):
         return code, out.getvalue(), summary.read_text()
 
     def test_outside_targets_count_as_unassigned(self):
-        code, out, summary = self.check(["../shared", "../../elsewhere"])
+        code, out, summary = self.check(["../shared", "../../elsewhere", ".."])
         self.assertEqual(code, 0, out)
-        self.assertIn("未归层 import：2 处（终点不属于任何层：项目里未归层的文件，或 working-directory 之外的 crate）", summary)
+        self.assertIn("未归层 import：3 处（终点不属于任何层：项目里未归层的文件，或 working-directory 之外的 crate）", summary)
 
     def test_targets_that_do_not_leave_the_working_directory_are_rejected(self):
-        for target in ["../svc/src/core/inner.rs", "../x/../shared", "../shared/./y"]:
+        for target in ["../svc/src/core/inner.rs", "../x/../shared", "../shared/./y", "../svc", "..shared"]:
             with self.subTest(target=target):
                 code, out, _ = self.check([target])
                 self.assertEqual(code, 2, out)

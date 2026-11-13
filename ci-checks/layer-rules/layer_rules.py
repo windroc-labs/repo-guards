@@ -394,7 +394,7 @@ def scanner_records(language: str, side_root: Path, request: dict[str, Any], run
 
 def outside(prefix: str, target: str) -> bool:
     """A scanner target naming a crate outside the working-directory: normalized, and it leaves prefix."""
-    if not target.startswith("../") or posixpath.normpath(target) != target:
+    if (target != ".." and not target.startswith("../")) or posixpath.normpath(target) != target:
         return False
     return not prefix or not f"{posixpath.normpath(prefix + target)}/".startswith(prefix)
 
@@ -439,21 +439,26 @@ def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, 
         line, targets = record.get("line"), record.get("targets")
         if set(record) != {"file", "line", "targets"} or not isinstance(line, int) or not isinstance(targets, list):
             raise Error(f"{language} scanner wrote a malformed record: {str(record)[:200]}")
-        if not all(isinstance(t, str) and (t in files or t in packages or outside(prefix, t)) for t in targets):
+        if not all(isinstance(t, str) for t in targets):
+            raise Error(f"{language} scanner wrote a malformed record: {str(record)[:200]}")
+        away = [t for t in targets if outside(prefix, t)]
+        if not all(t in files or t in packages or t in away for t in targets):
             raise Error(f"{language} scanner named a file that is not in the project: {str(record)[:200]}")
-        add(side, config, spec, path, line, [packages[t] if t in packages and t not in files else t for t in targets])
+        project = [t if t in files else packages[t] for t in targets if t not in away]
+        add(side, config, spec, path, line, project, away=len(set(away)))
     return side
 
 
-def add(side: Side, config: Config, spec: Language, path: str, line: int, targets: list[str]) -> None:
+def add(
+    side: Side, config: Config, spec: Language, path: str, line: int, targets: list[str], away: int = 0
+) -> None:
+    """away: the reference's distinct targets outside the working-directory, which count as unassigned."""
     source = config.layer_of(path)
     assert source is not None
     origin = unit(spec, path)
     side.layer[path] = side.layer[origin] = source
+    side.unassigned += away
     for target in dict.fromkeys(targets):
-        if target.startswith("../"):
-            side.unassigned += 1
-            continue
         if config.is_test(target):
             continue
         layer = config.layer_of(target)

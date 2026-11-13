@@ -7,8 +7,8 @@ the language's resolution files (go.mod, tsconfig.json, Cargo.toml; none for Pyt
 settings ("source-dirs"). stdout has one JSON line per statement, {"file", "line", "targets"}, targets being the
 "files" it resolves to (a package-unit language may name the package directory), or {"file", "error"} for a file
 that does not parse. References outside the project are left out, except a crate outside the working-directory that
-the scanner can locate (Rust path dependencies): its target is the crate's directory relative to the root, normalized
-and starting with "../", and it counts as unassigned.
+the scanner can locate (Rust path dependencies): its target is the crate's directory relative to the root, normalized,
+".." or starting with "../", and it counts as unassigned.
 """
 
 import ast

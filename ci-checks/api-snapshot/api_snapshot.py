@@ -1,4 +1,8 @@
+import argparse
 import json
+import os
+import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -16,6 +20,7 @@ class Entry(NamedTuple):
 
 
 FIELDS = frozenset(Entry._fields)
+KEY_FIELDS = Entry._fields[:4]
 
 
 class Error(Exception):
@@ -103,3 +108,100 @@ def compare(snapshot: dict[Key, Entry], entries: dict[Key, Entry]) -> Diff:
 
 def render(entries: dict[Key, Entry]) -> str:
     return json.dumps([entry._asdict() for entry in sorted(entries.values())], indent=2, ensure_ascii=False) + "\n"
+
+
+def key_json(entry: Entry) -> str:
+    return "{" + ", ".join(f'"{field}": {quote(getattr(entry, field))}' for field in KEY_FIELDS) + "}"
+
+
+def log_lines(diff: Diff | None, entries: dict[Key, Entry], artifact: str, path: str) -> list[str]:
+    if diff is None:
+        lines = [f"api snapshot: {quote(path)} does not exist; {len(entries)} entries generated"]
+    elif diff.empty:
+        return [f"api snapshot: matches {quote(path)}"]
+    else:
+        lines = [
+            f"api snapshot: {len(diff.added)} added, {len(diff.removed)} removed, {len(diff.changed)} changed"
+            f" against {quote(path)}"
+        ]
+        lines += [f"多 {key_json(entry)} {quote(entry.signature)}" for entry in diff.added]
+        lines += [f"少 {key_json(entry)} {quote(entry.signature)}" for entry in diff.removed]
+        for old, new in diff.changed:
+            lines += [f"变 {key_json(old)}", f"  旧 {quote(old.signature)}", f"  新 {quote(new.signature)}"]
+    return lines + [f"new snapshot: artifact {quote(artifact)}, commit it as {quote(path)}"]
+
+
+def fence(text: str) -> str:
+    # A fence longer than any backtick run inside cannot be closed early; code blocks render no Markdown.
+    ticks = "`" * max(3, max(map(len, re.findall("`+", text)), default=0) + 1)
+    return f"{ticks}text\n{text}\n{ticks}\n"
+
+
+def entry_text(entry: Entry, signature: list[str]) -> str:
+    return "\n".join([*(f"{field}: {getattr(entry, field)}" for field in KEY_FIELDS), *signature])
+
+
+def summary_text(diff: Diff | None, entries: dict[Key, Entry], artifact: str, path: str) -> str:
+    if diff is not None and diff.empty:
+        return f"### 接口快照：一致\n\n生成的条目和这个快照一致：\n\n{fence(path)}"
+    if diff is None:
+        parts = [f"### 接口快照：快照文件不存在\n\n配置的路径上还没有快照文件，这次生成了 {len(entries)} 个条目。\n"]
+    else:
+        parts = [
+            f"### 接口快照：不一致\n\n多 {len(diff.added)} 条、少 {len(diff.removed)} 条、变 {len(diff.changed)} 条。\n"
+        ]
+        sections = [
+            ("多", [entry_text(e, [f"signature: {e.signature}"]) for e in diff.added]),
+            ("少", [entry_text(e, [f"signature: {e.signature}"]) for e in diff.removed]),
+            (
+                "变",
+                [
+                    entry_text(old, [f"旧签名: {old.signature}", f"新签名: {new.signature}"])
+                    for old, new in diff.changed
+                ],
+            ),
+        ]
+        parts += [f"#### {label}\n\n" + fence("\n\n".join(blocks)) for label, blocks in sections if blocks]
+    parts.append(f"新快照在 artifact：\n\n{fence(artifact)}\n原样放到这个路径并提交：\n\n{fence(path)}")
+    return "\n".join(parts)
+
+
+def write(path: str, text: str, mode: str) -> None:
+    try:
+        with open(path, mode, encoding="utf-8", newline="\n") as file:
+            file.write(text)
+    except OSError as error:
+        raise Error(f"cannot write {quote(path)}: {type(error).__name__}") from error
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(description="Compare generated interface entries with the locked snapshot.")
+    parser.add_argument("--entries", required=True, help="the generator's JSON array of entries")
+    parser.add_argument("--snapshot", required=True, help="the locked snapshot; may not exist; only read")
+    parser.add_argument("--output", required=True, help="where to write the new snapshot on mismatch or missing file")
+    parser.add_argument("--artifact", required=True, help="artifact name, shown in the summary")
+    parser.add_argument("--path", required=True, help="configured snapshot path, shown in the summary")
+    args = parser.parse_args(argv)
+    try:
+        entries = read(Path(args.entries), "entries")
+        snapshot = read_snapshot(Path(args.snapshot))
+        diff = None if snapshot is None else compare(snapshot, entries)
+        print("\n".join(log_lines(diff, entries, args.artifact, args.path)))
+        matches = diff is not None and diff.empty
+        if not matches:
+            write(args.output, render(entries), "w")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            write(summary, summary_text(diff, entries, args.artifact, args.path), "a")
+    except Error as error:
+        print(f"api snapshot: {error}", file=sys.stderr)
+        return 2
+    return 0 if matches else 1
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except Exception as error:  # noqa: BLE001 -- FR-14: anything unexpected means the check could not run.
+        print(f"api snapshot: {type(error).__name__}: {quote(str(error))}", file=sys.stderr)
+        sys.exit(2)

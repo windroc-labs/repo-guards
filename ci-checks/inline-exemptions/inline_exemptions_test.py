@@ -517,7 +517,9 @@ class Workflows(unittest.TestCase):
 
     @staticmethod
     def name(step):
-        # An anchored step (- &id) has its name on the next line.
+        # An anchored step (- &id) has its name on the next line; an alias step (- *id) is only its alias.
+        if step.startswith("*"):
+            return step.split("\n", 1)[0]
         return next(line.strip().removeprefix("name: ") for line in step.splitlines() if line.strip().startswith("name: "))
 
     def checks_job(self, language):

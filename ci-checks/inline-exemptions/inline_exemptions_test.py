@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import tomllib
@@ -525,7 +526,9 @@ class Workflows(unittest.TestCase):
     def checks_job(self, language):
         text = (self.WORKFLOWS / f"{language}.yml").read_text()
         self.assertIn("\npermissions:\n  contents: read\n", text)
-        self.assertEqual(text.count("permissions:"), 1)
+        # Job-level blocks (the API snapshot job declares its own) may only repeat the read-only token.
+        for block in re.findall(r"^( *)permissions:\n((?:\1  .*\n)*)", text, re.M):
+            self.assertEqual(block[1].split(), ["contents:", "read"], block)
         return text.split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
 
     def test_no_standalone_workflow_or_template_job(self):

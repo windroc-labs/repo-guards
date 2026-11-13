@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import prettier_files
-from language_gate import PATTERNS, PRETTIER, main, touches
+from language_gate import PATTERNS, PRETTIER, config_overrides, main, touches
 
 HERE = Path(__file__).resolve().parent
 CI_CHECKS = HERE.parent
@@ -53,6 +53,9 @@ class Touches(unittest.TestCase):
                 if other != language:
                     with self.subTest(language=language, other=other):
                         self.assertEqual(touches(language, paths), [])
+
+    def test_snapshot_setting_knows_every_gated_language(self):
+        self.assertEqual(set(config_overrides.LANGUAGES), set(PATTERNS))
 
     def test_snapshot_paths_match_exactly(self):
         snapshots = [".github/api/go.json", ".github/api/[a]*.json"]

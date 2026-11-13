@@ -154,7 +154,7 @@ def apply(root: Path, overrides: Path) -> int:
     return 0
 
 
-def name(working_directory: str) -> str:
+def section_header(working_directory: str) -> str:
     return f"[{PROJECT}.{json.dumps(working_directory, ensure_ascii=False)}]"
 
 
@@ -164,14 +164,21 @@ def project_sections(overrides: dict[str, Any]) -> dict[str, dict[str, Any]]:
         raise Error(f"[{PROJECT}] is not a table")
     for working_directory, section in project.items():
         if not isinstance(section, dict):
-            raise Error(f"{name(working_directory)} is not a table")
+            raise Error(f"{section_header(working_directory)} is not a table")
     return project
+
+
+def parse_overrides(text: str) -> dict[str, Any]:
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise Error(f"{OVERRIDES}: {error}") from error
 
 
 def source_dirs(overrides: Path, working_directory: str) -> list[str]:
     if not overrides.exists():
         return DEFAULT_SOURCE_DIRS
-    project = project_sections(tomllib.loads(overrides.read_text(encoding="utf-8")))
+    project = project_sections(parse_overrides(overrides.read_text(encoding="utf-8")))
     return project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
 
 
@@ -179,7 +186,7 @@ def snapshot_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], str]:
     settings: dict[tuple[str, str], str] = {}
     for working_directory, section in project_sections(overrides).items():
         paths = section.get(API_SNAPSHOT, {})
-        where = f"{name(working_directory)} {API_SNAPSHOT}"
+        where = f"{section_header(working_directory)} {API_SNAPSHOT}"
         if not isinstance(paths, dict):
             raise Error(f"{where} is not a table")
         for language, path in paths.items():
@@ -199,10 +206,7 @@ def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
         return {}
     except (OSError, UnicodeDecodeError) as error:
         raise Error(f"{OVERRIDES}: {error}") from error
-    try:
-        return snapshot_settings(tomllib.loads(text))
-    except tomllib.TOMLDecodeError as error:
-        raise Error(f"{OVERRIDES}: {error}") from error
+    return snapshot_settings(parse_overrides(text))
 
 
 def checkout_mode(root: Path) -> Mode:
@@ -245,9 +249,8 @@ def snapshot_path(root: Path, working_directory: str, language: str) -> str | No
         return None
     error = snapshot_path_error(path, checkout_mode(root))
     if error:
-        raise Error(
-            f"{name(working_directory)} {API_SNAPSHOT}.{language} = {json.dumps(path, ensure_ascii=False)}: {error}"
-        )
+        where = f"{section_header(working_directory)} {API_SNAPSHOT}.{language}"
+        raise Error(f"{where} = {json.dumps(path, ensure_ascii=False)}: {error}")
     return path
 
 

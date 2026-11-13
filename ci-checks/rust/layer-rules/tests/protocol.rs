@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -24,7 +24,11 @@ fn run(root: &Path, args: &[&Path], stdin: &[u8]) -> (i32, String) {
         .current_dir(root)
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    // A child that exits before reading (a usage error) closes the pipe; its exit code still tells.
+    match child.stdin.take().unwrap().write_all(stdin) {
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => {}
+        written => written.unwrap(),
+    }
     let output = child.wait_with_output().unwrap();
     (
         output.status.code().unwrap(),
@@ -300,6 +304,8 @@ fn a_file_that_does_not_parse_is_reported() {
 fn bad_usage_or_request_exits_2() {
     let root = temp("usage");
     assert_eq!(run(&root, &[], b"{}").0, 2);
+    // More than a pipe buffer: the usage error exits without reading, so the write always hits EPIPE.
+    assert_eq!(run(&root, &[], &vec![b' '; 1 << 20]).0, 2);
     assert_eq!(run(&root, &[&root], b"not json").0, 2);
     let request = json!({"files": ["../x.rs"], "scan": [], "context": [], "settings": {}});
     assert_eq!(run(&root, &[&root], request.to_string().as_bytes()).0, 2);

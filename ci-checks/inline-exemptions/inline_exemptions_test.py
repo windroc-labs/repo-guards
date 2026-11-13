@@ -511,6 +511,8 @@ class Workflows(unittest.TestCase):
 
     WORKFLOWS = ie.CI_CHECKS.parent / ".github/workflows"
     GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}"
+    # Languages whose Checks job runs a Layer rules step, right after Inline exemptions.
+    LAYER_RULES = frozenset({"go", "python", "typescript"})
 
     @staticmethod
     def steps(job):
@@ -542,8 +544,9 @@ class Workflows(unittest.TestCase):
                 names = [self.name(step) for step in steps]
                 at = names.index("Inline exemptions")
                 self.assertLess(names.index("Apply caller overrides"), at)
-                # Every language workflow runs Layer rules between them; it is gated like the rest.
-                self.assertEqual(names[at + 1], "Layer rules")
+                self.assertEqual("Layer rules" in names, language in self.LAYER_RULES)
+                if language in self.LAYER_RULES:
+                    self.assertEqual(names[at + 1], "Layer rules")
                 step = steps[at]
                 self.assertIn("id: inline-exemptions", step)
                 self.assertIn("working-directory: repo\n", step)

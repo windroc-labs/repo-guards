@@ -5,10 +5,11 @@
     "node": ">=22.18.0"
   },
   "scripts": {
-    "test": "node --test imports.test.ts",
+    "test": "node --test layer-rules.test.ts",
     "typecheck": "tsc"
   },
   "dependencies": {
+    "dependency-cruiser": "18.7.2",
     "typescript": "6.0.3"
   },
   "devDependencies": {

@@ -150,7 +150,8 @@ jobs:
   tests:
     name: Checker tests
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Building golangci-lint for the Go layer rules tests takes a few minutes.
+    timeout-minutes: 15
     env:
       GOTOOLCHAIN: local
     defaults:
@@ -228,13 +229,6 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/inline-exemptions
         run: python3 -m unittest inline_exemptions_test
-      - name: layer-rules tests
-        id: layer-rules
-        if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/layer-rules
-        run: |
-          npm ci --prefix ../typescript/layer-rules --no-audit --no-fund --ignore-scripts
-          python3 -m unittest layer_rules_test
       - name: github-dir-pr tests
         id: github-dir-pr
         if: ${{ !cancelled() }}
@@ -263,6 +257,14 @@ jobs:
           uv venv -q --python 3.14 "$RUNNER_TEMP/python-api-venv"
           uv pip install -q --python "$RUNNER_TEMP/python-api-venv/bin/python" --require-hashes -r requirements.txt
           "$RUNNER_TEMP/python-api-venv/bin/python" -m unittest python_api_test
+      - name: Python layer rules tests
+        id: python-layer-rules
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/python/layer-rules
+        run: |
+          uv venv -q --python 3.14 "$RUNNER_TEMP/python-layer-rules-venv"
+          uv pip install -q --python "$RUNNER_TEMP/python-layer-rules-venv/bin/python" --require-hashes -r requirements.txt
+          "$RUNNER_TEMP/python-layer-rules-venv/bin/python" -m unittest layer_rules_test
       - name: TypeScript API snapshot tests
         id: typescript-api-snapshot
         if: ${{ !cancelled() }}
@@ -310,16 +312,16 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/python/inline-exemptions
         run: python3 -m unittest exemptions_test
-      - name: Python layer rules tests
-        id: python-layer-rules
-        if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/layer-rules
-        run: python3 -m unittest imports_test
       - name: Go layer rules tests
         id: go-layer-rules
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/go/layer-rules
-        run: go test ./...
+        # The golangci-lint go.yml installs, for the end-to-end cases.
+        run: |
+          (cd "$RUNNER_TEMP" && GOBIN=$RUNNER_TEMP/go-tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0)
+          (cd "$RUNNER_TEMP" && uv venv -q --python 3.12 layer-rules-venv)
+          uv pip install -q --python "$RUNNER_TEMP/layer-rules-venv/bin/python" --require-hashes -r requirements.txt
+          GOLANGCI_LINT=$RUNNER_TEMP/go-tools/golangci-lint "$RUNNER_TEMP/layer-rules-venv/bin/python" -m unittest layer_rules_test
       - name: Go inline exemptions tests
         id: go-inline-exemptions
         if: ${{ !cancelled() }}
@@ -339,11 +341,6 @@ jobs:
         id: rust-inline-exemptions
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/inline-exemptions
-        run: cargo test --locked
-      - name: Rust layer rules tests
-        id: rust-layer-rules
-        if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/layer-rules
         run: cargo test --locked
       - name: Rust API snapshot tests
         id: rust-api-snapshot
@@ -374,6 +371,7 @@ jobs:
           LANGUAGE_GATE: ${{ steps.language-gate.outcome }}
           API_SNAPSHOT: ${{ steps.api-snapshot.outcome }}
           PYTHON_API_SNAPSHOT: ${{ steps.python-api-snapshot.outcome }}
+          PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
           TYPESCRIPT_API_SNAPSHOT: ${{ steps.typescript-api-snapshot.outcome }}
           SHARD_ARTIFACT: ${{ steps.shard-artifact.outcome }}
           RUST_COVERAGE_LCOV: ${{ steps.rust-coverage-lcov.outcome }}
@@ -382,16 +380,13 @@ jobs:
           PYTHON_INLINE_EXEMPTIONS: ${{ steps.python-inline-exemptions.outcome }}
           GO_INLINE_EXEMPTIONS: ${{ steps.go-inline-exemptions.outcome }}
           TYPESCRIPT_INLINE_EXEMPTIONS: ${{ steps.typescript-inline-exemptions.outcome }}
+          TYPESCRIPT_LAYER_RULES: ${{ steps.typescript-layer-rules.outcome }}
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
-          LAYER_RULES: ${{ steps.layer-rules.outcome }}
-          PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
           RUST_API_SNAPSHOT: ${{ steps.rust-api-snapshot.outcome }}
           GO_LAYER_RULES: ${{ steps.go-layer-rules.outcome }}
-          TYPESCRIPT_LAYER_RULES: ${{ steps.typescript-layer-rules.outcome }}
-          RUST_LAYER_RULES: ${{ steps.rust-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES RUST_API_SNAPSHOT GO_LAYER_RULES TYPESCRIPT_LAYER_RULES RUST_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

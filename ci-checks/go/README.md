@@ -4,7 +4,7 @@
 
 Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。`go.mod` 的 `ignore` 指令（Go 1.25 起）让 `./...` 跳过目录，`go.yml` 各步就都不查那里，所以算行内豁免，`go.mod` 进 CODEOWNERS（见 [CODEOWNERS](../README.md#codeowners)）。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
 
-工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译；接口快照的生成器 [`api-snapshot/`](api-snapshot/) 由 API snapshot job 的 Generate 步同样编译（见[接口快照生成](#接口快照生成api-snapshot)）；分层规则的扫描器 [`layer-rules/`](layer-rules/) 由 Layer rules 步用 `go build` 编译（见[分层规则扫描器](#分层规则扫描器layer-rules)）。
+工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译；接口快照的生成器 [`api-snapshot/`](api-snapshot/) 由 API snapshot job 的 Generate 步同样编译（见[接口快照生成](#接口快照生成api-snapshot)）。
 
 ## formatter（gofmt）
 
@@ -137,13 +137,37 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 - 非导出类型的成员不进：经由别名（`type P = hidden`）或返回值（`func New() *hidden`）能用到的方法和字段改了，查不到。
 - 用 cgo 的包要 runner 上有 C 编译器，没有就编译不过，退出 2。
 
-## 分层规则扫描器（layer-rules）
+## 分层规则（depguard）
 
-[`layer-rules/`](layer-rules/) 是[第 4 层](../../architecture/README.md#第-2-项分层规则)第 2 项分层规则的 Go 扫描器：一个 Go 小程序，只用标准库，`go.mod` 没有 `require`。Checks job 的 Layer rules 步跑共用的 [`layer_rules.py`](../layer-rules/layer_rules.py)，它先用 `go build` 编译这个扫描器（带 `GOWORK=off`、`GOFLAGS=`、`GOENV=off`），再对 HEAD 和 merge-base 各跑一次，按协议交给它要扫的文件和 `go.mod`，收回每个 import 项解析到的包目录。规则、配置和输出见第 2 项。
+[第 4 层](../../architecture/README.md#第-2-项分层规则)第 2 项的 Go 部分：规则写在项目自己的 golangci-lint 配置里，Checks job 的 Layer rules 步跑 [`layer-rules/layer_rules.py`](layer-rules/layer_rules.py)，用 depguard 查整个项目。
 
 | 项 | 内容 |
 |---|---|
-| 解析 | `go/parser` 只读 import，不构建、不执行项目代码；读不懂的文件报出来，HEAD 上的让这一步退出 2 |
-| 解析到哪 | 按各个 `go.mod` 的 `module` 取最长匹配的模块路径，剩下的部分是包目录；目录里没有 Go 文件、或属于嵌套在里面的另一个模块的，不算 |
-| 共用部分先筛掉的 | `_test.go` 总是测试代码：不交给扫描器扫，也不拿它判目标包的层。Go 工具跳过的文件（`testdata/`、`vendor/` 下的，以 `_` 或 `.` 开头的目录和文件）不算 Go 源码，那里的 `go.mod` 也不交给扫描器 |
-| 测试 | 在该目录跑 `go test ./...` |
+| 配置放哪 | `working-directory` 里的 `.golangci.json`、`.golangci.toml`、`.golangci.yaml` 或 `.golangci.yml`，有几个时按这个顺序取第一个（同 golangci-lint），不往上级、下级目录找。要 v2 格式（`version: "2"`），规则写在 `linters.settings.depguard.rules`。`files` 里的 `${config-path}` 是 `working-directory`，`${base-path}` 也是（配置里设了别的 `run.relative-path-mode` 时按它）。同 golangci-lint，键名不分大小写，YAML 按 1.2 读（`no`、日期都是字符串） |
+| 怎样算有配置 | 文件里 `linters.settings.depguard.rules` 不空。没有文件、或文件里没有 depguard 规则：打印一行提示后通过。v1 格式的文件里有 depguard 设置：失败，提示改成 v2（`golangci-lint migrate`）。`run`、`linters`、`linters.settings`、`linters.settings.depguard` 不是映射：失败 |
+| 用配置里的哪些 | 只用 `linters.settings.depguard`、`linters.exclusions` 和 `run` 的 `relative-path-mode`、`build-tags`、`tests`：脚本把它们抄进自己生成的配置，只开 depguard，问题不限条数。别的都不用：golangci-lint 会加载 `linters.settings.custom` 写的 Go 插件（不管开没开），`output` 能往别处写文件，`issues.new*` 只查新增 |
+| 结果 | 对 `./...` 跑一次 `golangci-lint run`：有违规退出 1；配置读不懂、被 golangci-lint 拒绝（如不认识的 `list-mode`）或工具跑不起来，退出 2 |
+| 豁免已有违规 | 写在同一个文件里：规则的 `files` 加 `!` 开头的排除，或写 `linters.exclusions`（路径相对 `working-directory`）。行内的 `//nolint:depguard` 按[行内豁免](../README.md#行内豁免)登记 |
+| 安装 | golangci-lint 用 Install Go tools 装的 v2.15.0。读 YAML 的 PyYAML 版本和 hash 写在 [`requirements.txt`](layer-rules/requirements.txt)（由 `requirements.in` 经 `uv pip compile --generate-hashes` 生成），装进 `$RUNNER_TEMP` 下的 venv，不和项目的依赖混装 |
+| 测试 | 在该目录用装了 `requirements.txt` 的 Python 跑 `python -m unittest layer_rules_test`；设了 `GOLANGCI_LINT`（golangci-lint 的路径）时，还对 [`testdata/layers`](layer-rules/testdata/layers) 跑真的 golangci-lint |
+
+repo-guards 自己的 [`golangci.toml`](golangci.toml) 也开 depguard（Lint 步，禁用的包），和这里的分层规则互不相干。
+
+例子：`domain` 只用标准库，`app` 可以用 `domain`，不能用 `cmd`。
+
+```yaml
+version: "2"
+linters:
+  settings:
+    depguard:
+      rules:
+        domain:
+          list-mode: strict
+          files: ["${base-path}/internal/domain/**"]
+          allow: [$gostd]
+        app:
+          files: ["${base-path}/internal/app/**"]
+          deny:
+            - pkg: example.com/m/cmd
+              desc: app 不用 cmd
+```

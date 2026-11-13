@@ -31,6 +31,7 @@ PATTERNS = {
         "pytest.toml",
         ".pytest.toml",
         "tox.ini",
+        ".importlinter",
     ),
     "rust": (
         "*.rs",
@@ -66,6 +67,11 @@ PATTERNS = {
         "go.work.sum",
         "vendor/modules.txt",
         "testdata/*",
+        # The golangci-lint configs Layer rules reads its depguard rules from.
+        ".golangci.yml",
+        ".golangci.yaml",
+        ".golangci.toml",
+        ".golangci.json",
     ),
 }
 SHOWN = 10

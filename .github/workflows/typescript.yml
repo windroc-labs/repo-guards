@@ -123,17 +123,8 @@ jobs:
         run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" typescript
       - name: Layer rules
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
-        # The step parses the project's code and never runs it. uv looks the interpreter up from /: from the checkout, a
-        # cold lookup runs the project's .venv python, and its .pth files with it. -I -S keeps site-packages out.
-        working-directory: repo
-        # Its own install dir: earlier uv steps run in the checkout and read the worker's uv config, which can add Python
-        # builds to the shared one.
-        env:
-          UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python
-          PROJECT_DIR: ${{ inputs.working-directory }}
-        run: |
-          python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)
-          "$python" -I -S "$RG/layer-rules/layer_rules.py" typescript --working-directory "$PROJECT_DIR" --base "$BASE_REF"
+        # dependency-cruiser with the project's .dependency-cruiser.json; layer-rules.ts loads no project code.
+        run: node "$RG/typescript/layer-rules/layer-rules.ts"
       - name: Format
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format paths -- prettier --list-different --config "$RG/typescript/.prettierrc.json" .

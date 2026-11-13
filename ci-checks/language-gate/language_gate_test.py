@@ -20,11 +20,15 @@ INLINE_EXEMPTIONS = CI_CHECKS / "inline-exemptions/inline_exemptions.py"
 
 MATCHES = {
     "python": ["a.py", "src/b.pyi", "x/a.ipynb", "pyproject.toml", "sub/uv.lock", "dev-requirements.txt"]
-    + ["pytest.toml", "requirements.in"],
+    + ["pytest.toml", "requirements.in", "pkg/.importlinter"],
     "rust": ["src/main.rs", "Cargo.toml", "crates/a/Cargo.lock", ".cargo/config.toml", "a/clippy.toml"],
     "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"]
-    + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"],
-    "go": ["main.go", "go.mod", "sub/go.sum", "pkg/testdata/in.txt", "x/sum_amd64.s", "cgo/a.c", "vendor/modules.txt"],
+    + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"]
+    # The files the Layer rules step reads or refuses.
+    + ["app/.dependency-cruiser.json", "app/.dependency-cruiser.cjs", "app/.dependency-cruiser.mts"]
+    + ["app/.dependency-cruiser-known-violations.json"],
+    "go": ["main.go", "go.mod", "sub/go.sum", "pkg/testdata/in.txt", "x/sum_amd64.s", "cgo/a.c", "vendor/modules.txt"]
+    + [".golangci.toml"],
 }
 SHARED = [".github/workflows/ci.yml", ".github/checks/repo-guards.toml", ".github/checks/jscpd-baseline.json"]
 NEITHER = ["Makefile", "LICENSE", "a.pyc", "image.png", "notes.txt", "x/.github/checks/a.toml"]
@@ -39,6 +43,12 @@ class Touches(unittest.TestCase):
             for path in paths:
                 with self.subTest(language=language, path=path):
                     self.assertEqual(touches(language, [path]), [path])
+
+    def test_go_matches_every_golangci_lint_config(self):
+        # Layer rules reads these; prettier also formats the YAML and JSON ones, so they stay out of MATCHES.
+        names = [".golangci.yml", ".golangci.yaml", ".golangci.toml", ".golangci.json"]
+        paths = names + [f"sub/{name}" for name in names]
+        self.assertEqual(touches("go", paths), paths)
 
     def test_every_glob_matches_a_file_of_its_shape(self):
         for language, globs in PATTERNS.items():

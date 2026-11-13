@@ -333,6 +333,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/inline-exemptions
         run: cargo test --locked
+      - name: Rust layer rules tests
+        id: rust-layer-rules
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/layer-rules
+        run: cargo test --locked
       - name: Rust API snapshot tests
         id: rust-api-snapshot
         if: ${{ !cancelled() }}
@@ -375,9 +380,10 @@ jobs:
           RUST_API_SNAPSHOT: ${{ steps.rust-api-snapshot.outcome }}
           GO_LAYER_RULES: ${{ steps.go-layer-rules.outcome }}
           TYPESCRIPT_LAYER_RULES: ${{ steps.typescript-layer-rules.outcome }}
+          RUST_LAYER_RULES: ${{ steps.rust-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES RUST_API_SNAPSHOT GO_LAYER_RULES TYPESCRIPT_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES RUST_API_SNAPSHOT GO_LAYER_RULES TYPESCRIPT_LAYER_RULES RUST_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

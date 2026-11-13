@@ -47,6 +47,8 @@ const PREFIX = "api snapshot (typescript): ";
 const DECLARATION = /\.d\.[cm]?ts$/;
 const JS = /\.[cm]?jsx?$/;
 const TS = /\.[cm]?tsx?$/;
+// Diagnostics about rewriting .ts import extensions, which only concern the emitted .js that nothing runs.
+const REWRITE_ONLY = new Set([2876, 2877, 2878]);
 const CONDITIONS = new Set(["types", "import", "require", "node", "default"]);
 const DROPPED_MODIFIERS = new Set([
   ts.SyntaxKind.ExportKeyword,
@@ -95,7 +97,7 @@ export function generate(projectDir: string): Entry[] {
     }
   }
   const entries = new Map<string, Entry>();
-  for (const [options, optionUnits] of byOptions) read(optionUnits, options, outputs, entries);
+  for (const [options, optionUnits] of byOptions) read(optionUnits, options, outputs, entries, rel);
   return [...entries.values()].sort(compare);
 }
 
@@ -231,6 +233,9 @@ function build(
     build(ts.resolveProjectReferencePath(reference), outputs, builds, rel);
   }
   const { outFile: _outFile, ...projectOptions } = parsed.options;
+  const rewriting =
+    projectOptions.allowImportingTsExtensions === true &&
+    projectOptions.rewriteRelativeImportExtensions !== true;
   const options: ts.CompilerOptions = {
     ...projectOptions,
     noEmit: false,
@@ -243,7 +248,7 @@ function build(
     // The compiler would print resolution traces, PR-chosen text, raw to stdout.
     traceResolution: false,
     // allowImportingTsExtensions is legal with emit only when the .ts import extensions are rewritten.
-    ...(projectOptions.allowImportingTsExtensions ? { rewriteRelativeImportExtensions: true } : {}),
+    ...(rewriting ? { rewriteRelativeImportExtensions: true } : {}),
   };
   builds.set(config, options);
   const host = ts.createCompilerHost(options, true);
@@ -251,7 +256,7 @@ function build(
   host.writeFile = (file) => {
     throw new Error(`the compiler tried to write ${quote(rel(file))}`);
   };
-  // A referenced project is not built: its sources stand in for its declaration output.
+  // This program reads a referenced project's sources in place of its declaration output.
   Object.assign(host, { useSourceOfProjectReferenceRedirect: () => true });
   const program = ts.createProgram({
     rootNames: parsed.fileNames,
@@ -263,7 +268,9 @@ function build(
     configFileParsingDiagnostics: ts.getConfigFileParsingDiagnostics(parsed),
   });
   const errors = (diagnostics: readonly ts.Diagnostic[]): ts.Diagnostic[] =>
-    diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Error);
+    diagnostics.filter(
+      (d) => d.category === ts.DiagnosticCategory.Error && !(rewriting && REWRITE_ONLY.has(d.code)),
+    );
   let failed = errors(ts.getPreEmitDiagnostics(program));
   if (failed.length === 0) {
     const result = program.emit(undefined, (file, text, _bom, _onError, sources) => {
@@ -298,7 +305,7 @@ function winner(subpath: string, keys: string[]): string | undefined {
       const [head = "", tail = ""] = key.split("*", 2);
       return (
         key.includes("*") &&
-        subpath.length >= head.length + tail.length &&
+        subpath.length > head.length + tail.length &&
         subpath.startsWith(head) &&
         subpath.endsWith(tail)
       );
@@ -318,36 +325,39 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
   const found: Unit[] = [];
   const keys = [...pkg.targets.keys()];
   for (const [subpath, target] of pkg.targets) {
-    // Targets without types (package.json, styles) have no API to read.
-    if (target === null || !(JS.test(target) || TS.test(target))) continue;
+    if (target === null) continue;
     const absolute = path.resolve(pkg.dir, target);
     const unitName = (sub: string): string => pkg.name + sub.slice(1);
     if (subpath.includes("*")) {
-      const sources = DECLARATION.test(absolute) || !TS.test(absolute);
-      const pattern = sources ? (toDeclaration(absolute, outputs) ?? absolute) : absolute;
-      const [head = "", tail = ""] = pattern.split("*", 2);
-      const pool = sources ? [...outputs.text.keys()] : [...outputs.declarationOf.keys()];
-      const matches = pool
+      const [head = "", tail = ""] = absolute.split("*", 2);
+      // The build's modules: emitted .js and compiled sources, and emitted .d.ts only when the target names one.
+      const pool = new Set([
+        ...outputs.jsOf.values(),
+        ...outputs.declarationOf.keys(),
+        ...(DECLARATION.test(tail) ? outputs.declarationOf.values() : []),
+      ]);
+      const matches = [...pool]
         .filter(
           (file) =>
-            file.length >= head.length + tail.length &&
-            file.startsWith(head) &&
-            file.endsWith(tail),
+            file.length > head.length + tail.length && file.startsWith(head) && file.endsWith(tail),
         )
         .sort();
-      if (matches.length === 0) {
+      if (matches.length === 0 && (JS.test(tail) || TS.test(tail))) {
         fail(
-          `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)} matches no built declaration file`,
+          `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)} matches no built module`,
         );
       }
       for (const file of matches) {
         const expanded = subpath.replace("*", file.slice(head.length, file.length - tail.length));
-        if (winner(expanded, keys) !== subpath) continue;
-        const declaration = sources ? file : (outputs.declarationOf.get(file) ?? file);
+        const declaration = toDeclaration(file, outputs);
+        if (winner(expanded, keys) !== subpath || declaration === undefined) continue;
+        if (!outputs.text.has(declaration)) continue;
         found.push({ name: unitName(expanded), declaration });
       }
       continue;
     }
+    // Targets without types (package.json, styles) have no API to read.
+    if (!(JS.test(target) || TS.test(target))) continue;
     const declaration = toDeclaration(absolute, outputs);
     if (declaration === undefined || !(outputs.text.has(declaration) || isFile(declaration))) {
       const wanted = declaration === undefined ? quote(target) : quote(rel(declaration));
@@ -361,7 +371,11 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
 }
 
 // Serves the in-memory outputs to a second program, also through symlinked paths such as workspace node_modules.
-function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.CompilerHost {
+function virtualHost(
+  options: ts.CompilerOptions,
+  outputs: Outputs,
+  unresolved: string[],
+): ts.CompilerHost {
   const host = ts.createCompilerHost(options, true);
   delete host.trace;
   const real = (file: string): string => {
@@ -375,12 +389,7 @@ function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.Compiler
     return path.join(realpathSync(dir), path.relative(dir, file));
   };
   const { fileExists, readFile, directoryExists } = host;
-  // A source the build compiled is hidden, so imports resolve to its emitted .d.ts, never back to the source.
-  host.fileExists = (file) => {
-    const resolved = real(file);
-    if (outputs.declarationOf.has(resolved)) return false;
-    return outputs.text.has(resolved) || fileExists.call(host, file);
-  };
+  host.fileExists = (file) => outputs.text.has(real(file)) || fileExists.call(host, file);
   host.readFile = (file) => outputs.text.get(real(file)) ?? readFile.call(host, file);
   host.directoryExists = (dir) =>
     outputs.dirs.has(real(dir)) || (directoryExists?.call(host, dir) ?? false);
@@ -391,6 +400,53 @@ function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.Compiler
   host.writeFile = () => {
     throw new Error("the declaration reader must not write files");
   };
+  // Resolves as the build did (paths, references, .ts extensions), then reads a compiled source's emitted .d.ts.
+  const cache = ts.createModuleResolutionCache(
+    host.getCurrentDirectory(),
+    (file) => host.getCanonicalFileName(file),
+    options,
+  );
+  host.resolveModuleNameLiterals = (
+    literals,
+    containingFile,
+    redirected,
+    compilerOptions,
+    containing,
+  ) =>
+    literals.map((literal) => {
+      const mode = ts.getModeForUsageLocation(containing, literal, compilerOptions);
+      const result = ts.resolveModuleName(
+        literal.text,
+        containingFile,
+        compilerOptions,
+        host,
+        cache,
+        redirected,
+        mode,
+      );
+      const found = result.resolvedModule;
+      if (found === undefined) {
+        const own = !real(containingFile).split(path.sep).includes("node_modules");
+        if (own) unresolved.push(`${containingFile}\0${literal.text}`);
+        return result;
+      }
+      const declaration = outputs.declarationOf.get(real(found.resolvedFileName));
+      if (declaration === undefined) return result;
+      const extension = declaration.endsWith(".d.mts")
+        ? ts.Extension.Dmts
+        : declaration.endsWith(".d.cts")
+          ? ts.Extension.Dcts
+          : ts.Extension.Dts;
+      return {
+        ...result,
+        resolvedModule: {
+          ...found,
+          resolvedFileName: declaration,
+          extension,
+          isExternalLibraryImport: false,
+        },
+      };
+    });
   return host;
 }
 
@@ -399,13 +455,23 @@ function read(
   buildOptions: ts.CompilerOptions,
   outputs: Outputs,
   entries: Map<string, Entry>,
+  rel: (file: string) => string,
 ): void {
   const options: ts.CompilerOptions = { ...buildOptions, noEmit: true, skipLibCheck: true };
+  const unresolved: string[] = [];
   const program = ts.createProgram({
     rootNames: units.map((u) => u.declaration),
     options,
-    host: virtualHost(options, outputs),
+    host: virtualHost(options, outputs, unresolved),
   });
+  // An import the reader cannot follow would silently drop what it re-exports.
+  if (unresolved.length > 0) {
+    const lines = unresolved.map((item) => {
+      const [file = "", specifier = ""] = item.split("\0");
+      return `${quote(rel(file))}: cannot resolve ${quote(specifier)}`;
+    });
+    fail(`the built declarations import modules the reader cannot resolve:\n${lines.join("\n")}`);
+  }
   const checker = program.getTypeChecker();
   for (const unit of units) {
     const file = program.getSourceFile(unit.declaration);

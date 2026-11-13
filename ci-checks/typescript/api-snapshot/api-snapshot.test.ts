@@ -185,6 +185,38 @@ describe("exports forms", () => {
     ]);
   });
 
+  it("an extensionless pattern target expands to each built module", () => {
+    const entries = generate(path.join(TESTDATA, "patterns"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.name]),
+      [
+        ["q", "index"],
+        ["q/a.js", "a"],
+        ["q/index.js", "index"],
+      ],
+    );
+  });
+
+  it("a non-relative .ts import through package imports builds", () => {
+    const entries = generate(path.join(TESTDATA, "tsimports"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.signature]),
+      [["p", "function open(x: number = 5): number"]],
+    );
+  });
+
+  it("a re-export through tsconfig paths to another project's source reads that project's .d.ts", () => {
+    const entries = generate(path.join(TESTDATA, "paths"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.kind, e.name, e.signature]),
+      [
+        ["@x/app", "const", "y", "const y: () => number"],
+        ["@x/app", "function", "coreFn", "function coreFn(a: number = 1): number"],
+        ["@x/core", "function", "coreFn", "function coreFn(a: number = 1): number"],
+      ],
+    );
+  });
+
   it("a solution tsconfig builds its referenced projects", () => {
     const entries = generate(path.join(TESTDATA, "solution"));
     assert.deepEqual(
@@ -336,6 +368,14 @@ describe("command line", () => {
       for (const line of result.stderr.split("\n")) assert.ok(!line.startsWith("::"), line);
     });
   }
+
+  it("exits 2 when a declaration re-exports a module the reader cannot resolve", () => {
+    const dir = copy("conditions");
+    writeFileSync(path.join(dir, "lib/hand.d.ts"), 'export * from "./missing.js";\n');
+    const result = run(dir, path.join(scratch, "unresolved.json"));
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /"lib\/hand\.d\.ts": cannot resolve "\.\/missing\.js"/);
+  });
 
   it("exits 2 with usage on a wrong argument count", () => {
     const result = run(path.join(TESTDATA, "basic"), "");

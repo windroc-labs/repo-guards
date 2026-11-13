@@ -1,0 +1,1 @@
+{ "compilerOptions": { "strict": true, "target": "es2022", "module": "nodenext", "rootDir": "src", "outDir": "dist", "types": [], "composite": true, "paths": { "@x/core": ["../core/src/index.ts"] } }, "include": ["src"], "references": [{ "path": "../core" }] }

@@ -1,0 +1,1 @@
+{ "name": "q", "type": "module", "exports": { ".": "./dist/index.js", "./*": "./dist/*" } }

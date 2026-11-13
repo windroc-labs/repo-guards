@@ -242,7 +242,7 @@ jobs:
         id: api-snapshot
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/api-snapshot
-        run: python3 -m unittest api_snapshot_test
+        run: python3 -m unittest api_snapshot_test snapshot_artifact_test
       - name: shard-artifact tests
         id: shard-artifact
         if: ${{ !cancelled() }}

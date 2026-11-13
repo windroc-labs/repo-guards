@@ -30,3 +30,12 @@
 | 8 | schema 和迁移兼容（按项目需要） | 新 schema 能读旧数据；迁移能从上一个发布版本升级 | 已发布的 schema 快照 | 破坏已有数据 | 每个 PR |
 | 9 | 体积和性能预算（按项目需要） | 包体积、关键路径耗时不超预算 | 预算文件 | 体积和性能悄悄变差 | 每个 PR |
 | 10 | 属性契约测试（按项目需要） | 契约测试用随机生成的输入跑，每次用新种子并写进日志 | 契约测试目录 | 只对固定样例特判 | 每个 PR |
+
+### 第 1 项接口快照
+
+由四个语言 workflow（[`ci-checks/`](../ci-checks/README.md#每个-repo-自己要做的)）的 API snapshot job 跑，`ci.yml` 不用改。比对规则和输出见 [接口快照比对](../ci-checks/README.md#接口快照比对)。
+
+- 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设快照路径，如 `api-snapshot.rust = ".github/checks/api-rust.json"`。路径相对 repo 根目录，要放在 `.github/` 下（已由 CODEOWNERS 锁住），每种语言、每个 `working-directory` 各一份；路径的规定见[覆盖默认配置](../ci-checks/README.md#覆盖默认配置)。没设就不启用。改这个设置按第 21 项单独提一个只改 `.github/` 的 PR。
+- 第一次：文件还不存在，job 失败，并把完整快照作为 artifact 上传。把它原样放到配置的路径，提交进同一个 PR。
+- 改接口时：生成结果和快照对不上，job 失败，job summary 列出多、少、变的条目，并写明 artifact 名字和该放的路径。接口改动是有意的，就从这次运行的 artifact 下载新快照，原样放到配置的路径，和代码在同一个 PR 里提交；快照在 `.github/` 下，owner 审 PR 时逐条看快照的 diff。不是有意的，就改回代码。
+- 现状：各语言的生成还没接上，设了路径的语言，job 在 Generate 步退出 2。

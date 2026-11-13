@@ -105,7 +105,9 @@ class Cobertura(unittest.TestCase):
 
     def test_lines_carry_hits_and_their_branch_conditions(self):
         lines = {
-            (c.get("filename"), l.get("number")): l.attrib for c in self.root.iter("class") for l in c.iter("line")
+            (c.get("filename"), line.get("number")): line.attrib
+            for c in self.root.iter("class")
+            for line in c.iter("line")
         }
         self.assertEqual(lines["src/lib.rs", "1"], {"number": "1", "hits": "3"})
         self.assertEqual(
@@ -117,7 +119,27 @@ class Cobertura(unittest.TestCase):
     def test_a_branch_on_a_line_without_hits_is_still_counted(self):
         root = ET.fromstring(cobertura({"a.rs": FileCoverage({}, {(4, 0, 0): 1, (4, 0, 1): 0})}, ROOT))
         self.assertEqual((root.get("lines-valid"), root.get("branches-valid")), ("0", "2"))
-        self.assertEqual([l.get("condition-coverage") for l in root.iter("line")], ["50% (1/2)"])
+        self.assertEqual(
+            [(line.get("hits"), line.get("condition-coverage")) for line in root.iter("line")], [("0", "50% (1/2)")]
+        )
+
+    def test_condition_coverage_rounds_down(self):
+        branches = {(4, 0, 0): 1, (4, 0, 1): 0, (4, 0, 2): 0}
+        root = ET.fromstring(cobertura({"a.rs": FileCoverage({4: 1}, branches)}, ROOT))
+        self.assertEqual([line.get("condition-coverage") for line in root.iter("line")], ["33% (1/3)"])
+
+    def test_rates_per_file_package_and_report(self):
+        report = merge([X64, ARM64], ROOT)
+        root = ET.fromstring(cobertura(report, ROOT))
+        rates = {c.get("filename"): (c.get("line-rate"), c.get("branch-rate")) for c in root.iter("class")}
+        self.assertEqual(rates, {"src/io.rs": ("0.0000", "0.0000"), "src/lib.rs": ("1.0000", "1.0000")})
+        package = next(root.iter("package"))
+        self.assertEqual((package.get("line-rate"), package.get("branch-rate")), ("0.7500", "0.5000"))
+        self.assertEqual((root.get("line-rate"), root.get("branch-rate")), ("0.7500", "0.5000"))
+
+    def test_nothing_to_measure_rates_as_full(self):
+        root = ET.fromstring(cobertura({"a.rs": FileCoverage({1: 0}, {})}, ROOT))
+        self.assertEqual((root.get("line-rate"), root.get("branch-rate")), ("0.0000", "1"))
 
     def test_the_same_reports_give_the_same_bytes(self):
         self.assertEqual(cobertura(merge([X64, ARM64], ROOT), ROOT), cobertura(merge([ARM64, X64], ROOT), ROOT))
@@ -150,6 +172,30 @@ class Main(unittest.TestCase):
             code, err = self.run_main("--root", ROOT, "--format", "lcov", "--output", str(Path(tmp, "o")), str(empty))
             self.assertEqual(code, 2)
             self.assertIn("measure no file", err)
+
+    def write_and_run(self, text: str) -> tuple[int, str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = Path(tmp, "r.lcov")
+            report.write_text(text)
+            return self.run_main("--root", ROOT, "--format", "cobertura", "--output", str(Path(tmp, "o")), str(report))
+
+    def test_a_truncated_line_record_exits_2(self):
+        code, err = self.write_and_run("SF:src/a.rs\nDA:5\nend_of_record\n")
+        self.assertEqual(code, 2)
+        self.assertIn("too few fields", err)
+
+    def test_a_truncated_branch_record_exits_2(self):
+        code, err = self.write_and_run("SF:src/a.rs\nBRDA:5,0,1\nend_of_record\n")
+        self.assertEqual(code, 2)
+        self.assertIn("too few fields", err)
+
+    def test_a_path_outside_the_root_exits_2(self):
+        code, err = self.write_and_run("SF:/elsewhere/a.rs\nDA:1,1\nend_of_record\n")
+        self.assertEqual(code, 2)
+        self.assertIn("outside", err)
+
+    def test_a_line_record_with_a_checksum_is_read(self):
+        self.assertEqual(merge(["SF:src/a.rs\nDA:5,2,abc\nend_of_record\n"], ROOT)["src/a.rs"].lines, {5: 2})
 
     def test_a_missing_report_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:

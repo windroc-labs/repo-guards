@@ -42,6 +42,8 @@ def merge(reports: Iterable[str], root: str) -> Report:
                 if current is None:
                     raise ValueError(f"{raw!r} is outside an SF record")
                 fields = value.split(",")
+                if len(fields) < (2 if tag == "DA" else 4):
+                    raise ValueError(f"{raw!r} has too few fields")
                 if tag == "DA":
                     line, hits = int(fields[0]), int(fields[1])
                     current.lines[line] = current.lines.get(line, 0) + hits
@@ -57,10 +59,30 @@ def lcov(report: Report) -> str:
     for path in sorted(report):
         cov = report[path]
         out.append(f"SF:{path}")
-        out += [f"BRDA:{l},{b},{n},{t}" for (l, b, n), t in sorted(cov.branches.items())]
+        out += [f"BRDA:{line},{block},{n},{taken}" for (line, block, n), taken in sorted(cov.branches.items())]
         out += [f"DA:{line},{hits}" for line, hits in sorted(cov.lines.items())]
         out.append("end_of_record")
     return "".join(f"{line}\n" for line in out)
+
+
+@dataclass
+class Counts:
+    lines_covered: int = 0
+    lines_valid: int = 0
+    branches_covered: int = 0
+    branches_valid: int = 0
+
+    def add(self, other: "Counts") -> None:
+        self.lines_covered += other.lines_covered
+        self.lines_valid += other.lines_valid
+        self.branches_covered += other.branches_covered
+        self.branches_valid += other.branches_valid
+
+    def rates(self) -> dict[str, str]:
+        return {
+            "line-rate": rate(self.lines_covered, self.lines_valid),
+            "branch-rate": rate(self.branches_covered, self.branches_valid),
+        }
 
 
 def rate(covered: int, valid: int) -> str:
@@ -68,61 +90,49 @@ def rate(covered: int, valid: int) -> str:
 
 
 def cobertura(report: Report, root: str) -> str:
-    totals = [0, 0, 0, 0]
+    totals = Counts()
     classes: list[ET.Element] = []
     for path in sorted(report):
         cov = report[path]
+        # line -> [branches taken, branches]
         conditions: dict[int, list[int]] = {}
         for (line, _, _), taken in cov.branches.items():
             counts = conditions.setdefault(line, [0, 0])
             counts[0] += taken > 0
             counts[1] += 1
-        numbers = sorted(cov.lines.keys() | conditions.keys())
-        file_totals = [
-            sum(1 for h in cov.lines.values() if h > 0),
-            len(cov.lines),
-            sum(c for c, _ in conditions.values()),
-            sum(n for _, n in conditions.values()),
-        ]
-        cls = ET.Element(
-            "class",
-            name=path,
-            filename=path,
-            complexity="0",
-            **{
-                "line-rate": rate(file_totals[0], file_totals[1]),
-                "branch-rate": rate(file_totals[2], file_totals[3]),
-            },
+        file_counts = Counts(
+            lines_covered=sum(1 for h in cov.lines.values() if h > 0),
+            lines_valid=len(cov.lines),
+            branches_covered=sum(c for c, _ in conditions.values()),
+            branches_valid=sum(n for _, n in conditions.values()),
         )
+        totals.add(file_counts)
+        cls = ET.Element("class", {"name": path, "filename": path, **file_counts.rates(), "complexity": "0"})
         ET.SubElement(cls, "methods")
         lines = ET.SubElement(cls, "lines")
-        for number in numbers:
+        for number in sorted(cov.lines.keys() | conditions.keys()):
             attrs = {"number": str(number), "hits": str(cov.lines.get(number, 0))}
             if number in conditions:
                 covered, valid = conditions[number]
                 attrs |= {"branch": "true", "condition-coverage": f"{covered * 100 // valid}% ({covered}/{valid})"}
             ET.SubElement(lines, "line", attrs)
         classes.append(cls)
-        totals = [a + b for a, b in zip(totals, file_totals)]
-    lines_covered, lines_valid, branches_covered, branches_valid = totals
     root_el = ET.Element(
         "coverage",
         {
-            "lines-valid": str(lines_valid),
-            "lines-covered": str(lines_covered),
-            "line-rate": rate(lines_covered, lines_valid),
-            "branches-valid": str(branches_valid),
-            "branches-covered": str(branches_covered),
-            "branch-rate": rate(branches_covered, branches_valid),
+            "lines-valid": str(totals.lines_valid),
+            "lines-covered": str(totals.lines_covered),
+            "branches-valid": str(totals.branches_valid),
+            "branches-covered": str(totals.branches_covered),
+            **totals.rates(),
             "complexity": "0",
             "version": "1.9",
             "timestamp": "0",
         },
     )
     ET.SubElement(ET.SubElement(root_el, "sources"), "source").text = root
-    package = ET.SubElement(ET.SubElement(root_el, "packages"), "package", name="", complexity="0")
-    package.set("line-rate", root_el.get("line-rate", ""))
-    package.set("branch-rate", root_el.get("branch-rate", ""))
+    packages = ET.SubElement(root_el, "packages")
+    package = ET.SubElement(packages, "package", {"name": "", **totals.rates(), "complexity": "0"})
     ET.SubElement(package, "classes").extend(classes)
     ET.indent(root_el)
     return '<?xml version="1.0" ?>\n' + ET.tostring(root_el, encoding="unicode") + "\n"
@@ -142,7 +152,7 @@ def main(argv: list[str]) -> int:
         text = lcov(report) if args.format == "lcov" else cobertura(report, args.root)
         args.output.write_text(text)
     except (OSError, ValueError) as error:
-        print(f"coverage_lcov: {error}", file=sys.stderr)
+        print(f"coverage_lcov: {error!r}", file=sys.stderr)
         return 2
     return 0
 

@@ -450,7 +450,12 @@ reason = "只在 feature full 下用到"
 
 实现：[`github-dir-pr.yml`](../.github/workflows/github-dir-pr.yml) 跑 [`github-dir-pr/github_dir_pr.py`](github-dir-pr/github_dir_pr.py)，用 `git -c core.quotePath=false diff --name-only --no-renames -z "$BASE_REF"...HEAD` 列出改动：改名拆成删和增，旧路径也算；文件名按 NUL 分隔、不转义。只在 `pull_request` 上跑（merge queue 的 diff 是整组改动）；它由 main 上的 `ci.yml` 调用，PR 删不掉它。
 
-例外：PR 在 `.github/` 下只改了 `.github/checks/repo-guards.toml`，且这个文件和 merge-base 比只差 `["ci-checks/inline-exemptions/settings.toml"]` 节的 `exemption` 时，可以同时改别的文件：加或删豁免的代码和它的登记要一起合（见[行内豁免](#行内豁免)）。测试：在 `github-dir-pr/` 跑 `python3 -m unittest github_dir_pr_test`。
+例外：PR 在 `.github/` 下只改了下面两类文件时，可以同时改别的文件；两条可以同时成立。
+
+- 接口快照：merge-base 上 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里 `api-snapshot` 设的快照文件，所有语言、所有 `working-directory`。改接口的代码和新快照要一起合（见[接口快照比对](#接口快照比对)）。路径在 merge-base 和 PR 上都要过 API snapshot job 的路径校验（`.github/` 下的普通文件，不在 `.github/workflows/` 下，不是 `.github/checks/repo-guards.toml`，路径上没有符号链接），过不了的不放行；merge-base 上的 `repo-guards.toml` 读不懂，或 `api-snapshot` 设置本身不对（语言名不认识、值不是字符串）时，一个快照文件也不放行。改快照路径设置本身仍要单独一个只改 `.github/` 的 PR：PR 里的新路径不算，`repo-guards.toml` 的改动也不属于下一条。
+- 豁免登记：`.github/checks/repo-guards.toml` 和 merge-base 比只差 `["ci-checks/inline-exemptions/settings.toml"]` 节的 `exemption`。加或删豁免的代码和它的登记要一起合（见[行内豁免](#行内豁免)）。
+
+测试：在 `github-dir-pr/` 跑 `python3 -m unittest github_dir_pr_test`。
 
 为什么：必跑的 CI 跑的是 main 上的 `ci.yml`，改 `ci.yml` 的 PR 只由旧版检查；`ci.yml` 又执行 PR 里的 `.github/` 脚本，改脚本的 PR 由它自己改过的脚本检查；夹带的别的改动也就没经过新版检查。
 
@@ -465,6 +470,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 `--snapshot` 可以不存在，脚本只读它，从不改写它。`--artifact`、`--path` 只写进输出，告诉 worker 新快照在哪个 artifact、该放到 repo 的哪个路径。
 
 - 条目：一个 JSON 对象，恰好五个字符串字段：`unit`（所属单元）、`parent`（上级条目，没有上级为 `""`）、`kind`（种类）、`name`（名字）、`signature`（完整签名）。`parent` 写什么由各语言的生成器定。键是（`unit`、`parent`、`kind`、`name`），同一份文件里不能重复。
+- 生成：各语言的生成器在 API snapshot job 的 Generate 步写条目文件，失败时退出 2，不跑比对。Go 的是 [`go/api-snapshot/`](go/README.md#接口快照生成api-snapshot)：只读 runner 平台（GOOS、GOARCH）上编进来的文件，只在别的平台编译的接口查不到；别的限制见那一节。
 - 条目文件：生成器的输出，条目组成的 JSON 数组，顺序不限。
 - 快照文件：也是条目组成的 JSON 数组，第 7 项照这个形状读。条目按键排序（依次比 `unit`、`parent`、`kind`、`name`，按 Unicode 码位），字段按 `unit`、`parent`、`kind`、`name`、`signature` 的顺序，缩进 2 格，非 ASCII 字符原样写，UTF-8，以换行结尾；没有条目时是 `[]`。同样的条目写出来逐字节相同。读的时候只看内容，顺序或缩进不同的快照照样能比。
 

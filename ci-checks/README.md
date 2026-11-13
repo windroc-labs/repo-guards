@@ -12,8 +12,9 @@
 2. 把 [`dependabot.yml`](dependabot.yml) 复制成 `.github/dependabot.yml`，让 Dependabot 升级其他 action 在 `uses:` 里钉住的版本；repo-guards 的 workflow 用 `@main`，不用升级。
 3. 要改共用配置，写进 `.github/checks/repo-guards.toml`（见[覆盖默认配置](#覆盖默认配置)）；jscpd 基线放 `.github/checks/jscpd-baseline.json`。`.github/` 已由 CODEOWNERS 锁住。
 4. 接入行内豁免（[第 13 项](#行内豁免)）：语言 workflow 和 `jscpd.yml` 已带这一步，`ci.yml` 不用加 job；把代码里现有的每一处行内豁免登记进 `.github/checks/repo-guards.toml` 的 `["ci-checks/inline-exemptions/settings.toml"]` 节，各写原因；第一次运行的输出就是要加的条目。
-5. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
-6. 可选：本地要读规则、跑工具时，把 [`fetch-ci-checks/fetch_ci_checks.py`](fetch-ci-checks/fetch_ci_checks.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。脚本在 `.repo-guards/` 里写一个内容为 `*` 的 `.gitignore`，git 自己忽略整个目录，不用改 repo 的 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_ci_checks_test`（要 Python 3.11.4 及以上）。
+5. 可选：启用接口快照（[第 4 层](../architecture/README.md)第 1 项）：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设 `api-snapshot.<语言>`（见[覆盖默认配置](#覆盖默认配置)），`ci.yml` 不用改；没设的语言，API snapshot job 只写一行"未启用"就通过。用法见 [`architecture/`](../architecture/README.md#第-1-项接口快照)。
+6. 第 2 层的设置，见 [`repo-settings`](../repo-settings/README.md)。
+7. 可选：本地要读规则、跑工具时，把 [`fetch-ci-checks/fetch_ci_checks.py`](fetch-ci-checks/fetch_ci_checks.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `ci-checks/` 下载到 `.repo-guards/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`config-overrides/config_overrides.py`](config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。脚本在 `.repo-guards/` 里写一个内容为 `*` 的 `.gitignore`，git 自己忽略整个目录，不用改 repo 的 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在该目录跑 `python3 -m unittest fetch_ci_checks_test`（要 Python 3.11.4 及以上）。
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
@@ -26,21 +27,22 @@
 
 每个都有 `runs-on` 输入：runner 标签的 JSON，默认 `'"ubuntu-latest"'`。`working-directory` 是项目所在目录（`Cargo.lock`、`pyproject.toml`、`requirements.txt`、`package.json` 或 `go.mod` 所在处，如 `crates/app`），相对 repo 根目录；各项检查都在这里跑，`source-dirs` 相对它。`unit-tests` 选覆盖率要量的单元测试：Rust 是测试目标，Go 是 `go test` 的参数（包模式），见[覆盖率](#覆盖率)。`coverage-shards` 把覆盖率分片，见下文。别的设置都在共用配置文件里，项目用覆盖文件改，见[覆盖默认配置](#覆盖默认配置)。准用的许可证只写在 [`licenses.toml`](licenses.toml)：`allow` 是 SPDX 名单，四种语言共用；`exceptions` 是 Python、TypeScript、Go 不查许可证的包（Go 是模块路径，要完全相同），默认空；`python-classifiers` 把 pip 报的 trove classifier 名对到 SPDX。Rust 的例外是 [`rust/deny.toml`](rust/deny.toml) 的 `licenses.exceptions`，cargo-deny 的写法。
 
-四个语言 workflow 各有两个并行的 job（PR 上先跑 Changes，见表下）：快的检查合在 Checks 里；慢的只有覆盖率（要跑单元测试），单独占 Coverage。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑；只有 Checks 的第一项 Inline exemptions（[第 13 项](#行内豁免)）例外，它失败时同一 job 后面的项都不跑。
+四个语言 workflow 各有三个并行的 job（PR 上先跑 Changes，见表下）：快的检查合在 Checks 里；慢的覆盖率（要跑单元测试）单独占 Coverage；接口快照（[第 4 层](../architecture/README.md#第-1-项接口快照)第 1 项）要构建项目、会执行项目的代码，单独占 API snapshot，这个 job 的 token 只有 `contents: read`，不用 secrets。在实测的 caller 上，其余各项每项最多几秒，覆盖率要两分多钟。每个 job 自己检出代码，只装自己用到的工具；job 里一项失败，同一 job 后面的项照跑；只有 Checks 的第一项 Inline exemptions（[第 13 项](#行内豁免)）例外，它失败时同一 job 后面的项都不跑。
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
-| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
-| `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上） |
+| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot path、Generate、Compare、Upload the new snapshot） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
+| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
+| `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 
-PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Changes job，用 [`language-gate/language_gate.py`](language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件：检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage 和 Coverage shard 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。
+PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Changes job，用 [`language-gate/language_gate.py`](language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件：检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage、Coverage shard 和 API snapshot 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。
 
 - 本语言的文件：本语言的工具会读的文件，在任何目录下。除了源码，还有会改变检查结果的配置（如 `pyproject.toml`、`uv.lock`、`Cargo.lock`、`.cargo/config.toml`、`package.json`、`tsconfig*.json`、`go.sum`）；Python 还有 ruff 会查的 `.ipynb`；TypeScript 的 Format 步对整个目录跑 prettier，所以还有 prettier 能排版的所有文件（如 `.md`、`.yaml`、`.css`、`README`、`.prettierrc`）和 `.prettierignore`；Go 还有 `go build` 编进包里的 C、汇编等文件、`vendor/modules.txt` 和 `testdata/`。
 - repo-guards 的调用和设置：repo 根目录 `.github/workflows/`、`.github/checks/` 下的文件，每种语言都算。
+- 接口快照文件：HEAD 上 `.github/checks/repo-guards.toml` 里任何一个 `working-directory` 给本语言设的 `api-snapshot.<语言>` 路径（见[覆盖默认配置](#覆盖默认配置)），按完整路径比，不当 glob。所以只改快照文件的 PR 也跑本语言的检查，快照放在 `.github/checks/` 外（如 `.github/api/go.json`）也一样。设置读不懂或不合规定时 Changes 失败（退出 2），后面的 job 照跑。
 - 每种语言的名单只写在脚本的 `PATTERNS` 里。prettier 能排版的扩展名和文件名取自 [`typescript/package.json`](typescript/package.json) 钉住的 prettier 的 `--support-info`，存在 [`language-gate/prettier-files.json`](language-gate/prettier-files.json)；升级 prettier 时在 `language-gate/` 跑 `npx prettier@<版本> --support-info | python3 prettier_files.py <版本>` 重新生成：[`prettier_files.py`](language-gate/prettier_files.py) 自己写这个文件，不读它，输入解析成功后才替换，所以不管文件现在是什么样都能重新生成，失败时文件不变；版本对不上测试就失败。
-- 不是 PR 的事件（push 到默认分支、merge queue 等）不跑 Changes，后面的 job 全跑。Changes 自己失败时后面的 job 也照跑，这次运行仍算失败。要把单个 job 设成必需的检查时只选 Checks 和 Coverage：跳过时 Coverage shard 矩阵不展开，只显示一个名字里带 `${{ matrix.* }}` 的跳过项。
+- 不是 PR 的事件（push 到默认分支、merge queue 等）不跑 Changes，后面的 job 全跑。Changes 自己失败时后面的 job 也照跑，这次运行仍算失败。要把单个 job 设成必需的检查时只选 Checks、Coverage 和 API snapshot：跳过时 Coverage shard 矩阵不展开，只显示一个名字里带 `${{ matrix.* }}` 的跳过项。
 - 名单只看路径：测试读的数据文件（Go 的 `testdata/` 除外）、嵌进代码的文件（`include_str!`、`//go:embed` 等）不在名单里，只改它们的 PR 不跑该语言的检查，合进默认分支后那次 push 会跑。
 - 测试：在 `language-gate/` 跑 `python3 -m unittest language_gate_test`。
 
@@ -56,7 +58,9 @@ PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Change
 - 合并：表逐层按键合并；列表和其他值整个替换。列表没有例外：要在默认列表上加一条，连默认的一起写。只能改值，不能删键。
 - 每个 job 检出 repo-guards、装好 uv 后，先跑 Apply caller overrides 步：[`config-overrides/config_overrides.py`](config-overrides/config_overrides.py)（只用标准库，要 Python 3.11 及以上）的 `apply` 把各节原地写进检出的 `repo-guards/` 里对应的文件（TOML 重写后不留注释，JSON 缩进 2 格），后面各步照旧读这些文件。
 - 节对应的文件不存在、不是 `.toml` 或 `.json`、读不懂，或者节不是表，合并就失败并报出节名，一个文件都不写。路径不做别的检查。
-- 保留节 `[project."<working-directory>"]` 不是文件，放项目设置，现在只有 `source-dirs`：Python 要查的源码目录，默认 `["src"]`，按 workflow 的 `working-directory` 选节。
+- 保留节 `[project."<working-directory>"]` 不是文件，放项目设置，按 workflow 的 `working-directory` 选节；`project` 或其中一节不是表时读设置的步退出 2。现有两项：
+  - `source-dirs`：Python 要查的源码目录，默认 `["src"]`。
+  - `api-snapshot.<语言>`：这个 `working-directory` 下本语言的接口快照文件路径，相对 repo 根目录，`<语言>` 是 `rust`、`python`、`typescript`、`go` 之一。没有默认值：没设就不启用，API snapshot job 只往 job summary 写一行"未启用"，然后通过。每种语言、每个 `working-directory` 各设各的，一种语言只读自己的快照文件，从不改写它。设了别的语言名、值不是字符串，或者路径不合下面的规定，API snapshot job 退出 2，并给出这个路径。路径的规定：在 `.github/` 下；没有空的、`.` 或 `..` 段，也不以 `/` 开头；没有控制字符；不在 `.github/workflows/` 下；不是 `.github/checks/repo-guards.toml` 本身；路径上的文件和每一级目录都不是符号链接，文件存在时是普通文件。文件不存在不算违规：第一次运行就是这样，见[第 1 项接口快照](../architecture/README.md#第-1-项接口快照)。读设置和检查路径的是 `config_overrides.py` 的 `snapshot-path ROOT WORKING_DIRECTORY 语言`，Changes 也用同一份代码。
 - 依赖白名单在 [`dependency-allowlist/allowlist.toml`](dependency-allowlist/allowlist.toml) 的 `allow`（见[依赖白名单](#依赖白名单)），Python、TypeScript、Go 的许可证例外在 [`licenses.toml`](licenses.toml) 的 `exceptions`，Rust 的依赖来源、构建脚本白名单和许可证例外在 [`rust/deny.toml`](rust/deny.toml)，knip 的 `entry`、`project` 在 [`typescript/knip.json`](typescript/knip.json)：默认都是共用值或空列表，项目在对应文件那一节改。
 - clippy、tsc、deptry、cargo machete、vitest 读项目自己的文件，不归这个文件管；jscpd 基线照旧是 `.github/checks/jscpd-baseline.json`。
 - 覆盖能放宽安全检查，这是有意的：比如放开 `rust/deny.toml` 的依赖来源（`sources`）、忽略漏洞（`advisories`），加依赖白名单和许可证例外。把关靠 CODEOWNERS：改这个文件要 owner 批准，审的时候看清每一节放宽了什么。
@@ -77,6 +81,7 @@ entry = ["src/main.ts!"]
 
 [project."."]
 source-dirs = ["src", "tools"]
+api-snapshot.rust = ".github/checks/api-rust.json"
 ```
 
 ## 语言级
@@ -472,4 +477,5 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 退出码：0 一致；1 不一致，或快照文件不存在；2 跑不了：条目文件或快照文件读不了、不是合法 JSON、形状不对（不是数组，或条目不是恰好那五个字符串字段）、键重复，新快照或 summary 写不了，参数不对，或别的意外错误。
 - 输出：log 先给一行各类的条数，再按多、少、变的顺序，每类按键序逐条列出；"变"给旧签名和新签名。设了 `$GITHUB_STEP_SUMMARY` 时，job summary 里列同样的内容。不一致或快照文件不存在时，把完整的新快照写到 `--output`，log 和 summary 写明 artifact 名字和该放的路径；快照文件不存在时只给条数，不逐条列。一致时不写新快照。
 - 转义：条目来自 PR 的代码，快照文件的内容也当作不可信。log 里的名字、签名、路径都写成 JSON 字符串，`#` 也转义成 `\u0023`，所以 log 里没有以 `::` 开头的行（workflow 命令），也没有 runner 在行中也认的旧命令格式 `##[`。summary 里它们放在代码块里，显示原文，不渲染成链接、表格或其他 Markdown；代码块的围栏比内容里最长的一串反引号多一个，内容关不掉它。
-- 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test`。
+- 四个语言 workflow 的 API snapshot job 用它：比对后不一致或快照文件不存在（退出 1）时，把新快照作为 artifact 上传，名字由 [`api-snapshot/snapshot_artifact.py`](api-snapshot/snapshot_artifact.py) 生成：`<语言>-api-snapshot-<working-directory 的 sha256 前 16 位>`，理由同覆盖率分片的 artifact（见[覆盖率](#覆盖率)）。artifact 里的文件和配置的快照文件同名。
+- 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test snapshot_artifact_test`。

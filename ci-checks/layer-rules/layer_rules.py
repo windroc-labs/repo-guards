@@ -335,7 +335,7 @@ def layered_projects(overrides: dict[str, Any]) -> list[str]:
 
 
 REGULAR = ("100644", "100755")
-BYPASS, SKIP, UP, CYCLE = "绕开出口", "越层", "向上", "循环"
+BYPASS, UP, CYCLE = "绕开出口", "向上", "循环"
 
 Pair = tuple[str, str]
 Runner = Callable[..., Any]
@@ -400,9 +400,9 @@ class Side:
 def rule(source: int, target: int, to_exit: bool) -> str | None:
     if target < source:
         return UP
-    if target == source + 1:
-        return None if to_exit else BYPASS
-    return SKIP if target > source + 1 else None
+    if target > source and not to_exit:
+        return BYPASS
+    return None
 
 
 def unit(spec: Language, path: str) -> str:

@@ -544,7 +544,7 @@ class SnapshotJobTest(unittest.TestCase):
         return steps
 
     def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("rust", "python", "typescript"):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
@@ -558,10 +558,20 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("rust", "python", "typescript"):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
+
+    def test_go_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("go")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("scope", steps["Generate"].split("run: |", 1)[0])
+        self.assertIn(
+            '"$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json"',
+            steps["Generate"],
+        )
+        self.assertNotIn("API_SNAPSHOT_SCOPE", (self.WORKFLOWS / "go.yml").read_text(encoding="utf-8"))
 
 
 class ScopeDocsTest(unittest.TestCase):
@@ -589,7 +599,7 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
         self.assertIn("没设或为空", contract)
         self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
-        self.assertIn("- 现状：四种语言的生成器都还没接上", contract)
+        self.assertIn("- 现状：Go 的生成器已接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

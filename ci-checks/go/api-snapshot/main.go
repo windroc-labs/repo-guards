@@ -11,10 +11,16 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 type entry struct {
@@ -39,11 +45,19 @@ type listedPackage struct {
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 {
-		fmt.Fprintln(stderr, "usage: api-snapshot, run in the module directory; prints the public API entries as JSON")
+	if len(args) != 0 && len(args) != 2 {
+		fmt.Fprintln(stderr, "usage: api-snapshot [REPO_ROOT WORKING_DIRECTORY], run in the module directory; prints the public API entries as JSON, with the arguments only the packages in the working directory's api-snapshot-scope.go")
 		return 2
 	}
-	entries, err := generate(stderr)
+	var scope []string
+	if len(args) == 2 {
+		var err error
+		if scope, err = readScope(args[0], args[1]); err != nil {
+			fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
+			return 2
+		}
+	}
+	entries, err := generate(stderr, scope)
 	if err != nil {
 		fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
 		return 2
@@ -59,11 +73,99 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func generate(stderr io.Writer) ([]entry, error) {
+// overrides is the caller's settings file, relative to the repo root.
+const overrides = ".github/checks/repo-guards.toml"
+
+var goSegment = regexp.MustCompile(`^[A-Za-z0-9._~+-]+$`)
+
+// readScope reads api-snapshot-scope.go from the [project."<working-directory>"]
+// section of the caller's repo-guards.toml. nil, the whole module, when the
+// file, the section or the setting is missing.
+func readScope(root, workingDirectory string) ([]string, error) {
+	text, err := os.ReadFile(filepath.Join(root, overrides))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var config map[string]any
+	if _, err := toml.Decode(string(text), &config); err != nil {
+		return nil, fmt.Errorf("%s: %w", overrides, err)
+	}
+	section := "[project." + strconv.Quote(workingDirectory) + "]"
+	path := []struct{ key, where string }{
+		{"project", "[project]"},
+		{workingDirectory, section},
+		{"api-snapshot-scope", section + " api-snapshot-scope"},
+		{"go", section + " api-snapshot-scope.go"},
+	}
+	var value any = config
+	for i, step := range path {
+		table, ok := value.(map[string]any)
+		if !ok {
+			// The document itself is always a table, so i > 0 here.
+			return nil, fmt.Errorf("%s: %s is not a table", overrides, path[i-1].where)
+		}
+		if value = table[step.key]; value == nil {
+			return nil, nil
+		}
+	}
+	return scopePrefixes(value, path[len(path)-1].where)
+}
+
+func scopePrefixes(value any, where string) ([]string, error) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s is not an array of strings", overrides, where)
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("%s: %s = []: must list at least one package import path; leave it unset to freeze the whole module", overrides, where)
+	}
+	scope := make([]string, len(list))
+	for i, item := range list {
+		prefix, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: %s is not an array of strings", overrides, where)
+		}
+		if problem := prefixProblem(prefix); problem != "" {
+			return nil, fmt.Errorf("%s: %s: %s: %s", overrides, where, strconv.Quote(prefix), problem)
+		}
+		scope[i] = prefix
+	}
+	return scope, nil
+}
+
+// prefixProblem applies config_overrides.py's rule for Go prefixes.
+func prefixProblem(prefix string) string {
+	if strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "must not contain control characters"
+	}
+	for _, part := range strings.Split(prefix, "/") {
+		if !goSegment.MatchString(part) || part == "." || part == ".." {
+			return `must be a package import path such as "example.com/mod/driver"`
+		}
+	}
+	return ""
+}
+
+// inScope matches by path segment: a/b covers a/b and a/b/c, not a/bc.
+func inScope(scope []string, path string) bool {
+	if scope == nil {
+		return true
+	}
+	return slices.ContainsFunc(scope, func(prefix string) bool {
+		return path == prefix || strings.HasPrefix(path, prefix+"/")
+	})
+}
+
+func generate(stderr io.Writer, scope []string) ([]entry, error) {
 	units, exports, err := listPackages(stderr)
 	if err != nil {
 		return nil, err
 	}
+	// Filtered before import, so implements lists name only in-scope interfaces.
+	units = slices.DeleteFunc(units, func(path string) bool { return !inScope(scope, path) })
 	imp := importer.ForCompiler(token.NewFileSet(), "gc", func(path string) (io.ReadCloser, error) {
 		file := exports[path]
 		if file == "" {

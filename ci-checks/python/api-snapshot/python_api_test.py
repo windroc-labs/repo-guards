@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 import re
 import subprocess
 import sys
@@ -41,22 +42,29 @@ def project(root: Path, files: dict[str, str], name: str = "demo") -> Path:
     return write(root / "src", files).parent
 
 
-def run(project_dir: Path, output: Path) -> subprocess.CompletedProcess:
+def run(project_dir: Path, output: Path, scope: str | None = None) -> subprocess.CompletedProcess:
+    """Run the generator as the Generate step does: API_SNAPSHOT_SCOPE is scope, or unset for None."""
+    env = {key: value for key, value in os.environ.items() if key != "API_SNAPSHOT_SCOPE"}
+    if scope is not None:
+        env["API_SNAPSHOT_SCOPE"] = scope
     return subprocess.run(
         [sys.executable, "-I", str(SCRIPT), str(project_dir), str(output)],
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
 
 
-def generate(files: dict[str, str]) -> dict[tuple[str, str], python_api.Entry]:
+def generate(
+    files: dict[str, str], scope: tuple[str, ...] | None = None
+) -> dict[tuple[str, str], python_api.Entry]:
     """Entries of a site holding the given files, by (parent, name)."""
     with tempfile.TemporaryDirectory() as tmp:
         site = write(Path(tmp), files)
         names = python_api.units(site)
         python_api.check_sources(site, names)
-        entries = python_api.generate(site, names)
+        entries = python_api.generate(site, names, scope)
     by_path = {(entry.parent, entry.name): entry for entry in entries}
     assert len(by_path) == len(entries), "two entries share a parent and name"
     return by_path
@@ -397,6 +405,71 @@ class GenerateTest(unittest.TestCase):
             self.assertEqual(entry.parent.split(".")[0], "demo" if entry.parent else "")
 
 
+SCOPED = {
+    "demo/__init__.py": "def top() -> None: ...\n",
+    "demo/sub/__init__.py": """\
+        from ._impl import Moved
+        __all__ = ["K", "Moved", "f"]
+        def f() -> None: ...
+        class K:
+            def m(self) -> None: ...
+        """,
+    "demo/sub/_impl.py": "class Moved:\n    def go(self) -> None: ...\n",
+    "demo/sub/io.py": "def g() -> None: ...\n",
+    "demo/subx.py": "def h() -> None: ...\n",
+    "other/__init__.py": "def o() -> None: ...\n",
+}
+
+
+class ScopeTest(unittest.TestCase):
+    def test_submodule_prefix_keeps_only_its_module_tree(self):
+        self.assertEqual(
+            set(generate(SCOPED, ("demo.sub",))),
+            {
+                ("demo", "sub"),
+                ("demo.sub", "f"),
+                ("demo.sub", "K"),
+                ("demo.sub.K", "m"),
+                ("demo.sub", "Moved"),
+                ("demo.sub.Moved", "go"),
+                ("demo.sub", "io"),
+                ("demo.sub.io", "g"),
+            },
+        )
+
+    def test_several_prefixes_across_units(self):
+        self.assertEqual(
+            set(generate(SCOPED, ("demo.sub.io", "other"))),
+            {("demo.sub", "io"), ("demo.sub.io", "g"), ("", "other"), ("other", "o")},
+        )
+
+    def test_unit_prefixes_keep_everything(self):
+        self.assertEqual(generate(SCOPED, ("demo", "other")), generate(SCOPED))
+
+    def test_prefix_is_a_module_not_a_class_or_private_module(self):
+        # Class members belong to the class's module; a re-export belongs to the exporting module.
+        for scope in (("demo.sub.K",), ("demo.sub._impl",), ("missing",)):
+            with self.subTest(scope=scope):
+                self.assertEqual(generate(SCOPED, scope), {})
+
+    def test_read_scope(self):
+        for value in (None, "", "[]"):
+            with self.subTest(value=value):
+                self.assertIsNone(python_api.read_scope(value))
+        self.assertEqual(python_api.read_scope('["demo.sub", "other"]'), ("demo.sub", "other"))
+        for value in ("demo.sub", '"demo.sub"', '{"demo": 1}', "[1]", '["demo", null]', "["):
+            with self.subTest(value=value), self.assertRaisesRegex(python_api.Error, "API_SNAPSHOT_SCOPE"):
+                python_api.read_scope(value)
+
+    def test_in_scope_compares_by_segment(self):
+        scope = ("demo.sub",)
+        self.assertTrue(python_api.in_scope("demo.sub", scope))
+        self.assertTrue(python_api.in_scope("demo.sub.io", scope))
+        self.assertFalse(python_api.in_scope("demo.subx", scope))
+        self.assertFalse(python_api.in_scope("demo", scope))
+        self.assertTrue(python_api.in_scope("demo", None))
+
+
 class SiteTest(unittest.TestCase):
     def test_units(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -573,6 +646,64 @@ class CliTest(unittest.TestCase):
     def test_usage_exits_2(self):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(python_api.cli([]), 2)
+
+
+DRIVER = {
+    "demo/__init__.py": "",
+    "demo/driver.py": "def read() -> int: ...\n",
+    "demo/net.py": "def send() -> None: ...\n",
+}
+
+
+class ScopeCliTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def generate(self, name: str, files: dict[str, str], scope: str | None) -> Path:
+        output = self.tmp / f"{name}.json"
+        result = run(project(self.tmp / name, files), output, scope)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return output
+
+    def test_no_scope_output_unchanged(self):
+        unset = self.generate("unset", RICH, None).read_bytes()
+        for name, scope in (("empty", ""), ("empty_array", "[]"), ("whole_unit", '["demo"]')):
+            with self.subTest(scope=scope):
+                self.assertEqual(self.generate(name, RICH, scope).read_bytes(), unset)
+
+    def test_new_public_item_outside_scope_passes(self):
+        scope = '["demo.driver"]'
+        snapshot = self.generate("before", DRIVER, scope)
+        items = json.loads(snapshot.read_text(encoding="utf-8"))
+        frozen = {(item["parent"], item["name"]) for item in items}
+        self.assertEqual(frozen, {("demo", "driver"), ("demo.driver", "read")})
+        grown = {**DRIVER, "demo/net.py": DRIVER["demo/net.py"] + "def recv() -> bytes: ...\n"}
+        result = compare(snapshot, self.generate("scoped", grown, scope), self.tmp)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        # Without the scope the same addition fails: the scope is what lets it through.
+        result = compare(self.generate("all_before", DRIVER, None), self.generate("all_after", grown, None), self.tmp)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("1 added, 0 removed, 0 changed", result.stdout)
+
+    def test_new_public_item_inside_scope_fails(self):
+        scope = '["demo.driver"]'
+        snapshot = self.generate("before", DRIVER, scope)
+        grown = {**DRIVER, "demo/driver.py": DRIVER["demo/driver.py"] + "def write(data: bytes) -> None: ...\n"}
+        result = compare(snapshot, self.generate("after", grown, scope), self.tmp)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("1 added, 0 removed, 0 changed", result.stdout)
+        self.assertIn('"name": "write"', result.stdout)
+
+    def test_scope_named_in_log(self):
+        result = run(project(self.tmp / "p", DRIVER), self.tmp / "out.json", '["demo.driver", "demo.net"]')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('units: "demo", scope: "demo.driver", "demo.net"', result.stdout)
+
+    def test_unreadable_scope_exits_2(self):
+        result = run(project(self.tmp / "p", DRIVER), self.tmp / "out.json", "demo.driver")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("api snapshot (python): API_SNAPSHOT_SCOPE is not a JSON array of strings", result.stderr)
+        self.assertFalse((self.tmp / "out.json").exists())
 
 
 class PinTest(unittest.TestCase):

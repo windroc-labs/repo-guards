@@ -2,6 +2,7 @@ import ast
 import json
 import keyword
 import logging
+import os
 import subprocess
 import sys
 import tempfile
@@ -239,7 +240,30 @@ class PromoteOverloads(griffe.Extension):
                 obj.set_member(name, overloads[0])
 
 
-def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[Entry]) -> None:
+Scope = tuple[str, ...] | None
+
+
+def read_scope(value: str | None) -> Scope:
+    """API_SNAPSHOT_SCOPE's module prefixes; None, the whole project, when it is unset, empty or `[]`."""
+    if not value:
+        return None
+    try:
+        prefixes = json.loads(value)
+    except json.JSONDecodeError:
+        prefixes = None
+    if not isinstance(prefixes, list) or not all(isinstance(prefix, str) for prefix in prefixes):
+        raise Error(f"API_SNAPSHOT_SCOPE is not a JSON array of strings: {quote(value)}")
+    return tuple(prefixes) or None
+
+
+def in_scope(module: str, scope: Scope) -> bool:
+    return scope is None or any(module == prefix or module.startswith(f"{prefix}.") for prefix in scope)
+
+
+def walk(
+    obj: Any, path: str, module: str, unit: str, stack: tuple[str, ...], scope: Scope, entries: list[Entry]
+) -> None:
+    """Append obj's public members; `module` is the public path of the module they live in, matched to scope."""
     members = obj.all_members if obj.is_class else obj.members
     for name, member in sorted(members.items()):
         if not member.is_public:
@@ -247,19 +271,24 @@ def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[E
         try:
             target = member.final_target if member.is_alias else member
         except (griffe.AliasResolutionError, griffe.CyclicAliasError):
-            entries.append(Entry(unit, path, "alias", name, member.target_path))
+            if in_scope(module, scope):
+                entries.append(Entry(unit, path, "alias", name, member.target_path))
             continue
         if target.is_attribute and is_dunder(name):
             continue
+        # A module entry belongs to the module it names, so a scope of that module keeps it.
+        child = f"{path}.{name}"
+        owner = child if target.is_module else module
+        if in_scope(owner, scope):
+            signature = target.path if member.is_alias and target.is_module else FORMATTERS[target.kind](target)
+            entries.append(Entry(unit, path, target.kind.value, name, signature))
         if target.is_module and member.is_alias:
-            entries.append(Entry(unit, path, "module", name, target.path))
             continue
-        entries.append(Entry(unit, path, target.kind.value, name, FORMATTERS[target.kind](target)))
         if (target.is_class and target.path not in stack) or target.is_module:
-            walk(target, f"{path}.{name}", unit, (*stack, target.path), entries)
+            walk(target, child, owner, unit, (*stack, target.path), scope, entries)
 
 
-def generate(site: Path, names: list[str]) -> list[Entry]:
+def generate(site: Path, names: list[str], scope: Scope = None) -> list[Entry]:
     loader = griffe.GriffeLoader(
         extensions=griffe.load_extensions(PromoteOverloads()), search_paths=[site], allow_inspection=False
     )
@@ -271,8 +300,9 @@ def generate(site: Path, names: list[str]) -> list[Entry]:
             raise Error(f"cannot load {quote(unit)}: {type(error).__name__}: {quote(str(error))}") from error
     entries: list[Entry] = []
     for unit, module in zip(names, modules, strict=True):
-        entries.append(Entry(unit, "", "module", unit, ""))
-        walk(module, unit, unit, (), entries)
+        if in_scope(unit, scope):
+            entries.append(Entry(unit, "", "module", unit, ""))
+        walk(module, unit, unit, unit, (), scope, entries)
     return sorted(entries)
 
 
@@ -293,18 +323,20 @@ def main(argv: list[str]) -> int:
         return 2
     project, output = Path(argv[0]), argv[1]
     try:
+        scope = read_scope(os.environ.get("API_SNAPSHOT_SCOPE"))
         with tempfile.TemporaryDirectory() as tmp:
             wheels = build(project, Path(tmp) / "wheels")
             site = Path(tmp) / "site"
             extract(wheels, site)
             names = units(site)
             check_sources(site, names)
-            entries = generate(site, names)
+            entries = generate(site, names, scope)
         write(output, json.dumps([entry._asdict() for entry in entries], indent=2, ensure_ascii=False) + "\n")
     except Error as error:
         print(f"{PREFIX}{error}", file=sys.stderr)
         return 2
-    print(f"{PREFIX}{len(entries)} entries from {len(wheels)} wheel(s), units: {', '.join(map(quote, names))}")
+    scoped = f", scope: {', '.join(map(quote, scope))}" if scope else ""
+    print(f"{PREFIX}{len(entries)} entries from {len(wheels)} wheel(s), units: {', '.join(map(quote, names))}{scoped}")
     return 0
 
 

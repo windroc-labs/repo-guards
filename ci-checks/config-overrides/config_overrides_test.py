@@ -589,7 +589,7 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
         self.assertIn("没设或为空", contract)
         self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
-        self.assertIn("- 现状：四种语言的生成器都还没接上", contract)
+        self.assertIn("- 现状：", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

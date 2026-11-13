@@ -508,7 +508,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
   - Python：条目所在模块的点分名；类的成员跟着类走。
   - Go：条目所在包的 import 路径。
   - TypeScript：条目所在的导出子路径（`package.json` 的 `exports` 键，只有 `types` 入口的包是 `.`），每个包都按子路径比。
-- 现状：四种语言的生成器都还没接上，设了范围，Generate 照旧写整个项目的条目。
+- 现状：Python 的生成器已接上（见[接口快照：Python 生成](#接口快照python-生成)）；Rust、Go、TypeScript 的还没接上，设了范围，Generate 照旧写整个项目的条目。
 
 ### 接口快照：Python 生成
 
@@ -519,7 +519,8 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 条目：`unit` 是单元名；`parent` 是上级模块或类的完整点分路径（如 `mypkg.sub.Klass`），单元自己那一条为 `""`；`name` 是成员名；`kind` 是 griffe 报的种类：`module`、`class`、`function`、`attribute`、`type alias`，导出的名字指向这批 wheel 以外（如 `from os import path`）时是 `alias`，签名写目标路径。
 - 签名：函数是 `[标签 ][类型参数](参数) -> 返回类型`，参数照 Python 写法带种类（`/`、`*`、`*args`、`**kw`）、注解和默认值，如 `classmethod (cls, n: int = 2) -> Box`；用 `@overload` 声明的函数只有一个条目，签名是各个重载按声明顺序、每个一行，不含实现本身；`.pyi` 里只有重载、没有实现的函数也一样。类是 `[标签 ]class[类型参数](基类)`。属性是 `标签: 注解 = 值`，模块级和类里的属性带值（常量、枚举成员、dataclass 字段默认值），只在方法里赋值的不带。`type X[T] = …` 是 `type[T] = …`。标签照 griffe（`async`、`classmethod`、`property`、`dataclass` 等），按字母排序。
 - 不进条目：文档注释、源文件位置、非公开对象、名字前后都是 `__` 的属性（`__all__`、`__version__`、`__slots__` 等；`__init__`、`__eq__` 这类方法照常算）。所以只改文档注释，或把函数从一个私有模块挪到另一个、仍由同一个公开模块在 `__all__` 里导出，条目不变。两次生成逐字节相同。
-- 退出码：0 写出了条目文件；2 跑不了：项目没有 `pyproject.toml` 或 `setup.py`（如只有 `requirements.txt`），`uv build` 失败或没出 wheel，wheel 解不开，解出来没有一个单元（如只有 `_` 开头的包，或只有 `<名字>-stubs` 存根包），单元里某个 `.py` 或 `.pyi` 解析不了（文件路径写在输出里），griffe 出错，或别的意外错误。出错时不写条目文件，Compare 不跑，job 失败。
+- 冻结范围：设了 `API_SNAPSHOT_SCOPE`（见[冻结范围](#冻结范围)）时只写模块路径在范围内的条目，没设、为空或是 `[]` 时输出逐字节不变。条目的模块路径是它所在模块的公开点分路径：由公开模块在 `__all__` 里导出的名字算导出它的模块，不算定义它的私有模块；类的成员和嵌套类跟着类走；`module` 条目算它自己那个模块，所以范围 `pkg.sub` 留下 `pkg.sub` 那一条，单元自己那一条只在范围含单元名时留下。前缀只对模块，写成类名（如 `pkg.sub.Klass`）或私有模块名对不上任何条目。不在范围里的上级模块照样往下走，范围内的子模块不会漏掉。log 那一行末尾列出范围。
+- 退出码：0 写出了条目文件；2 跑不了：`API_SNAPSHOT_SCOPE` 不是字符串组成的 JSON 数组（这时不构建），项目没有 `pyproject.toml` 或 `setup.py`（如只有 `requirements.txt`），`uv build` 失败或没出 wheel，wheel 解不开，解出来没有一个单元（如只有 `_` 开头的包，或只有 `<名字>-stubs` 存根包），单元里某个 `.py` 或 `.pyi` 解析不了（文件路径写在输出里），griffe 出错，或别的意外错误。出错时不写条目文件，Compare 不跑，job 失败。
 - 限制：构建不出 wheel 的项目查不到，启用后 job 退出 2。编译扩展模块只看得到它的 `.pyi`，没有 `.pyi` 的看不到。没写进 `__all__` 的 import（如公开模块里 `from ._impl import open` 而没有 `__all__`）griffe 算私有，不进条目，要导出就写进 `__all__`。
 - 版本：griffe 用只含库的 `griffelib`，连同依赖带 hash 固定在 [`python/api-snapshot/requirements.txt`](python/api-snapshot/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.14` 生成），装进单独的 venv，不和项目的依赖混装。跑在 Python 3.14 上，项目用新语法也解析得了。
 - 测试：在 `python/api-snapshot/` 用装了 `requirements.txt` 的 Python 3.14 跑 `python -m unittest python_api_test`（要 `uv` 在 `PATH` 上：测试会构建 fixture 项目）。

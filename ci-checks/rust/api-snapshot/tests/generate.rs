@@ -193,3 +193,233 @@ fn conflicting_features_exit_2() {
 fn no_manifest_exits_2() {
     assert_fails_with_2(&generate_in(&temp("empty-project"), "no-manifest"));
 }
+
+fn assert_keys_unique(entries: &[Value]) {
+    let mut keys: Vec<[&str; 4]> = entries
+        .iter()
+        .map(|e| ["unit", "parent", "kind", "name"].map(|f| e[f].as_str().unwrap()))
+        .collect();
+    keys.sort();
+    let count = keys.len();
+    keys.dedup();
+    assert_eq!(keys.len(), count, "duplicate keys in {entries:#?}");
+}
+
+const FROM_U32: &str = "impl core::convert::From<u32> for same_name::Id";
+const FROM_STRING: &str = "impl core::convert::From<alloc::string::String> for same_name::Id";
+
+#[test]
+fn trait_impl_methods_have_impl_parents() {
+    let entries = generate("same_name_v1", "same-name-from").entries();
+    assert_keys_unique(&entries);
+    assert_eq!(signature(&entries, "impl", "Id", FROM_U32), FROM_U32);
+    assert_eq!(signature(&entries, "impl", "Id", FROM_STRING), FROM_STRING);
+    assert_eq!(
+        signature(&entries, "function", FROM_U32, "from"),
+        "fn from(u32) -> Self"
+    );
+    assert_eq!(
+        signature(&entries, "function", FROM_STRING, "from"),
+        "fn from(alloc::string::String) -> Self"
+    );
+}
+
+#[test]
+fn inherent_and_trait_len_distinct() {
+    let entries = generate("same_name_v1", "same-name-len").entries();
+    assert_keys_unique(&entries);
+    assert_eq!(
+        signature(&entries, "function", "impl same_name::Id", "len"),
+        "pub fn len(&self) -> usize"
+    );
+    assert_eq!(
+        signature(
+            &entries,
+            "function",
+            "impl same_name::Len for same_name::Id",
+            "len"
+        ),
+        "fn len(&self) -> usize"
+    );
+    assert_eq!(
+        signature(&entries, "function", "Len", "len"),
+        "fn len(&self) -> usize"
+    );
+    assert_eq!(
+        signature(&entries, "impl", "Id", "impl same_name::Id"),
+        "impl same_name::Id"
+    );
+}
+
+#[test]
+fn one_signature_change_is_one_changed_entry() {
+    let old = generate("same_name_v1", "same-name-old");
+    let missing = temp("same-name-none").join("none.json");
+    let (_, _, snapshot) = compare(&old.output, &missing, "same-name-first");
+    let snapshot_file = temp("same-name-snapshot").join("api-rust.json");
+    fs::write(&snapshot_file, snapshot.unwrap()).unwrap();
+
+    let new = generate("same_name_v2", "same-name-new");
+    assert_keys_unique(&new.entries());
+    let (code, log, _) = compare(&new.output, &snapshot_file, "same-name-second");
+    assert_eq!(code, 1, "{log}");
+    let listed: Vec<&str> = log
+        .lines()
+        .filter(|l| l.starts_with("多 ") || l.starts_with("少 ") || l.starts_with("变 "))
+        .collect();
+    assert_eq!(listed.len(), 1, "{log}");
+    assert!(listed[0].starts_with("变 "), "{log}");
+    assert!(
+        listed[0].contains(r#""parent": "impl same_name::Id""#),
+        "{log}"
+    );
+    assert!(listed[0].contains(r#""name": "len""#), "{log}");
+}
+
+#[test]
+fn signature_rendering() {
+    let entries = generate("shapes", "shapes").entries();
+    assert_keys_unique(&entries);
+    let expected = [
+        (
+            "function",
+            "",
+            "generic",
+            "pub fn generic<'a, T, const N: usize>(&'a T, fn(u8) -> u8, alloc::boxed::Box<dyn core::ops::function::Fn(u8) -> bool + core::marker::Send + 'a>, impl core::iter::traits::iterator::Iterator<Item = u8>) -> [u8; N] where T: core::marker::Sync + core::convert::AsRef<str> + ?core::marker::Sized",
+        ),
+        (
+            "function",
+            "",
+            "raw",
+            r#"pub const unsafe extern "C" fn raw(*const u8, *mut u8) -> (u8, u16)"#,
+        ),
+        ("function", "", "later", "pub async fn later(&mut [u8])"),
+        ("struct", "", "Unit", "pub struct Unit"),
+        ("struct", "", "Tuple", "pub struct Tuple(pub u8, _)"),
+        (
+            "struct",
+            "",
+            "Wrapper",
+            "pub struct Wrapper<T: core::clone::Clone = u8> { pub inner: alloc::vec::Vec<T> }",
+        ),
+        (
+            "enum",
+            "",
+            "Shape",
+            "pub enum Shape<T> { Point, Circle(T), Rect { w: T, h: T } }",
+        ),
+        ("enum", "", "Code", "pub enum Code { A = 1, B = 2 }"),
+        (
+            "union",
+            "",
+            "Bits",
+            "pub union Bits { pub int: u32, pub float: f32 }",
+        ),
+        ("static", "", "COUNTER", "pub static mut COUNTER: i64"),
+        (
+            "type_alias",
+            "",
+            "Pair",
+            "pub type Pair<'a> = (&'a str, core::option::Option<u8>)",
+        ),
+        (
+            "trait",
+            "",
+            "Visitor",
+            "pub unsafe trait Visitor<T>: core::fmt::Debug where T: core::clone::Clone",
+        ),
+        (
+            "assoc_type",
+            "Visitor",
+            "Out",
+            "type Out: core::default::Default",
+        ),
+        ("assoc_const", "Visitor", "LIMIT", "const LIMIT: usize = 4"),
+        (
+            "function",
+            "Visitor",
+            "visit",
+            "fn visit(&mut self, T) -> <Self as shapes::Visitor>::Out",
+        ),
+        (
+            "function",
+            "Visitor",
+            "done",
+            "fn done(&self) -> bool { ... }",
+        ),
+        (
+            "impl",
+            "Wrapper",
+            "impl<T: core::clone::Clone> shapes::Wrapper<T>",
+            "impl<T: core::clone::Clone> shapes::Wrapper<T>",
+        ),
+        (
+            "function",
+            "impl<T: core::clone::Clone> shapes::Wrapper<T>",
+            "first",
+            "pub fn first(&self) -> core::option::Option<&T>",
+        ),
+        (
+            "assoc_type",
+            "impl core::iter::traits::iterator::Iterator for shapes::Unit",
+            "Item",
+            "type Item = u8",
+        ),
+        (
+            "function",
+            "impl core::iter::traits::iterator::Iterator for shapes::Unit",
+            "next",
+            "fn next(&mut self) -> core::option::Option<<Self as core::iter::traits::iterator::Iterator>::Item>",
+        ),
+        (
+            "impl",
+            "Unit",
+            "impl core::marker::Send for shapes::Unit",
+            "impl core::marker::Send for shapes::Unit",
+        ),
+        (
+            "impl",
+            "Wrapper",
+            "impl<T> core::marker::Send for shapes::Wrapper<T>",
+            "impl<T> core::marker::Send for shapes::Wrapper<T>",
+        ),
+        (
+            "impl",
+            "NotSend",
+            "impl !core::marker::Send for shapes::NotSend",
+            "impl !core::marker::Send for shapes::NotSend",
+        ),
+        (
+            "macro",
+            "",
+            "square",
+            "macro_rules! square { ($x:expr) => { ... }; }",
+        ),
+    ];
+    for (kind, parent, name, want) in expected {
+        assert_eq!(
+            signature(&entries, kind, parent, name),
+            want,
+            "{kind} {parent} {name}"
+        );
+    }
+    let impls: Vec<&str> = entries
+        .iter()
+        .filter(|e| e["kind"] == "impl")
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
+    for dropped in ["Borrow", "Into", "Any", "Freeze", "UnsafeUnpin"] {
+        assert!(
+            impls.iter().all(|i| !i.contains(dropped)),
+            "{dropped} in {impls:#?}"
+        );
+    }
+    for kept in ["Sync", "Unpin", "UnwindSafe", "RefUnwindSafe"] {
+        assert!(
+            impls
+                .iter()
+                .any(|i| i.contains(&format!("{kept} for shapes::Unit"))),
+            "{kept} not in {impls:#?}"
+        );
+    }
+}

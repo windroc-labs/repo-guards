@@ -5,7 +5,11 @@ use rustdoc_types::{
     Crate, Id, Item, ItemEnum, ItemKind, MacroKind, StructKind, Variant, VariantKind, Visibility,
 };
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+/// Auto traits whose synthetic impls are API: removing one breaks callers. Unstable ones (`Freeze`,
+/// `UnsafeUnpin`) belong to the toolchain, not the crate.
+const AUTO_TRAITS: [&str; 5] = ["Send", "Sync", "Unpin", "UnwindSafe", "RefUnwindSafe"];
 
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
@@ -51,6 +55,11 @@ struct Renderer<'a> {
     krate: &'a Crate,
     printer: Printer<'a>,
     entries: Vec<Entry>,
+    /// Where each item was first emitted, for an impl's parent.
+    paths: HashMap<Id, String>,
+    /// Impls of the emitted types and traits, in walk order, each once.
+    impls: Vec<Id>,
+    seen_impls: HashSet<Id>,
 }
 
 pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
@@ -62,8 +71,12 @@ pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
             public: HashMap::new(),
         },
         entries: Vec::new(),
+        paths: HashMap::new(),
+        impls: Vec::new(),
+        seen_impls: HashSet::new(),
     };
     renderer.module(&krate.root, &[])?;
+    renderer.render_impls()?;
     Ok(renderer.entries)
 }
 
@@ -75,11 +88,11 @@ impl<'a> Renderer<'a> {
             .ok_or_else(|| format!("rustdoc JSON has no item {}", id.0))
     }
 
-    fn push(&mut self, kind: &str, parent: &[String], name: &str, signature: String) {
+    fn push(&mut self, kind: &str, parent: &str, name: &str, signature: String) {
         self.entries.push(Entry {
             unit: self.unit.to_owned(),
             kind: kind.to_owned(),
-            parent: parent.join("::"),
+            parent: parent.to_owned(),
             name: name.to_owned(),
             signature,
         });
@@ -101,14 +114,146 @@ impl<'a> Renderer<'a> {
                 continue;
             }
             let signature = self.signature(item, &name)?;
-            self.push(kind_name(item.inner.item_kind()), path, &name, signature);
-            if matches!(item.inner, ItemEnum::Module(_)) {
-                let mut inner = path.to_vec();
-                inner.push(name);
-                self.module(child, &inner)?;
+            self.push(
+                kind_name(item.inner.item_kind()),
+                &path.join("::"),
+                &name,
+                signature,
+            );
+            let mut inner = path.to_vec();
+            inner.push(name);
+            self.children(item, &inner)?;
+        }
+        Ok(())
+    }
+
+    /// What hangs under an item: a module's items, a trait's items, and the impls of types and traits.
+    fn children(&mut self, item: &'a Item, path: &[String]) -> Result<(), String> {
+        self.paths.entry(item.id).or_insert_with(|| path.join("::"));
+        let impls = match &item.inner {
+            ItemEnum::Module(_) => return self.module(&item.id, path),
+            ItemEnum::Struct(s) => &s.impls,
+            ItemEnum::Enum(e) => &e.impls,
+            ItemEnum::Union(u) => &u.impls,
+            ItemEnum::Trait(t) => {
+                for id in &t.items {
+                    let member = self.item(id)?;
+                    let name = member.name.clone().unwrap_or_default();
+                    let signature = self.member_signature(member, &name, true)?;
+                    self.push(
+                        kind_name(member.inner.item_kind()),
+                        &path.join("::"),
+                        &name,
+                        signature,
+                    );
+                }
+                &t.implementations
+            }
+            _ => return Ok(()),
+        };
+        for id in impls {
+            if self.seen_impls.insert(*id) {
+                self.impls.push(*id);
             }
         }
         Ok(())
+    }
+
+    /// A trait's or impl's function, constant or type; `{ ... }` marks a trait method's default body.
+    fn member_signature(
+        &self,
+        member: &Item,
+        name: &str,
+        in_trait: bool,
+    ) -> Result<String, String> {
+        let signature = self.signature(member, name)?;
+        Ok(match &member.inner {
+            ItemEnum::Function(f) if in_trait && f.has_body => format!("{signature} {{ ... }}"),
+            _ => signature,
+        })
+    }
+
+    fn kept(&self, imp: &rustdoc_types::Impl) -> bool {
+        if imp.blanket_impl.is_some() {
+            return false;
+        }
+        if !imp.is_synthetic {
+            return true;
+        }
+        let Some(trait_) = &imp.trait_ else {
+            return false;
+        };
+        let name = match self.krate.paths.get(&trait_.id) {
+            Some(summary) => summary.path.last().cloned().unwrap_or_default(),
+            None => trait_
+                .path
+                .rsplit("::")
+                .next()
+                .unwrap_or_default()
+                .to_owned(),
+        };
+        AUTO_TRAITS.contains(&name.as_str())
+    }
+
+    fn render_impls(&mut self) -> Result<(), String> {
+        let mut headers = HashSet::new();
+        for id in std::mem::take(&mut self.impls) {
+            let ItemEnum::Impl(imp) = &self.item(&id)?.inner else {
+                return Err(format!("item {} is not an impl", id.0));
+            };
+            if !self.kept(imp) {
+                continue;
+            }
+            let header = self.impl_header(imp);
+            let parent = match &imp.for_ {
+                rustdoc_types::Type::ResolvedPath(path) => {
+                    self.paths.get(&path.id).cloned().unwrap_or_default()
+                }
+                _ => String::new(),
+            };
+            // Two inherent impl blocks of one type print the same header; they are one entry.
+            if headers.insert(header.clone()) {
+                self.push("impl", &parent, &header, header.clone());
+            }
+            for member_id in &imp.items {
+                let member = self.item(member_id)?;
+                let name = member.name.clone().unwrap_or_default();
+                let signature = self.member_signature(member, &name, false)?;
+                self.push(
+                    kind_name(member.inner.item_kind()),
+                    &header,
+                    &name,
+                    signature,
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn impl_header(&self, imp: &rustdoc_types::Impl) -> String {
+        let p = &self.printer;
+        let head = format!(
+            "{}impl{}",
+            if imp.is_unsafe { "unsafe " } else { "" },
+            p.params(&imp.generics)
+        );
+        let self_type = p.ty(&imp.for_);
+        // A synthetic auto-trait impl's where clause names the types of private fields, so it is left out.
+        let clause = if imp.is_synthetic {
+            String::new()
+        } else {
+            p.where_clause(&imp.generics)
+        };
+        match &imp.trait_ {
+            Some(trait_) => {
+                let negative = if imp.is_negative { "!" } else { "" };
+                format!(
+                    "{head} {negative}{} for {self_type}{clause}",
+                    p.path(trait_)
+                )
+            }
+            None => format!("{head} {self_type}{clause}"),
+        }
     }
 
     fn signature(&self, item: &Item, name: &str) -> Result<String, String> {

@@ -326,6 +326,15 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/inline-exemptions
         run: cargo test --locked
+      - name: Rust API snapshot tests
+        id: rust-api-snapshot
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/rust/api-snapshot
+        # rustdoc JSON needs the nightly the API snapshot job pins.
+        run: |
+          toolchain=$(sed -n 's/^toolchain = "\(.*\)"$/\1/p' ../api-snapshot.toml)
+          rustup toolchain install "$toolchain" --profile minimal
+          RUSTUP_TOOLCHAIN=$toolchain cargo test --locked
       - name: Summary
         if: ${{ !cancelled() }}
         env:
@@ -356,10 +365,11 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
           LAYER_RULES: ${{ steps.layer-rules.outcome }}
           PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
+          RUST_API_SNAPSHOT: ${{ steps.rust-api-snapshot.outcome }}
           GO_LAYER_RULES: ${{ steps.go-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES GO_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES RUST_API_SNAPSHOT GO_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

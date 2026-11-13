@@ -31,8 +31,8 @@
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot path、Generate、Compare、Upload the new snapshot） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
+| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot path、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot path、Generate、Compare、Upload the new snapshot） |
 | `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 | `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 
@@ -470,7 +470,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 `--snapshot` 可以不存在，脚本只读它，从不改写它。`--artifact`、`--path` 只写进输出，告诉 worker 新快照在哪个 artifact、该放到 repo 的哪个路径。
 
 - 条目：一个 JSON 对象，恰好五个字符串字段：`unit`（所属单元）、`parent`（上级条目，没有上级为 `""`）、`kind`（种类）、`name`（名字）、`signature`（完整签名）。`parent` 写什么由各语言的生成器定。键是（`unit`、`parent`、`kind`、`name`），同一份文件里不能重复。
-- 生成：各语言的生成器在 API snapshot job 的 Generate 步写条目文件，失败时退出 2，不跑比对。Go 的是 [`go/api-snapshot/`](go/README.md#接口快照生成api-snapshot)：只读 runner 平台（GOOS、GOARCH）上编进来的文件，只在别的平台编译的接口查不到；别的限制见那一节。Python 的见[接口快照：Python 生成](#接口快照python-生成)。TypeScript 的见[接口快照：TypeScript 生成](#接口快照typescript-生成)。
+- 生成：各语言的生成器在 API snapshot job 的 Generate 步写条目文件，失败时退出 2，不跑比对。Go 的是 [`go/api-snapshot/`](go/README.md#接口快照生成api-snapshot)：只读 runner 平台（GOOS、GOARCH）上编进来的文件，只在别的平台编译的接口查不到；别的限制见那一节。Python 的见[接口快照：Python 生成](#接口快照python-生成)。Rust 的是 [`rust/api-snapshot/`](rust/README.md#接口快照)，用固定的 nightly 从 rustdoc JSON 生成：一个 crate 内部按模块分的层不在它的公开接口里，查不到；只有二进制、没有库 target 的 crate 没有条目；feature 互斥、全部打开编不过的项目退出 2。TypeScript 的见[接口快照：TypeScript 生成](#接口快照typescript-生成)。
 - 条目文件：生成器的输出，条目组成的 JSON 数组，顺序不限。
 - 快照文件：也是条目组成的 JSON 数组，第 7 项照这个形状读。条目按键排序（依次比 `unit`、`parent`、`kind`、`name`，按 Unicode 码位），字段按 `unit`、`parent`、`kind`、`name`、`signature` 的顺序，缩进 2 格，非 ASCII 字符原样写，UTF-8，以换行结尾；没有条目时是 `[]`。同样的条目写出来逐字节相同。读的时候只看内容，顺序或缩进不同的快照照样能比。
 
@@ -491,6 +491,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 输出：log 先给一行各类的条数，再按多、少、变的顺序，每类按键序逐条列出；"变"给旧签名和新签名。设了 `$GITHUB_STEP_SUMMARY` 时，job summary 里列同样的内容。不一致或快照文件不存在时，把完整的新快照写到 `--output`，log 和 summary 写明 artifact 名字和该放的路径；快照文件不存在时只给条数，不逐条列。一致时不写新快照。
 - 转义：条目来自 PR 的代码，快照文件的内容也当作不可信。log 里的名字、签名、路径都写成 JSON 字符串，`#` 也转义成 `\u0023`，所以 log 里没有以 `::` 开头的行（workflow 命令），也没有 runner 在行中也认的旧命令格式 `##[`。summary 里它们放在代码块里，显示原文，不渲染成链接、表格或其他 Markdown；代码块的围栏比内容里最长的一串反引号多一个，内容关不掉它。
 - 四个语言 workflow 的 API snapshot job 用它：比对后不一致或快照文件不存在（退出 1）时，把新快照作为 artifact 上传，名字由 [`api-snapshot/snapshot_artifact.py`](api-snapshot/snapshot_artifact.py) 生成：`<语言>-api-snapshot-<working-directory 的 sha256 前 16 位>`，理由同覆盖率分片的 artifact（见[覆盖率](#覆盖率)）。artifact 里的文件和配置的快照文件同名。
+- Generate 会构建 PR 的代码，PR 的 `build.rs` 和过程宏在 Compare 之前、同一个 job 里执行。恶意的构建脚本能改掉这个 job 的结果，所以 API snapshot 通过不能代替 owner 审 `build.rs` 和过程宏的改动。
 - 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test snapshot_artifact_test`。
 
 ### 接口快照：Python 生成

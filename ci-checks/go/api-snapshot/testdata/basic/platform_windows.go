@@ -1,0 +1,3 @@
+package basic
+
+func WindowsOnly() {}

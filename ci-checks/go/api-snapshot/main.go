@@ -43,7 +43,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: api-snapshot, run in the module directory; prints the public API entries as JSON")
 		return 2
 	}
-	entries, err := generate(stderr)
+	scope, err := readScope()
+	if err != nil {
+		fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
+		return 2
+	}
+	entries, err := generate(stderr, scope)
 	if err != nil {
 		fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
 		return 2
@@ -59,11 +64,40 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func generate(stderr io.Writer) ([]entry, error) {
+// readScope reads the freeze scope the API snapshot job passes: import path
+// prefixes as a JSON array of strings. Unset, empty or [] is the whole module (nil).
+func readScope() ([]string, error) {
+	value := os.Getenv("API_SNAPSHOT_SCOPE")
+	if value == "" {
+		return nil, nil
+	}
+	var scope []string
+	if err := json.Unmarshal([]byte(value), &scope); err != nil || scope == nil {
+		return nil, fmt.Errorf("API_SNAPSHOT_SCOPE is not a JSON array of strings: %s", value)
+	}
+	if len(scope) == 0 {
+		return nil, nil
+	}
+	return scope, nil
+}
+
+// inScope matches by path segment: a/b covers a/b and a/b/c, not a/bc.
+func inScope(scope []string, path string) bool {
+	if scope == nil {
+		return true
+	}
+	return slices.ContainsFunc(scope, func(prefix string) bool {
+		return path == prefix || strings.HasPrefix(path, prefix+"/")
+	})
+}
+
+func generate(stderr io.Writer, scope []string) ([]entry, error) {
 	units, exports, err := listPackages(stderr)
 	if err != nil {
 		return nil, err
 	}
+	// Filtered before import, so implements lists name only in-scope interfaces.
+	units = slices.DeleteFunc(units, func(path string) bool { return !inScope(scope, path) })
 	imp := importer.ForCompiler(token.NewFileSet(), "gc", func(path string) (io.ReadCloser, error) {
 		file := exports[path]
 		if file == "" {

@@ -42,13 +42,22 @@ class ConfigError(Exception):
         self.problems = problems
 
 
-def python_scanner(side_root: Path) -> list[str]:
+def python_scanner(_tools: Path) -> list[str]:
     # -I -S: no site-packages, .pth, sitecustomize, PYTHON* variables or script-directory imports.
-    return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py"), str(side_root)]
+    return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py")]
 
 
-def typescript_scanner(side_root: Path) -> list[str]:
-    return ["node", str(CI_CHECKS / "typescript/layer-rules/imports.ts"), str(side_root)]
+def go_build(tools: Path) -> list[str]:
+    # Builds repo-guards' own scanner, never the project's code.
+    return ["go", "build", "-C", str(CI_CHECKS / "go/layer-rules"), "-o", str(tools / "layer-rules"), "."]
+
+
+def go_scanner(tools: Path) -> list[str]:
+    return [str(tools / "layer-rules")]
+
+
+def typescript_scanner(_tools: Path) -> list[str]:
+    return ["node", str(CI_CHECKS / "typescript/layer-rules/imports.ts")]
 
 
 @dataclass(frozen=True)
@@ -61,7 +70,17 @@ class Language:
     package_unit: bool = False
     # Globs of the files besides source files that the scanner reads to resolve imports.
     context: tuple[str, ...] = ()
+    # The scanner's argv before the side root, given a directory for built tools; build, if set, fills that directory.
     scanner: Callable[[Path], list[str]] | None = None
+    build: Callable[[Path], list[str]] | None = None
+    # Globs of files that are always test code, whatever test-paths says.
+    tests: tuple[str, ...] = ()
+    # Globs of files the language's own tools skip: they are not its source, and their resolution files are not read.
+    ignored: tuple[str, ...] = ()
+    # Go's compiler already forbids package cycles; a parse-only scan would also see files no build compiles together.
+    cycles: bool = True
+    # Set for the build and the scanner, so the caller's Go settings cannot change how repo-guards' scanner is built.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 LANGUAGES = {
@@ -72,7 +91,17 @@ LANGUAGES = {
         scanner=typescript_scanner,
     ),
     "rust": Language((".rs",), context=("**/Cargo.toml",)),
-    "go": Language((".go",), package_unit=True, context=("**/go.mod",)),
+    "go": Language(
+        (".go",),
+        package_unit=True,
+        context=("**/go.mod",),
+        scanner=go_scanner,
+        build=go_build,
+        tests=("**/*_test.go",),
+        ignored=("**/testdata/**", "**/vendor/**", "**/_*", "**/_*/**", "**/.*", "**/.*/**"),
+        cycles=False,
+        env=(("GOWORK", "off"), ("GOFLAGS", ""), ("GOENV", "off")),
+    ),
 }
 
 
@@ -117,7 +146,8 @@ def matches(patterns: tuple[str, ...], path: str) -> bool:
 
 
 def language_of(path: str) -> str | None:
-    return next((name for name, spec in LANGUAGES.items() if path.endswith(spec.suffixes)), None)
+    found = (n for n, spec in LANGUAGES.items() if path.endswith(spec.suffixes) and not matches(spec.ignored, path))
+    return next(found, None)
 
 
 def path_problem(path: str) -> str | None:
@@ -240,7 +270,7 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
         raise ConfigError(problems)
     config = Config(
         tuple(layers),
-        tuple(test_paths),
+        (*test_paths, *LANGUAGES[language].tests),
         tuple(normalized(d) for d in source_dirs),
     )
     if not config.layers:
@@ -375,23 +405,39 @@ def json_line(language: str, line: str) -> Any:
         raise Error(f"{language} scanner wrote a line that is not JSON: {line[:200]}") from error
 
 
-def scanner_records(language: str, side_root: Path, request: dict[str, Any], runner: Runner) -> list[Any]:
-    """Run the language's scanner on one side (protocol: ci-checks/python/layer-rules/imports.py)."""
-    scanner = LANGUAGES[language].scanner
-    assert scanner is not None
-    # From /, outside the caller's tree and the side's directory.
-    argv = scanner(side_root)
+def run_tool(language: str, what: str, argv: list[str], runner: Runner, stdin: str | None = None) -> str:
+    spec = LANGUAGES[language]
+    env = {**os.environ, **dict(spec.env)} if spec.env else None
     try:
-        result = runner(argv, input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False)
-    except FileNotFoundError as error:
-        raise Error(f"{language} scanner needs {argv[0]}, which is not installed") from error
+        # From /, outside the caller's tree and the side's directory.
+        result = runner(argv, input=stdin, capture_output=True, text=True, cwd="/", check=False, env=env)
+    except OSError as error:
+        raise Error(f"{language} scanner could not {what}: {error}") from error
     if result.returncode != 0:
         last = (result.stderr or "").strip().splitlines()[-1:] or [""]
-        raise Error(f"{language} scanner exited with {result.returncode}: {last[0]}")
-    return [json_line(language, line) for line in result.stdout.splitlines()]
+        raise Error(f"{language} scanner could not {what}, exit {result.returncode}: {last[0]}")
+    return result.stdout
 
 
-def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, runner: Runner) -> Side:
+def scanner_command(language: str, tools: Path, runner: Runner) -> list[str]:
+    spec = LANGUAGES[language]
+    assert spec.scanner is not None
+    if spec.build:
+        run_tool(language, "be built", spec.build(tools), runner)
+    return spec.scanner(tools)
+
+
+def scanner_records(
+    language: str, command: list[str], side_root: Path, request: dict[str, Any], runner: Runner
+) -> list[Any]:
+    """Run the language's scanner on one side (protocol: ci-checks/python/layer-rules/imports.py)."""
+    stdout = run_tool(language, "scan", [*command, str(side_root)], runner, json.dumps(request))
+    return [json_line(language, line) for line in stdout.splitlines()]
+
+
+def scan_side(
+    root: Path, rev: str, prefix: str, config: Config, language: str, command: list[str], runner: Runner
+) -> Side:
     spec = LANGUAGES[language]
     everything = tree(root, rev, prefix)
     files = {p: b for p, b in everything.items() if language_of(p) == language}
@@ -399,7 +445,7 @@ def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, 
     side = Side()
     if not todo:
         return side
-    context = sorted(p for p in everything if matches(spec.context, p))
+    context = sorted(p for p in everything if matches(spec.context, p) and not matches(spec.ignored, p))
     written = {p: everything[p] for p in [*todo, *context]}
     contents = blobs(root, set(written.values()))
     with tempfile.TemporaryDirectory(prefix="layer-rules-") as tmp:
@@ -413,7 +459,7 @@ def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, 
             "context": context,
             "settings": {"source-dirs": list(config.source_dirs)},
         }
-        records = scanner_records(language, Path(tmp), request, runner)
+        records = scanner_records(language, command, Path(tmp), request, runner)
     # A package-unit language may name the package directory; it is judged by its first file that is not test code.
     packages: dict[str, str] = {}
     for path in sorted(files) if spec.package_unit else []:
@@ -452,8 +498,9 @@ def add(side: Side, config: Config, spec: Language, path: str, line: int, target
         elif destination == origin:
             continue
         elif layer == source:
-            side.layer[destination] = layer
-            side.edges[origin, destination].append((path, line))
+            if spec.cycles:
+                side.layer[destination] = layer
+                side.edges[origin, destination].append((path, line))
         elif rule(source, layer, destination == config.layers[layer].exit_file):
             side.layer[destination] = layer
             side.pairs[path, destination].append(line)
@@ -656,11 +703,13 @@ def check(
             say(f"Layer rules: {where} 没有 {language} 的 layers，不检查。repo-guards.toml 里设了 layers 的项目：{keys}")
             return 0
         fork = git(root, "merge-base", base or default_base(root), "HEAD").decode().strip()
-        head = scan_side(root, "HEAD", prefix, config, language, runner)
-        if head.broken:
-            say(*(f"error: head 上 {quote(prefix + p)} 解析不了：{quote(e)}" for p, e in head.broken))
-            return 2
-        before = scan_side(root, fork, prefix, config, language, runner)
+        with tempfile.TemporaryDirectory(prefix="layer-rules-tools-") as tools:
+            command = scanner_command(language, Path(tools), runner)
+            head = scan_side(root, "HEAD", prefix, config, language, command, runner)
+            if head.broken:
+                say(*(f"error: head 上 {quote(prefix + p)} 解析不了：{quote(e)}" for p, e in head.broken))
+                return 2
+            before = scan_side(root, fork, prefix, config, language, command, runner)
     except ConfigError as error:
         say(*(f"error: {problem}" for problem in error.problems))
         return 2

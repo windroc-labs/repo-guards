@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -612,16 +613,16 @@ layers = [
         repo = self.ts_repo(head={"src/api/a.ts": 'import "../store/inner";\n'})
         out = io.StringIO()
         self.assertEqual(lr.check(repo.root, "typescript", ".", "main", out, None, runner), 2, out.getvalue())
-        self.assertIn("typescript scanner exited with 2: imports.ts: typescript is not installed", out.getvalue())
+        self.assertIn("typescript scanner could not scan, exit 2: imports.ts: typescript is not installed", out.getvalue())
 
     def test_missing_scanner_program_exits_2(self):
         def runner(argv, **kwargs):
-            raise FileNotFoundError(argv[0])
+            raise FileNotFoundError(2, "No such file or directory", argv[0])
 
         repo = self.ts_repo(head={"src/api/a.ts": 'import "../store/inner";\n'})
         out = io.StringIO()
         self.assertEqual(lr.check(repo.root, "typescript", ".", "main", out, None, runner), 2, out.getvalue())
-        self.assertIn("typescript scanner needs node, which is not installed", out.getvalue())
+        self.assertIn("typescript scanner could not scan: ", out.getvalue())
 
 
 class MoreChecks(Helpers, unittest.TestCase):
@@ -681,7 +682,7 @@ class MoreChecks(Helpers, unittest.TestCase):
 
 
 class PackageUnits(unittest.TestCase):
-    """Go's unit is the package directory: pairs and edges name it, and its exit is the directory."""
+    """Go's unit is the package directory: pairs name it, and its exit is the directory. Go records no cycle edges."""
 
     def config(self):
         layers = (
@@ -695,7 +696,7 @@ class PackageUnits(unittest.TestCase):
         lr.add(side, config, spec, "api/a.go", 3, ["core/x.go", "core/inner/y.go", "api/b.go"])
         lr.add(side, config, spec, "core/inner/y.go", 4, ["core/x.go"])
         self.assertEqual(dict(side.pairs), {("api/a.go", "core/inner"): [3]})
-        self.assertEqual(dict(side.edges), {("core/inner", "core"): [("core/inner/y.go", 4)]})
+        self.assertEqual(dict(side.edges), {})
         report = lr.judge(config, "", side, lr.Side())
         self.assertIn("绕开出口", report.lines[0])
         self.assertIn("api/a.go 引用 core/inner", report.lines[0])
@@ -722,7 +723,7 @@ class GoProtocol(unittest.TestCase):
 
         repo = Repo(self, self.FILES, self.LAYERS)
         repo.commit({"api/a.go": 'import "m/store"\n'})
-        go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda root: ["scanner", str(root)])
+        go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda tools: ["scanner"], build=None)
         out = io.StringIO()
         with unittest.mock.patch.dict(lr.LANGUAGES, {"go": go}):
             code = lr.check(repo.root, "go", ".", "main", out, None, runner)
@@ -747,20 +748,153 @@ class GoProtocol(unittest.TestCase):
         self.assertIn('包 "lib" 的文件分在层 "api"、"core" 里', "\n".join(caught.exception.problems))
 
 
+GO_LAYERS = """
+[project."{wd}"]
+{extra}
+layers = [
+  {{ name = "api", paths = ["api/**"], exit = "api" }},
+  {{ name = "core", paths = ["core/**"], exit = "core" }},
+]
+"""
+GO_BASE = {
+    "go.mod": "module example.com/m\n\ngo 1.27\n",
+    "api/a.go": "package api\n",
+    "core/core.go": "package core\n",
+    "core/inner/inner.go": "package inner\n",
+}
+
+
+@unittest.skipIf(shutil.which("go") is None, "needs the go command (CI's Checker tests job installs it)")
+class GoScanner(unittest.TestCase):
+    """The real Go scanner: go.mod's module path resolves imports to package directories."""
+
+    def repo(self, head, wd=".", extra=""):
+        prefix = "" if wd == "." else f"{wd}/"
+        repo = Repo(self, {prefix + p: t for p, t in GO_BASE.items()}, GO_LAYERS.format(wd=wd, extra=extra))
+        repo.commit({prefix + p: t for p, t in head.items()})
+        return repo
+
+    def test_s2_import_of_the_next_layers_exit_passes(self):
+        repo = self.repo({"api/a.go": 'package api\n\nimport "example.com/m/core"\n'}, wd="svc")
+        self.assertEqual(repo.run("go", wd="svc"), 0, repo.output)
+        self.assertIn("没有新增违规", repo.output)
+
+    def test_s3_test_files_are_not_checked(self):
+        head = {"api/a_test.go": 'package api\n\nimport "example.com/m/core/inner"\n'}
+        for extra in ("test-paths = []", ""):
+            with self.subTest(extra=extra):
+                repo = self.repo(head, extra=extra)
+                self.assertEqual(repo.run("go"), 0, repo.output)
+
+    def test_s11_go_mod_module_path_resolves_to_a_non_exit_package(self):
+        repo = self.repo({"api/a.go": 'package api\n\nimport (\n\t"fmt"\n\t"example.com/m/core/inner"\n)\n'})
+        self.assertEqual(repo.run("go"), 1, repo.output)
+        self.assertEqual(len(repo.errors()), 1, repo.output)
+        self.assertIn("file=api/a.go,line=5", repo.errors()[0])
+        self.assertIn("绕开出口", repo.errors()[0])
+        self.assertIn("core/inner", repo.errors()[0])
+
+    def test_head_parse_error_exits_2(self):
+        repo = self.repo({"core/bad.go": "package core\n\nimport (\n"})
+        self.assertEqual(repo.run("go"), 2, repo.output)
+        self.assertIn("core/bad.go", repo.output)
+
+    def test_each_import_spec_is_one_reference(self):
+        spec = '\t{} "example.com/m/core/inner"\n'
+        base = {"api/a.go": "package api\n\nimport (\n" + spec.format("x") + ")\n"}
+        repo = Repo(self, {**GO_BASE, **base}, GO_LAYERS.format(wd=".", extra=""))
+        repo.commit({"api/a.go": "package api\n\nimport (\n" + spec.format("x") + spec.format("y") + ")\n"})
+        self.assertEqual(repo.run("go"), 1, repo.output)
+        self.assertEqual([re.search(r",line=(\d+),", e).group(1) for e in repo.errors()], ["4", "5"])
+        self.assertIn("merge-base 1 处，head 2 处", repo.errors()[0])
+
+    def test_no_cycle_for_go_even_across_build_constraints(self):
+        head = {
+            "core/a/x_windows.go": 'package a\n\nimport "example.com/m/core/b"\n',
+            "core/b/y_linux.go": 'package b\n\nimport "example.com/m/core/a"\n',
+        }
+        repo = self.repo(head)
+        self.assertEqual(repo.run("go"), 0, repo.output)
+        self.assertNotIn("循环：", repo.output)
+
+    def test_files_the_go_tool_skips_are_not_read(self):
+        bad = "this is not go\n"
+        head = {
+            "core/testdata/bad.go": bad,
+            "core/testdata/go.mod": "go 1.27\n",
+            "core/_scratch/bad.go": bad,
+            "core/.hidden/bad.go": bad,
+            "core/_bad.go": bad,
+            "core/vendor/v/bad.go": bad,
+        }
+        repo = self.repo(head)
+        self.assertEqual(repo.run("go"), 0, repo.output)
+
+    def test_scanner_errors_reach_the_output(self):
+        repo = self.repo({"lib/go.mod": "go 1.27\n", "api/a.go": 'package api\n\nimport "example.com/m/core"\n'})
+        self.assertEqual(repo.run("go"), 2, repo.output)
+        self.assertIn("lib/go.mod has no module directive", repo.output)
+
+
+class GoRunner(Helpers, unittest.TestCase):
+    def go_repo(self):
+        files = {**GO_BASE, "api/a.go": 'package api\n\nimport "example.com/m/core"\n'}
+        return Repo(self, files, GO_LAYERS.format(wd=".", extra=""))
+
+    def test_scanner_is_built_once_without_the_callers_go_settings(self):
+        calls = []
+
+        def runner(argv, **kwargs):
+            calls.append((argv, kwargs["env"], kwargs["cwd"]))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        out = io.StringIO()
+        self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 0, out.getvalue())
+        build, *scans = calls
+        self.assertEqual(build[0][:5], ["go", "build", "-C", str(lr.CI_CHECKS / "go/layer-rules"), "-o"])
+        binary = build[0][5]
+        self.assertEqual(len(scans), 2)
+        for argv, env, cwd in calls:
+            self.assertEqual((env["GOWORK"], env["GOFLAGS"], env["GOENV"], cwd), ("off", "", "off", "/"))
+        for argv, _, _ in scans:
+            self.assertEqual(argv[0], binary)
+
+    def test_missing_go_exits_2(self):
+        def runner(argv, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "go")
+
+        out = io.StringIO()
+        self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 2)
+        self.assertIn("error: ", out.getvalue())
+        self.assertIn("go scanner could not be built", out.getvalue())
+
+    def test_go_test_files_are_always_test_code(self):
+        files = frozenset({"api/a.go", "core/c.go", "core/c_test.go"})
+        data = overrides(layer("api", ["api/**"], "api"), layer("core", ["core/**"], "core"))
+        self.assertTrue(lr.load_config(data, ".", "go", files).is_test("core/c_test.go"))
+        self.assertFalse(lr.load_config(data, ".", "go", files).is_test("core/c.go"))
+        self.assertFalse(lr.load_config(overrides(API, CORE), ".", "python", FILES).is_test("x_test.go"))
+
+    def test_files_the_go_tool_skips_are_not_go(self):
+        for path in ("testdata/a.go", "core/testdata/x/a.go", "vendor/v/a.go", "_x/a.go", "core/_a.go", "core/.h/a.go"):
+            self.assertIsNone(lr.language_of(path), path)
+        for path in ("core/a.go", "core/a_test.go", "core/my_testdata/a.go", "core/x_y.go"):
+            self.assertEqual(lr.language_of(path), "go", path)
+
+
 class Workflow(unittest.TestCase):
-    WORKFLOWS = lr.CI_CHECKS.parent / ".github/workflows"
+    LANGUAGES = ("python", "typescript", "go")
 
     def steps(self, language):
-        text = (self.WORKFLOWS / f"{language}.yml").read_text()
-        job = text.split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
-        steps = re.split(r"\n      - (?=name: |&|\*)", job)[1:]
-        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", step, re.M)) else step for step in steps]
-        return names, steps
+        workflow = lr.CI_CHECKS.parent / f".github/workflows/{language}.yml"
+        job = workflow.read_text().split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
+        return re.split(r"\n      - (?=name: |&|\*)", job)[1:]
 
     def test_s21_s22_layer_rules_follows_inline_exemptions_and_blocks_nothing(self):
-        for language in ("python", "typescript"):
-            with self.subTest(language=language):
-                names, steps = self.steps(language)
+        for language in self.LANGUAGES:
+            with self.subTest(language):
+                steps = self.steps(language)
+                names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", s, re.M)) else s for s in steps]
                 at = names.index("Inline exemptions")
                 self.assertEqual(names[at + 1], "Layer rules")
                 step = steps[at + 1]
@@ -768,25 +902,30 @@ class Workflow(unittest.TestCase):
                 self.assertNotIn("continue-on-error", step)
                 self.assertIn("working-directory: repo\n", step)
                 self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
-                if language == "typescript":
-                    self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
-                self.assertIn(
-                    "python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)",
-                    step,
-                )
-                command = f'"$python" -I -S "$RG/layer-rules/layer_rules.py" {language} --working-directory "$PROJECT_DIR" --base "$BASE_REF"'
-                self.assertIn(command, step)
+                find = "uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14"
+                self.assertIn(f"python=$(cd / && {find})", step)
+                command = f'"$python" -I -S "$RG/layer-rules/layer_rules.py" {language} --working-directory "$PROJECT_DIR"'
+                self.assertIn(command + ' --base "$BASE_REF"', step)
                 for later in steps[at + 2 :]:
                     self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
 
     def test_typescript_scanner_is_installed_and_only_repo_guards_steps_set_the_environment(self):
-        names, steps = self.steps("typescript")
+        steps = self.steps("typescript")
+        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", s, re.M)) else s for s in steps]
+        self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", steps[names.index("Layer rules")])
         tools = steps[names.index("Install the shared tools")]
         self.assertIn('npm ci --prefix "$RG/typescript/layer-rules" --omit=dev --no-audit --no-fund', tools)
         writers = [name for name, step in zip(names[: names.index("Layer rules")], steps) if re.search(r"GITHUB_(ENV|PATH)", step)]
         self.assertEqual(writers, ["Apply the shared .npmrc", "Install the shared tools"])
         npmrc = (lr.CI_CHECKS / "typescript/.npmrc").read_text().splitlines()
         self.assertIn("ignore-scripts=true", npmrc)
+
+    def test_go_step_sees_gowork_off_and_the_project_dir(self):
+        workflow = (lr.CI_CHECKS.parent / ".github/workflows/go.yml").read_text()
+        job_env = workflow.split("\n  checks:\n", 1)[1].split("\n    steps:\n", 1)[0]
+        self.assertIn('GOWORK: "off"', job_env)
+        step = next(s for s in self.steps("go") if s.startswith("name: Layer rules\n"))
+        self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
 
 
 class Docs(unittest.TestCase):
@@ -798,15 +937,16 @@ class Docs(unittest.TestCase):
         self.assertIn("  - `layers`：", section)
         self.assertIn("  - `test-paths`：", section)
         self.assertIn('layers = [\n  { name = "api"', section)
-        self.assertIn("| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
-        self.assertIn("| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
+        for workflow in ("python.yml", "typescript.yml", "go.yml"):
+            row = f"| `{workflow}` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、"
+            self.assertIn(row, ci)
         arch = (self.ROOT / "architecture/README.md").read_text()
         self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
         self.assertIn("\n### 第 2 项分层规则\n", arch)
         item = arch.split("\n### 第 2 项分层规则\n", 1)[1].split("\n### ", 1)[0]
-        self.assertIn("`python.yml` 和 `typescript.yml` 有这一步", item)
+        self.assertIn("`python.yml`、`typescript.yml` 和 `go.yml` 有这一步", item)
         self.assertIn("- 什么算 import（TypeScript）：", item)
-        self.assertIn("layer_rules.py typescript", item)
+        self.assertIn("再把命令里的 `python` 换成 `typescript`", item)
 
 
 class Output(unittest.TestCase):

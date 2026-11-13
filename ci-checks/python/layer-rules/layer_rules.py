@@ -17,6 +17,14 @@ PREFIX = "layer rules (python): "
 INI = ".importlinter"
 PYPROJECT = "pyproject.toml"
 
+try:
+    from importlinter import configuration
+    from importlinter.application import use_cases
+except ImportError as error:
+    # A broken tool install means the check could not run: exit 2, never the broken-contract code 1.
+    print(f"{PREFIX}cannot import import-linter: {error}", file=sys.stderr)
+    sys.exit(2)
+
 
 class Error(Exception):
     pass
@@ -41,36 +49,28 @@ def find_config(project: Path) -> Path | None:
 class ProjectFinder:
     """Locates the project's packages for grimp, which only reads their files, and keeps them from running.
 
-    Its specs have no loader: importing a project package gives an empty namespace and importing a project module
-    fails, so neither the graph build nor a contract_types entry naming project code executes it.
+    It claims every module under the config's root packages, wherever its files are (a symlink or a source dir may
+    point outside the project), and returns specs with no loader: importing a project package gives an empty
+    namespace and importing a project module fails, so neither the graph build nor a contract_types entry naming
+    project code executes it. The project's directories are not on sys.path, so no other name reaches its files.
     """
 
     def __init__(self, roots: Sequence[Path], top_names: frozenset[str]):
         self.roots = [str(root) for root in roots]
         self.top_names = top_names
 
-    def inside(self, entry: str) -> bool:
-        return any(Path(entry).resolve().is_relative_to(root) for root in self.roots)
-
     def find_spec(
         self, name: str, path: Sequence[str] | None, target: ModuleType | None = None
     ) -> ModuleSpec | None:
-        if path is None:
-            if name not in self.top_names:
-                return None
-            path = self.roots
-        elif not any(self.inside(entry) for entry in path):
+        if name.partition(".")[0] not in self.top_names:
             return None
-        spec = PathFinder.find_spec(name, path)
+        spec = PathFinder.find_spec(name, self.roots if path is None else path)
         if spec is not None:
             spec.loader = None
         return spec
 
 
 def lint(config: Path, roots: Sequence[Path]) -> bool:
-    from importlinter import configuration
-    from importlinter.application import use_cases
-
     configuration.configure()
     try:
         options = use_cases.read_user_options(config_filename=str(config))
@@ -106,9 +106,6 @@ def main(argv: list[str]) -> int:
     os.dup2(sys.stdout.fileno(), sys.stderr.fileno())
     try:
         passed = lint(config, roots)
-    except ImportError as error:
-        print(f"{PREFIX}cannot run import-linter: {error}")
-        return 2
     finally:
         sys.stdout.flush()
         sys.stderr.flush()

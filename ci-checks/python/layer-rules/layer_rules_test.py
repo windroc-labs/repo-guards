@@ -165,6 +165,44 @@ class LayerRules(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assert_nothing_ran()
 
+    def test_subpackage_symlinked_outside_the_project_is_not_run(self):
+        ran = RAN.format(sentinel=str(self.sentinel))
+        shared = self.project.parent / "shared"
+        for relative in ("core/__init__.py", "core/helper.py"):
+            (shared / relative).parent.mkdir(parents=True, exist_ok=True)
+            (shared / relative).write_text(ran, encoding="utf-8")
+        self.write({"app/__init__.py": ran, "app/ui/__init__.py": ran})
+        (self.project / "app/core").symlink_to(shared / "core", target_is_directory=True)
+        self.write(
+            {
+                "pyproject.toml": FORBIDDEN_TOML.replace(
+                    'root_package = "app"',
+                    'root_package = "app"\ncontract_types = ["mine: app.core.helper.Mine"]',
+                )
+            }
+        )
+        result = self.run_check()
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_nothing_ran()
+
+    def test_package_found_through_a_parent_source_dir_is_not_run(self):
+        ran = RAN.format(sentinel=str(self.sentinel))
+        outside = self.project.parent / "app"
+        for relative in ("__init__.py", "core/__init__.py", "core/helper.py", "ui/__init__.py"):
+            (outside / relative).parent.mkdir(parents=True, exist_ok=True)
+            (outside / relative).write_text(ran, encoding="utf-8")
+        self.write(
+            {
+                "pyproject.toml": FORBIDDEN_TOML.replace(
+                    'root_package = "app"',
+                    'root_package = "app"\ncontract_types = ["mine: app.core.helper.Mine"]',
+                )
+            }
+        )
+        result = self.run_check("..")
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assert_nothing_ran()
+
     def test_dotted_root_package_does_not_run_its_parent(self):
         ran = RAN.format(sentinel=str(self.sentinel))
         self.write(

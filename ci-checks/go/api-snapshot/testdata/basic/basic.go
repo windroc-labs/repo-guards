@@ -10,4 +10,18 @@ func helper() {}
 type File struct {
 	Name string
 	path string
+	*Header
+	meta
 }
+
+func (f *File) Close() error { return nil }
+
+func (f *File) Flush() error { return nil }
+
+func (f File) Error() string { return f.path }
+
+type Header struct{ Size int64 }
+
+type meta struct{ Path string }
+
+func (meta) Describe() string { return "" }

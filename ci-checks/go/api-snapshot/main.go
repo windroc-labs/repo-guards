@@ -68,13 +68,18 @@ func generate(stderr io.Writer) ([]entry, error) {
 		}
 		return os.Open(exports[path])
 	})
-	entries := []entry{}
+	var pkgs []*types.Package
 	for _, path := range units {
 		pkg, err := imp.Import(path)
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", path, err)
 		}
-		entries = append(entries, packageEntries(pkg)...)
+		pkgs = append(pkgs, pkg)
+	}
+	candidates := candidateInterfaces(pkgs)
+	entries := []entry{}
+	for _, pkg := range pkgs {
+		entries = append(entries, packageEntries(pkg, candidates)...)
 	}
 	slices.SortFunc(entries, func(a, b entry) int {
 		return slices.Compare([]string{a.Unit, a.Parent, a.Kind, a.Name}, []string{b.Unit, b.Parent, b.Kind, b.Name})
@@ -109,7 +114,27 @@ func listPackages(stderr io.Writer) ([]string, map[string]string, error) {
 	return units, exports, nil
 }
 
-func packageEntries(pkg *types.Package) []entry {
+// candidateInterfaces are the interfaces a type's implements lists may name:
+// error and the units' exported, non-generic interfaces with methods.
+func candidateInterfaces(pkgs []*types.Package) []*types.Named {
+	candidates := []*types.Named{types.Universe.Lookup("error").Type().(*types.Named)}
+	for _, pkg := range pkgs {
+		for _, name := range pkg.Scope().Names() {
+			obj, ok := pkg.Scope().Lookup(name).(*types.TypeName)
+			if !ok || !obj.Exported() || obj.IsAlias() {
+				continue
+			}
+			named := obj.Type().(*types.Named)
+			iface, ok := named.Underlying().(*types.Interface)
+			if ok && named.TypeParams().Len() == 0 && iface.IsMethodSet() && iface.NumMethods() > 0 {
+				candidates = append(candidates, named)
+			}
+		}
+	}
+	return candidates
+}
+
+func packageEntries(pkg *types.Package, candidates []*types.Named) []entry {
 	f := formatter{pkg}
 	var entries []entry
 	add := func(parent, kind, name, signature string) {
@@ -131,8 +156,14 @@ func packageEntries(pkg *types.Package) []entry {
 				add("", "func", name, "func "+name+f.signature(obj.Signature()))
 			}
 		case *types.TypeName:
-			if obj.Exported() {
-				add("", "type", name, f.typeDecl(obj))
+			if !obj.Exported() {
+				continue
+			}
+			add("", "type", name, f.typeDecl(obj, candidates))
+			if named, ok := obj.Type().(*types.Named); ok {
+				for _, m := range f.members(named) {
+					add(name, m.Kind, m.Name, m.Signature)
+				}
 			}
 		}
 	}
@@ -143,24 +174,147 @@ func packageEntries(pkg *types.Package) []entry {
 // resolved, named types qualified by import path unless declared in the unit.
 type formatter struct{ pkg *types.Package }
 
-func (f formatter) typeDecl(obj *types.TypeName) string {
+func (f formatter) typeDecl(obj *types.TypeName, candidates []*types.Named) string {
 	if alias, ok := obj.Type().(*types.Alias); ok {
 		return "type " + obj.Name() + f.typeParams(alias.TypeParams()) + " = " + f.typ(alias.Rhs())
 	}
 	named := obj.Type().(*types.Named)
-	return "type " + obj.Name() + f.typeParams(named.TypeParams()) + " " + f.underlying(named.Underlying())
+	return "type " + obj.Name() + f.typeParams(named.TypeParams()) + " " + f.underlying(named) + f.implements(named, candidates)
 }
 
-func (f formatter) underlying(u types.Type) string {
-	switch u := u.(type) {
+func (f formatter) underlying(named *types.Named) string {
+	switch u := named.Underlying().(type) {
 	case *types.Struct:
+		if named.TypeParams().Len() == 0 && !types.Comparable(named) {
+			return "struct; not comparable"
+		}
 		return "struct"
 	case *types.Interface:
-		if u.IsMethodSet() {
-			return "interface"
+		if !u.IsMethodSet() {
+			break
+		}
+		for i := range u.NumMethods() {
+			if !u.Method(i).Exported() {
+				return "interface; sealed"
+			}
+		}
+		return "interface"
+	}
+	return f.typ(named.Underlying())
+}
+
+func (f formatter) implements(named *types.Named, candidates []*types.Named) string {
+	if _, isIface := named.Underlying().(*types.Interface); isIface || named.TypeParams().Len() > 0 {
+		return ""
+	}
+	var value, pointer []string
+	for _, c := range candidates {
+		iface := c.Underlying().(*types.Interface)
+		if types.Implements(named, iface) {
+			value = append(value, f.typ(c))
+		} else if types.Implements(types.NewPointer(named), iface) {
+			pointer = append(pointer, f.typ(c))
 		}
 	}
-	return f.typ(u)
+	slices.Sort(value)
+	slices.Sort(pointer)
+	out := ""
+	if len(value) > 0 {
+		out += "; implements " + strings.Join(value, ", ")
+	}
+	if len(pointer) > 0 {
+		out += "; *" + named.Obj().Name() + " implements " + strings.Join(pointer, ", ")
+	}
+	return out
+}
+
+// members are the exported methods and fields selectable on a defined type,
+// promoted ones included. A generic type is instantiated with its own type
+// parameters, so members use the declaration's names, not each receiver's.
+func (f formatter) members(named *types.Named) []entry {
+	t := types.Type(named)
+	if params := named.TypeParams(); params.Len() > 0 {
+		args := make([]types.Type, params.Len())
+		for i := range args {
+			args[i] = params.At(i)
+		}
+		if inst, err := types.Instantiate(nil, named, args, false); err == nil {
+			t = inst
+		}
+	}
+	recv := f.typ(t)
+	var out []entry
+	if iface, ok := named.Underlying().(*types.Interface); ok {
+		for i := range iface.NumMethods() {
+			if m := iface.Method(i); m.Exported() {
+				out = append(out, entry{Kind: "method", Name: m.Name(), Signature: "func (" + recv + ") " + m.Name() + f.signature(m.Signature())})
+			}
+		}
+		return out
+	}
+	values := types.NewMethodSet(t)
+	pointers := types.NewMethodSet(types.NewPointer(t))
+	for i := range pointers.Len() {
+		sel := pointers.At(i)
+		m := sel.Obj()
+		if !m.Exported() {
+			continue
+		}
+		r := "*" + recv
+		if values.Lookup(m.Pkg(), m.Name()) != nil {
+			r = recv
+		}
+		out = append(out, entry{Kind: "method", Name: m.Name(), Signature: "func (" + r + ") " + m.Name() + f.signature(sel.Type().(*types.Signature))})
+	}
+	for _, name := range fieldNames(t.Underlying(), map[types.Type]bool{}) {
+		// The lookup applies Go's selector rules: the shallowest field wins,
+		// a name ambiguous at that depth or shadowed by a method is not selectable.
+		field, ok := lookupField(t, f.pkg, name)
+		if !ok {
+			continue
+		}
+		sig := field.Name() + " " + f.typ(field.Type())
+		if field.Embedded() {
+			sig = "embedded " + f.typ(field.Type())
+		}
+		out = append(out, entry{Kind: "field", Name: name, Signature: sig})
+	}
+	return out
+}
+
+func lookupField(t types.Type, pkg *types.Package, name string) (*types.Var, bool) {
+	obj, _, _ := types.LookupFieldOrMethod(t, true, pkg, name)
+	field, ok := obj.(*types.Var)
+	return field, ok && field.IsField()
+}
+
+// fieldNames lists the exported field names of a struct and of the structs it
+// embeds, at any depth.
+func fieldNames(u types.Type, visited map[types.Type]bool) []string {
+	st, ok := u.(*types.Struct)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for i := range st.NumFields() {
+		field := st.Field(i)
+		if field.Exported() {
+			out = append(out, field.Name())
+		}
+		if !field.Embedded() {
+			continue
+		}
+		embedded := types.Unalias(field.Type())
+		if ptr, ok := embedded.(*types.Pointer); ok {
+			embedded = types.Unalias(ptr.Elem())
+		}
+		if !visited[embedded] {
+			visited[embedded] = true
+			out = append(out, fieldNames(embedded.Underlying(), visited)...)
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 func (f formatter) typ(t types.Type) string {

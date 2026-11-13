@@ -161,3 +161,71 @@ func TestDeterministic(t *testing.T) {
 		}
 	}
 }
+
+func TestSignatures(t *testing.T) {
+	entries := entriesOf(t, fixture(t, "basic"))
+	const unit = "example.com/basic"
+	want := []entry{
+		{unit, "", "const", "Version", "const Version untyped string"},
+		{unit, "", "const", "Mode", "const Mode Kind"},
+		{unit, "", "type", "Kind", "type Kind int"},
+		{unit, "", "var", "Default", "var Default *File"},
+		{unit, "", "func", "Join", "func Join(string, ...string) string"},
+		{unit, "", "func", "Map", "func Map[T any, U any]([]T, func(T) U) []U"},
+		{unit, "", "func", "Sum", "func Sum[N ~float64 | ~int](...N) N"},
+		{unit, "", "func", "Max", "func Max[N ~float64 | ~int](N, N) N"},
+		{unit, "", "func", "Any", "func Any(any, any, func(string) string) func(string) string"},
+		{unit, "", "type", "Number", "type Number interface{~float64 | ~int}"},
+		{unit, "", "type", "Closer", "type Closer interface"},
+		{unit, "Closer", "method", "Close", "func (Closer) Close() error"},
+		{unit, "Closer", "method", "Flush", "func (Closer) Flush() error"},
+		{unit, "", "type", "Sealed", "type Sealed interface; sealed"},
+		{unit, "Sealed", "method", "Name", "func (Sealed) Name() string"},
+		{unit, "", "type", "Callback", "type Callback struct; not comparable"},
+		{unit, "Callback", "field", "Fn", "Fn func()"},
+		{unit, "", "type", "Getter", "type Getter = func(string) string"},
+		{unit, "", "type", "Pair", "type Pair[K comparable, V any] = map[K]V"},
+		{unit, "", "type", "List", "type List[E any] struct"},
+		{unit, "List", "method", "Push", "func (*List[E]) Push(E)"},
+		{unit, "List", "method", "Len", "func (List[E]) Len() int"},
+		{unit, "", "type", "File", "type File struct; implements error; *File implements Closer"},
+		{unit, "File", "field", "Name", "Name string"},
+		{unit, "File", "field", "Header", "embedded *Header"},
+		{unit, "File", "field", "Size", "Size int64"},
+		{unit, "File", "field", "Path", "Path string"},
+		{unit, "File", "method", "Close", "func (*File) Close() error"},
+		{unit, "File", "method", "Flush", "func (*File) Flush() error"},
+		{unit, "File", "method", "Error", "func (File) Error() string"},
+		{unit, "File", "method", "Describe", "func (File) Describe() string"},
+		{unit, "", "type", "Header", "type Header struct"},
+		{unit, "Header", "field", "Size", "Size int64"},
+		{unit, "", "type", "Chans", "type Chans struct"},
+		{unit, "Chans", "field", "In", "In <-chan int"},
+		{unit, "Chans", "field", "Both", "Both chan (<-chan int)"},
+		{unit, "Chans", "field", "Tag", `Tag struct{A int "json:\"a\""}`},
+	}
+	for _, w := range want {
+		got, ok := find(entries, w.Unit, w.Parent, w.Kind, w.Name)
+		if !ok {
+			t.Errorf("missing %s %s.%s", w.Kind, w.Parent, w.Name)
+		} else if got.Signature != w.Signature {
+			t.Errorf("%s %s.%s signature\n got %q\nwant %q", w.Kind, w.Parent, w.Name, got.Signature, w.Signature)
+		}
+	}
+	for _, name := range []string{"path", "meta", "seal", "items"} {
+		if slices.Contains(names(entries), name) {
+			t.Errorf("unexported %s is an entry", name)
+		}
+	}
+}
+
+func TestUniqueKeys(t *testing.T) {
+	seen := map[[4]string]bool{}
+	for _, e := range entriesOf(t, fixture(t, "basic")) {
+		key := [4]string{e.Unit, e.Parent, e.Kind, e.Name}
+		if seen[key] {
+			t.Errorf("duplicate key %v", key)
+		}
+		seen[key] = true
+	}
+}

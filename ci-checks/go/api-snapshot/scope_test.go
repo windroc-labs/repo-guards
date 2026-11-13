@@ -9,17 +9,49 @@ import (
 	"testing"
 )
 
-const driverScope = `["example.com/scope/driver"]`
-
 var wholeScopeModule = []string{"example.com/scope", "example.com/scope/driver", "example.com/scope/driver/io", "example.com/scope/driverx", "example.com/scope/net"}
 
-// scoped runs the program in dir with API_SNAPSHOT_SCOPE set to scope.
-func scoped(t *testing.T, dir, scope string) string {
+// goScope is a repo-guards.toml setting api-snapshot-scope.go for working directory ".".
+func goScope(prefixes string) string {
+	return "[project.\".\"]\napi-snapshot-scope.go = " + prefixes + "\n"
+}
+
+var driverScope = goScope(`["example.com/scope/driver"]`)
+
+// repoWith copies the scope fixture module to working directory wd of a new
+// repo root, and returns the root.
+func repoWith(t *testing.T, wd string) string {
 	t.Helper()
-	t.Setenv("API_SNAPSHOT_SCOPE", scope)
-	r := runIn(t, dir)
+	root := t.TempDir()
+	if err := os.CopyFS(filepath.Join(root, wd), os.DirFS(fixture(t, "scope"))); err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
+func writeFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// generateIn writes config as the root's repo-guards.toml and runs the program
+// as go.yml's Generate step does.
+func generateIn(t *testing.T, root, wd, config string) result {
+	t.Helper()
+	writeFile(t, filepath.Join(root, ".github", "checks", "repo-guards.toml"), config)
+	return runIn(t, filepath.Join(root, wd), root, wd)
+}
+
+func scoped(t *testing.T, root, config string) string {
+	t.Helper()
+	r := generateIn(t, root, ".", config)
 	if r.code != 0 {
-		t.Fatalf("scope %q: exit %d, stderr:\n%s", scope, r.code, r.stderr)
+		t.Fatalf("config %q: exit %d, stderr:\n%s", config, r.code, r.stderr)
 	}
 	return r.stdout
 }
@@ -43,85 +75,85 @@ func unitsOf(t *testing.T, out string) []string {
 	return slices.Compact(units)
 }
 
-// copyFixture copies a fixture module to a directory the test may change.
-func copyFixture(t *testing.T, name string) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.CopyFS(dir, os.DirFS(fixture(t, name))); err != nil {
-		t.Fatal(err)
-	}
-	return dir
-}
-
-func writeFile(t *testing.T, path, content string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestScopeKeepsUnitsUnderPrefix(t *testing.T) {
-	dir := fixture(t, "scope")
+	root := repoWith(t, ".")
 	cases := []struct {
-		scope string
-		want  []string
+		config string
+		want   []string
 	}{
 		{driverScope, []string{"example.com/scope/driver", "example.com/scope/driver/io"}},
-		{`["example.com/scope/driver/io","example.com/scope/net"]`, []string{"example.com/scope/driver/io", "example.com/scope/net"}},
-		{`["example.com/scope"]`, wholeScopeModule},
-		{`["example.com/sco"]`, nil},
+		{goScope(`["example.com/scope/driver/io", "example.com/scope/net"]`), []string{"example.com/scope/driver/io", "example.com/scope/net"}},
+		{goScope(`["example.com/scope"]`), wholeScopeModule},
+		{goScope(`["example.com/sco"]`), nil},
 	}
 	for _, c := range cases {
-		if got := unitsOf(t, scoped(t, dir, c.scope)); !slices.Equal(got, c.want) {
-			t.Errorf("scope %s: units = %v, want %v", c.scope, got, c.want)
+		if got := unitsOf(t, scoped(t, root, c.config)); !slices.Equal(got, c.want) {
+			t.Errorf("config %q: units = %v, want %v", c.config, got, c.want)
 		}
 	}
 }
 
 func TestNoScopeWritesWholeModule(t *testing.T) {
-	dir := fixture(t, "scope")
-	t.Setenv("API_SNAPSHOT_SCOPE", "") // restores the variable after the test
-	if err := os.Unsetenv("API_SNAPSHOT_SCOPE"); err != nil {
-		t.Fatal(err)
-	}
-	r := runIn(t, dir)
+	root := repoWith(t, ".")
+	r := runIn(t, root)
 	if r.code != 0 {
 		t.Fatalf("exit %d, stderr:\n%s", r.code, r.stderr)
 	}
 	if got := unitsOf(t, r.stdout); !slices.Equal(got, wholeScopeModule) {
-		t.Errorf("unset scope: units = %v, want %v", got, wholeScopeModule)
+		t.Errorf("no arguments: units = %v, want %v", got, wholeScopeModule)
 	}
-	for _, scope := range []string{"", "[]"} {
-		if got := scoped(t, dir, scope); got != r.stdout {
-			t.Errorf("scope %q: output differs from unset scope:\n%s\nwant:\n%s", scope, got, r.stdout)
+	if got := runIn(t, root, root, "."); got.code != 0 || got.stdout != r.stdout {
+		t.Errorf("no repo-guards.toml: exit %d, stderr %q; output differs from no arguments:\n%s", got.code, got.stderr, got.stdout)
+	}
+	for _, config := range []string{
+		"",
+		"[project.\"other\"]\napi-snapshot-scope.go = [\"example.com/scope/net\"]\n",
+		"[project.\".\"]\napi-snapshot.go = \".github/checks/api-go.json\"\n",
+		"[project.\".\"]\napi-snapshot-scope.python = [\"pkg\"]\n",
+	} {
+		if got := scoped(t, root, config); got != r.stdout {
+			t.Errorf("config %q: output differs from no arguments:\n%s\nwant:\n%s", config, got, r.stdout)
 		}
 	}
 }
 
+func TestScopeOfTheWorkingDirectory(t *testing.T) {
+	root := repoWith(t, "svc")
+	config := "[project.\".\"]\napi-snapshot-scope.go = [\"example.com/scope/net\"]\n" +
+		"[project.\"svc\"]\napi-snapshot-scope.go = [\"example.com/scope/driver\"]\n"
+	r := generateIn(t, root, "svc", config)
+	if r.code != 0 {
+		t.Fatalf("exit %d, stderr:\n%s", r.code, r.stderr)
+	}
+	if got, want := unitsOf(t, r.stdout), []string{"example.com/scope/driver", "example.com/scope/driver/io"}; !slices.Equal(got, want) {
+		t.Errorf("units = %v, want %v", got, want)
+	}
+}
+
 func TestScopeIgnoresAdditionsOutside(t *testing.T) {
-	dir := copyFixture(t, "scope")
-	before := scoped(t, dir, driverScope)
+	root := repoWith(t, ".")
+	before := scoped(t, root, driverScope)
 	dev, ok := find(parse(t, before), "example.com/scope/driver", "", "type", "Dev")
 	if want := "type Dev struct; implements Closer"; !ok || dev.Signature != want {
 		t.Errorf("scoped Dev entry = %+v (found %v), want signature %q", dev, ok, want)
 	}
-	writeFile(t, filepath.Join(dir, "net", "more.go"), "package net\n\nfunc Listen() {}\n\ntype Closer interface{ Close() }\n")
-	writeFile(t, filepath.Join(dir, "driverx", "more.go"), "package driverx\n\nfunc Y() {}\n")
-	if after := scoped(t, dir, driverScope); after != before {
+	writeFile(t, filepath.Join(root, "net", "more.go"), "package net\n\nfunc Listen() {}\n\ntype Closer interface{ Close() }\n")
+	writeFile(t, filepath.Join(root, "driverx", "more.go"), "package driverx\n\nfunc Y() {}\n")
+	if after := scoped(t, root, driverScope); after != before {
 		t.Errorf("out-of-scope additions changed the scoped output:\n%s\nwant:\n%s", after, before)
 	}
 	// Unscoped, Dev lists the new interface: only the scope keeps it out of the scoped Dev entry.
-	dev, ok = find(parse(t, scoped(t, dir, "")), "example.com/scope/driver", "", "type", "Dev")
+	dev, ok = find(parse(t, scoped(t, root, "")), "example.com/scope/driver", "", "type", "Dev")
 	if want := "type Dev struct; implements Closer, example.com/scope/net.Closer"; !ok || dev.Signature != want {
 		t.Errorf("unscoped Dev entry = %+v (found %v), want signature %q", dev, ok, want)
 	}
 }
 
 func TestScopeReportsAdditionsInside(t *testing.T) {
-	dir := copyFixture(t, "scope")
-	before := scoped(t, dir, driverScope)
-	writeFile(t, filepath.Join(dir, "driver", "io", "more.go"), "package io\n\nfunc Write() {}\n")
-	after := scoped(t, dir, driverScope)
+	root := repoWith(t, ".")
+	before := scoped(t, root, driverScope)
+	writeFile(t, filepath.Join(root, "driver", "io", "more.go"), "package io\n\nfunc Write() {}\n")
+	after := scoped(t, root, driverScope)
 	if after == before {
 		t.Fatalf("in-scope addition left the scoped output unchanged:\n%s", after)
 	}
@@ -132,12 +164,37 @@ func TestScopeReportsAdditionsInside(t *testing.T) {
 }
 
 func TestBadScopeExits2(t *testing.T) {
-	dir := fixture(t, "scope")
-	for _, scope := range []string{"not json", "{}", "[1]", "null", "[null]", `["example.com/scope/driver",null]`, `"example.com/scope"`, `["example.com/scope"] []`} {
-		t.Setenv("API_SNAPSHOT_SCOPE", scope)
-		r := runIn(t, dir)
-		if r.code != 2 || !strings.Contains(r.stderr, "API_SNAPSHOT_SCOPE") || r.stdout != "" {
-			t.Errorf("scope %q: exit %d, stdout %q, stderr %q; want exit 2 naming API_SNAPSHOT_SCOPE and no output", scope, r.code, r.stdout, r.stderr)
+	root := repoWith(t, ".")
+	for _, config := range []string{
+		"[project.\".\"\n",
+		"project = 1\n",
+		"[project]\n\".\" = 1\n",
+		"[project.\".\"]\napi-snapshot-scope = [\"example.com/scope\"]\n",
+		goScope(`[]`),
+		goScope(`"example.com/scope"`),
+		goScope(`[1]`),
+		goScope(`["example.com/scope", 1]`),
+		goScope(`[["example.com/scope"]]`),
+		goScope(`["example.com/scope/"]`),
+		goScope(`["/example.com/scope"]`),
+		goScope(`["example.com/../scope"]`),
+		goScope(`["example.com/./scope"]`),
+		goScope(`["example.com/sc ope"]`),
+		goScope(`["example.com/scope/*"]`),
+		goScope(`["example.com/scope\u0001"]`),
+	} {
+		r := generateIn(t, root, ".", config)
+		if r.code != 2 || !strings.Contains(r.stderr, "api-snapshot: .github/checks/repo-guards.toml: ") || r.stdout != "" {
+			t.Errorf("config %q: exit %d, stdout %q, stderr %q; want exit 2 naming repo-guards.toml and no output", config, r.code, r.stdout, r.stderr)
+		}
+	}
+}
+
+func TestScopeArgumentsAreAPair(t *testing.T) {
+	root := repoWith(t, ".")
+	for _, args := range [][]string{{root, ".", "go"}, {root, ".", "", ""}} {
+		if r := runIn(t, root, args...); r.code != 2 || !strings.Contains(r.stderr, "usage: api-snapshot [REPO_ROOT WORKING_DIRECTORY]") {
+			t.Errorf("args %q: exit %d, stderr %q; want exit 2 with the usage", args, r.code, r.stderr)
 		}
 	}
 }

@@ -11,10 +11,16 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"slices"
+	"strconv"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 type entry struct {
@@ -39,11 +45,15 @@ type listedPackage struct {
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 
 func run(args []string, stdout, stderr io.Writer) int {
-	if len(args) > 0 {
-		fmt.Fprintln(stderr, "usage: api-snapshot, run in the module directory; prints the public API entries as JSON")
+	if len(args) != 0 && len(args) != 2 {
+		fmt.Fprintln(stderr, "usage: api-snapshot [REPO_ROOT WORKING_DIRECTORY], run in the module directory; prints the public API entries as JSON, with the arguments only the packages in the working directory's api-snapshot-scope.go")
 		return 2
 	}
-	scope, err := readScope()
+	var scope []string
+	var err error
+	if len(args) == 2 {
+		scope, err = readScope(args[0], args[1])
+	}
 	if err != nil {
 		fmt.Fprintf(stderr, "api-snapshot: %v\n", err)
 		return 2
@@ -64,23 +74,88 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// readScope reads the freeze scope the API snapshot job passes: import path
-// prefixes as a JSON array of strings. Unset, empty or [] is the whole module (nil).
-func readScope() ([]string, error) {
-	value := os.Getenv("API_SNAPSHOT_SCOPE")
-	if value == "" {
+// overrides is the caller's settings file, relative to the repo root.
+const overrides = ".github/checks/repo-guards.toml"
+
+var goSegment = regexp.MustCompile(`^[A-Za-z0-9._~+-]+$`)
+
+// readScope reads api-snapshot-scope.go from the [project."<working-directory>"]
+// section of the caller's repo-guards.toml. nil, the whole module, when the
+// file, the section or the setting is missing.
+func readScope(root, workingDirectory string) ([]string, error) {
+	text, err := os.ReadFile(filepath.Join(root, overrides))
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
-	// Pointers, because json.Unmarshal turns a null element of a []string into "".
-	var elems []*string
-	if err := json.Unmarshal([]byte(value), &elems); err != nil || elems == nil || slices.Contains(elems, nil) {
-		return nil, fmt.Errorf("API_SNAPSHOT_SCOPE is not a JSON array of strings: %s", value)
+	var config map[string]any
+	if err == nil {
+		_, err = toml.Decode(string(text), &config)
 	}
-	var scope []string
-	for _, prefix := range elems {
-		scope = append(scope, *prefix)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", overrides, err)
+	}
+	where := "[project]"
+	value, err := lookup(config, where, "project")
+	if err == nil && value != nil {
+		where = "[project." + strconv.Quote(workingDirectory) + "]"
+		value, err = lookup(value, where, workingDirectory)
+	}
+	if err == nil && value != nil {
+		where += " api-snapshot-scope"
+		value, err = lookup(value, where, "api-snapshot-scope")
+	}
+	if err == nil && value != nil {
+		where += ".go"
+		value, err = lookup(value, where, "go")
+	}
+	if err != nil || value == nil {
+		return nil, err
+	}
+	return scopePrefixes(value, where)
+}
+
+// lookup returns table[key], nil when it is missing; where names table for the error.
+func lookup(table any, where, key string) (any, error) {
+	t, ok := table.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s is not a table", overrides, where)
+	}
+	return t[key], nil
+}
+
+func scopePrefixes(value any, where string) ([]string, error) {
+	list, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("%s: %s is not an array of strings", overrides, where)
+	}
+	if len(list) == 0 {
+		return nil, fmt.Errorf("%s: %s = []: must list at least one package import path; leave it unset to freeze the whole module", overrides, where)
+	}
+	scope := make([]string, len(list))
+	for i, item := range list {
+		prefix, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("%s: %s is not an array of strings", overrides, where)
+		}
+		if problem := prefixProblem(prefix); problem != "" {
+			return nil, fmt.Errorf("%s: %s: %s: %s", overrides, where, strconv.Quote(prefix), problem)
+		}
+		scope[i] = prefix
 	}
 	return scope, nil
+}
+
+// prefixProblem applies config_overrides.py's rule for Go prefixes.
+func prefixProblem(prefix string) string {
+	if strings.ContainsFunc(prefix, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return "must not contain control characters"
+	}
+	for _, part := range strings.Split(prefix, "/") {
+		if !goSegment.MatchString(part) || part == "." || part == ".." {
+			return `must be a package import path such as "example.com/mod/driver"`
+		}
+	}
+	return ""
 }
 
 // inScope matches by path segment: a/b covers a/b and a/b/c, not a/bc.

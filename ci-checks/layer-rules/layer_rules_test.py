@@ -3,6 +3,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -583,6 +584,92 @@ class GoProtocol(unittest.TestCase):
         with self.assertRaises(lr.ConfigError) as caught:
             lr.load_config(data, ".", "go", files)
         self.assertIn('包 "lib" 的文件分在层 "api"、"core" 里', "\n".join(caught.exception.problems))
+
+
+GO_LAYERS = """
+[project."{wd}"]
+{extra}
+layers = [
+  {{ name = "api", paths = ["api/**"], exit = "api" }},
+  {{ name = "core", paths = ["core/**"], exit = "core" }},
+]
+"""
+GO_BASE = {
+    "go.mod": "module example.com/m\n\ngo 1.27\n",
+    "api/a.go": "package api\n",
+    "core/core.go": "package core\n",
+    "core/inner/inner.go": "package inner\n",
+}
+
+
+@unittest.skipIf(shutil.which("go") is None, "needs the go command (CI's Checker tests job installs it)")
+class GoScanner(unittest.TestCase):
+    """The real Go scanner: go.mod's module path resolves imports to package directories."""
+
+    def repo(self, head, wd=".", extra=""):
+        prefix = "" if wd == "." else f"{wd}/"
+        repo = Repo(self, {prefix + p: t for p, t in GO_BASE.items()}, GO_LAYERS.format(wd=wd, extra=extra))
+        repo.commit({prefix + p: t for p, t in head.items()})
+        return repo
+
+    def test_s2_import_of_the_next_layers_exit_passes(self):
+        repo = self.repo({"api/a.go": 'package api\n\nimport "example.com/m/core"\n'}, wd="svc")
+        self.assertEqual(repo.run("go", wd="svc"), 0, repo.output)
+        self.assertIn("没有新增违规", repo.output)
+
+    def test_s3_test_files_are_not_checked(self):
+        head = {"api/a_test.go": 'package api\n\nimport "example.com/m/core/inner"\n'}
+        for extra in ("test-paths = []", ""):
+            with self.subTest(extra=extra):
+                repo = self.repo(head, extra=extra)
+                self.assertEqual(repo.run("go"), 0, repo.output)
+
+    def test_s11_go_mod_module_path_resolves_to_a_non_exit_package(self):
+        repo = self.repo({"api/a.go": 'package api\n\nimport (\n\t"fmt"\n\t"example.com/m/core/inner"\n)\n'})
+        self.assertEqual(repo.run("go"), 1, repo.output)
+        self.assertEqual(len(repo.errors()), 1, repo.output)
+        self.assertIn("file=api/a.go,line=5", repo.errors()[0])
+        self.assertIn("绕开出口", repo.errors()[0])
+        self.assertIn("core/inner", repo.errors()[0])
+
+    def test_head_parse_error_exits_2(self):
+        repo = self.repo({"core/bad.go": "package core\n\nimport (\n"})
+        self.assertEqual(repo.run("go"), 2, repo.output)
+        self.assertIn("core/bad.go", repo.output)
+
+
+class GoRunner(Helpers, unittest.TestCase):
+    def go_repo(self):
+        files = {**GO_BASE, "api/a.go": 'package api\n\nimport "example.com/m/core"\n'}
+        return Repo(self, files, GO_LAYERS.format(wd=".", extra=""))
+
+    def test_scanner_runs_with_gowork_off(self):
+        seen = {}
+
+        def runner(argv, **kwargs):
+            seen.update(argv=argv, env=kwargs.get("env"))
+            return subprocess.CompletedProcess(argv, 0, "", "")
+
+        out = io.StringIO()
+        self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 0, out.getvalue())
+        self.assertEqual(seen["argv"][:4], ["go", "run", "-C", str(lr.CI_CHECKS / "go/layer-rules")])
+        self.assertEqual(seen["env"]["GOWORK"], "off")
+
+    def test_missing_go_exits_2(self):
+        def runner(argv, **kwargs):
+            raise FileNotFoundError(2, "No such file or directory", "go")
+
+        out = io.StringIO()
+        self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 2)
+        self.assertIn("error: ", out.getvalue())
+        self.assertIn("go scanner", out.getvalue())
+
+    def test_go_test_files_are_always_test_code(self):
+        files = frozenset({"api/a.go", "core/c.go", "core/c_test.go"})
+        data = overrides(layer("api", ["api/**"], "api"), layer("core", ["core/**"], "core"))
+        self.assertTrue(lr.load_config(data, ".", "go", files).is_test("core/c_test.go"))
+        self.assertFalse(lr.load_config(data, ".", "go", files).is_test("core/c.go"))
+        self.assertFalse(lr.load_config(overrides(API, CORE), ".", "python", FILES).is_test("x_test.go"))
 
 
 class Workflow(unittest.TestCase):

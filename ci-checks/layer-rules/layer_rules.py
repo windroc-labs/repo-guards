@@ -47,6 +47,11 @@ def python_scanner(side_root: Path) -> list[str]:
     return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py"), str(side_root)]
 
 
+def go_scanner(side_root: Path) -> list[str]:
+    # go run builds repo-guards' scanner, never the project's code; the same command runs locally and in CI.
+    return ["go", "run", "-C", str(CI_CHECKS / "go/layer-rules"), ".", str(side_root)]
+
+
 @dataclass(frozen=True)
 class Language:
     suffixes: tuple[str, ...]
@@ -58,6 +63,10 @@ class Language:
     # Globs of the files besides source files that the scanner reads to resolve imports.
     context: tuple[str, ...] = ()
     scanner: Callable[[Path], list[str]] | None = None
+    # Globs of files that are always test code, whatever test-paths says.
+    tests: tuple[str, ...] = ()
+    # Set in the scanner's environment: GOWORK=off keeps a go.work above the scanner module from claiming it.
+    env: tuple[tuple[str, str], ...] = ()
 
 
 LANGUAGES = {
@@ -66,7 +75,14 @@ LANGUAGES = {
         (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"), context=("**/tsconfig*.json", "**/package.json")
     ),
     "rust": Language((".rs",), context=("**/Cargo.toml",)),
-    "go": Language((".go",), package_unit=True, context=("**/go.mod",)),
+    "go": Language(
+        (".go",),
+        package_unit=True,
+        context=("**/go.mod",),
+        scanner=go_scanner,
+        tests=("**/*_test.go",),
+        env=(("GOWORK", "off"),),
+    ),
 }
 
 
@@ -234,7 +250,7 @@ def load_config(overrides: dict[str, Any], working_directory: str, language: str
         raise ConfigError(problems)
     config = Config(
         tuple(layers),
-        tuple(test_paths),
+        (*test_paths, *LANGUAGES[language].tests),
         tuple(normalized(d) for d in source_dirs),
     )
     if not config.layers:
@@ -371,10 +387,15 @@ def json_line(language: str, line: str) -> Any:
 
 def scanner_records(language: str, side_root: Path, request: dict[str, Any], runner: Runner) -> list[Any]:
     """Run the language's scanner on one side (protocol: ci-checks/python/layer-rules/imports.py)."""
-    scanner = LANGUAGES[language].scanner
-    assert scanner is not None
-    # From /, outside the caller's tree and the side's directory.
-    result = runner(scanner(side_root), input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False)
+    spec = LANGUAGES[language]
+    assert spec.scanner is not None
+    env = {**os.environ, **dict(spec.env)} if spec.env else None
+    try:
+        # From /, outside the caller's tree and the side's directory.
+        argv = spec.scanner(side_root)
+        result = runner(argv, input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False, env=env)
+    except OSError as error:
+        raise Error(f"{language} scanner could not start: {error}") from error
     if result.returncode != 0:
         last = (result.stderr or "").strip().splitlines()[-1:] or [""]
         raise Error(f"{language} scanner exited with {result.returncode}: {last[0]}")

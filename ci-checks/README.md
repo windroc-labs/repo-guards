@@ -37,10 +37,10 @@
 
 PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Changes job，用 [`language-gate/language_gate.py`](language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件：检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage 和 Coverage shard 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。
 
-- 本语言的文件：本语言的工具会读的文件，在任何目录下。除了源码，还有会改变检查结果的配置（如 `pyproject.toml`、`uv.lock`、`Cargo.lock`、`.cargo/config.toml`、`package.json`、`tsconfig*.json`、`go.sum`）；Python 还有 ruff 会查的 `.ipynb`；TypeScript 的 Format 步对整个目录跑 prettier，所以还有 prettier 能排版的文件（如 `.md`、`.yaml`、`.css`）和 `.prettierignore`；Go 还有 `go build` 编进包里的 C、汇编等文件、`vendor/modules.txt` 和 `testdata/`。
+- 本语言的文件：本语言的工具会读的文件，在任何目录下。除了源码，还有会改变检查结果的配置（如 `pyproject.toml`、`uv.lock`、`Cargo.lock`、`.cargo/config.toml`、`package.json`、`tsconfig*.json`、`go.sum`）；Python 还有 ruff 会查的 `.ipynb`；TypeScript 的 Format 步对整个目录跑 prettier，所以还有 prettier 能排版的所有文件（如 `.md`、`.yaml`、`.css`、`README`、`.prettierrc`）和 `.prettierignore`；Go 还有 `go build` 编进包里的 C、汇编等文件、`vendor/modules.txt` 和 `testdata/`。
 - repo-guards 的调用和设置：repo 根目录 `.github/workflows/`、`.github/checks/` 下的文件，每种语言都算。
-- 每种语言的名单只写在脚本的 `PATTERNS` 里。
-- 不是 PR 的事件（push 到默认分支、merge queue 等）不跑 Changes，后面的 job 全跑。Changes 自己失败时后面的 job 也照跑，这次运行仍算失败。
+- 每种语言的名单只写在脚本的 `PATTERNS` 里。prettier 能排版的扩展名和文件名取自 [`typescript/package.json`](typescript/package.json) 钉住的 prettier 的 `--support-info`，存在 [`language-gate/prettier-files.json`](language-gate/prettier-files.json)；升级 prettier 时用 `npx prettier@<版本> --support-info | python3 language_gate.py prettier-files <版本> > prettier-files.json` 重新生成，版本对不上测试就失败。
+- 不是 PR 的事件（push 到默认分支、merge queue 等）不跑 Changes，后面的 job 全跑。Changes 自己失败时后面的 job 也照跑，这次运行仍算失败。要把单个 job 设成必需的检查时只选 Checks 和 Coverage：跳过时 Coverage shard 矩阵不展开，只显示一个名字里带 `${{ matrix.* }}` 的跳过项。
 - 名单只看路径：测试读的数据文件（Go 的 `testdata/` 除外）、嵌进代码的文件（`include_str!`、`//go:embed` 等）不在名单里，只改它们的 PR 不跑该语言的检查，合进默认分支后那次 push 会跑。
 - 测试：在 `language-gate/` 跑 `python3 -m unittest language_gate_test`。
 

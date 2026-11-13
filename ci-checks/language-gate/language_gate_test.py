@@ -1,20 +1,25 @@
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
-from language_gate import PATTERNS, main, touches
+from language_gate import PATTERNS, PRETTIER, main, prettier_files, touches
 
-INLINE_EXEMPTIONS = Path(__file__).resolve().parent.parent / "inline-exemptions/inline_exemptions.py"
+CI_CHECKS = Path(__file__).resolve().parent.parent
+INLINE_EXEMPTIONS = CI_CHECKS / "inline-exemptions/inline_exemptions.py"
 
 MATCHES = {
-    "python": ["a.py", "src/b.pyi", "analysis/explore.ipynb", "pyproject.toml", "sub/uv.lock", "requirements-dev.txt"],
+    "python": ["a.py", "src/b.pyi", "x/a.ipynb", "pyproject.toml", "sub/uv.lock", "dev-requirements.txt"]
+    + ["pytest.toml", "requirements.in"],
     "rust": ["src/main.rs", "Cargo.toml", "crates/a/Cargo.lock", ".cargo/config.toml", "a/clippy.toml"],
-    "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"],
+    "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"]
+    + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"],
     "go": ["main.go", "go.mod", "sub/go.sum", "pkg/testdata/in.txt", "x/sum_amd64.s", "cgo/a.c", "vendor/modules.txt"],
 }
 SHARED = [".github/workflows/ci.yml", ".github/checks/repo-guards.toml", ".github/checks/jscpd-baseline.json"]
@@ -63,6 +68,26 @@ class Touches(unittest.TestCase):
             for name in [f"a{suffix}" for suffix in scanned.suffixes] + list(scanned.configs):
                 with self.subTest(language=language, name=name):
                     self.assertEqual(touches(language, [f"sub/{name}"]), [f"sub/{name}"])
+
+
+class Prettier(unittest.TestCase):
+    def test_list_is_for_the_pinned_prettier(self):
+        # Bumping the pin without regenerating prettier-files.json fails here.
+        pinned = json.loads((CI_CHECKS / "typescript/package.json").read_text())["devDependencies"]["prettier"]
+        self.assertEqual(PRETTIER["prettier"], pinned)
+
+    def test_prettier_files_merges_every_language(self):
+        info = {"languages": [{"extensions": [".b", ".a"], "filenames": ["Z"]}, {"extensions": [".a"]}, {}]}
+        expected = {"prettier": "1.0.0", "extensions": [".a", ".b"], "filenames": ["Z"]}
+        self.assertEqual(prettier_files("1.0.0", info), expected)
+
+    def test_cli_writes_the_list_from_support_info_on_stdin(self):
+        out = io.StringIO()
+        info = '{"languages": [{"extensions": [".md"], "filenames": ["README"]}]}'
+        with mock.patch("sys.stdin", io.StringIO(info)), contextlib.redirect_stdout(out):
+            self.assertEqual(main(["prettier-files", "3.0.0"]), 0)
+        expected = {"prettier": "3.0.0", "extensions": [".md"], "filenames": ["README"]}
+        self.assertEqual(json.loads(out.getvalue()), expected)
 
 
 class Cli(unittest.TestCase):

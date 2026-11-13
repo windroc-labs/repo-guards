@@ -2,11 +2,15 @@ import json
 import subprocess
 import sys
 from fnmatch import fnmatchcase
+from pathlib import Path
 
 # Each list is the files the language workflow's tools read, not only its source.
 # A glob starting with / is rooted at the repo root; any other matches at any depth. fnmatch's * also matches /.
 # Over-matching only runs checks that could have been skipped; missing a file skips checks that should run.
 SHARED = ("/.github/workflows/*", "/.github/checks/*")
+# Made by `prettier-files` from the support info of the prettier that typescript/package.json pins.
+PRETTIER_FILES = Path(__file__).resolve().parent / "prettier-files.json"
+PRETTIER = json.loads(PRETTIER_FILES.read_text())
 PATTERNS = {
     "python": (
         "*.py",
@@ -15,10 +19,14 @@ PATTERNS = {
         "pyproject.toml",
         "uv.lock",
         "uv.toml",
-        "requirements*.txt",
+        "*requirements*.txt",
+        "requirements*.in",
         ".python-version",
         "setup.cfg",
         "pytest.ini",
+        ".pytest.ini",
+        "pytest.toml",
+        ".pytest.toml",
         "tox.ini",
     ),
     "rust": (
@@ -35,11 +43,11 @@ PATTERNS = {
         ".rustfmt.toml",
     ),
     "typescript": (
-        *("*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"),
-        # Format runs prettier on the whole tree: every file type prettier 3 formats, its ignore file and .editorconfig.
-        *("*.json", "*.json5", "*.jsonc", "*.css", "*.scss", "*.less", "*.yml", "*.yaml"),
-        *("*.html", "*.htm", "*.vue", "*.hbs", "*.handlebars", "*.graphql", "*.gql"),
-        *("*.md", "*.markdown", "*.mdx", ".prettierignore", ".editorconfig"),
+        # Format runs prettier on the whole tree: every file prettier formats, its ignore file and .editorconfig.
+        *(f"*{extension}" for extension in PRETTIER["extensions"]),
+        *PRETTIER["filenames"],
+        ".prettierignore",
+        ".editorconfig",
         ".npmrc",
         ".nvmrc",
         ".node-version",
@@ -85,9 +93,24 @@ def changed(base: str) -> list[str]:
     return [name for name in result.stdout.decode(errors="surrogateescape").split("\0") if name]
 
 
+def prettier_files(version: str, support_info: dict) -> dict:
+    languages = support_info["languages"]
+    return {
+        "prettier": version,
+        "extensions": sorted({extension for language in languages for extension in language.get("extensions", [])}),
+        "filenames": sorted({name for language in languages for name in language.get("filenames", [])}),
+    }
+
+
 def main(argv: list[str]) -> int:
+    if len(argv) == 2 and argv[0] == "prettier-files":
+        # npx prettier@<version> --support-info | python3 language_gate.py prettier-files <version>
+        #   > prettier-files.json
+        print(json.dumps(prettier_files(argv[1], json.load(sys.stdin)), indent=2))
+        return 0
     if len(argv) != 2:
-        print(f"usage: language_gate.py {{{'|'.join(PATTERNS)}}} BASE  (run from the repo root)", file=sys.stderr)
+        usage = f"language_gate.py {{{'|'.join(PATTERNS)}}} BASE  (run from the repo root)"
+        print(f"usage: {usage}\n       language_gate.py prettier-files VERSION < SUPPORT_INFO", file=sys.stderr)
         return 2
     language, base = argv
     if language not in PATTERNS:

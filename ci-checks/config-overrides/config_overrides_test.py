@@ -529,6 +529,40 @@ class SnapshotPathErrorTest(unittest.TestCase):
         self.assertEqual(snapshot_settings({}), {})
 
 
+class SnapshotJobTest(unittest.TestCase):
+    """Each language's API snapshot job reads the scope with the path and hands it to Generate."""
+
+    WORKFLOWS = CI_CHECKS.parent / ".github/workflows"
+
+    def steps(self, language: str) -> dict[str, str]:
+        text = (self.WORKFLOWS / f"{language}.yml").read_text(encoding="utf-8")
+        job = text.split("\n  api-snapshot:\n", 1)[1].split("\n\n  ", 1)[0]
+        steps = {}
+        for step in job.split("\n      - ")[1:]:
+            name = next((line.strip() for line in step.splitlines() if line.strip().startswith("name: ")), step)
+            steps[name.removeprefix("name: ")] = step
+        return steps
+
+    def test_read_step_outputs_the_scope(self) -> None:
+        for language in ("rust", "python", "typescript", "go"):
+            with self.subTest(language):
+                step = self.steps(language)["Read the snapshot settings"]
+                self.assertIn("id: setting", step)
+                self.assertIn(
+                    'scope=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" '
+                    'snapshot-scope "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")',
+                    step,
+                )
+                self.assertIn('echo "scope=$scope" >> "$GITHUB_OUTPUT"', step)
+
+    def test_generate_gets_the_scope_in_its_environment(self) -> None:
+        for language in ("rust", "python", "typescript", "go"):
+            with self.subTest(language):
+                step = self.steps(language)["Generate"]
+                self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
+                self.assertNotIn("Read the snapshot path", (self.WORKFLOWS / f"{language}.yml").read_text())
+
+
 class GetTest(unittest.TestCase):
     def file(self, name: str, text: str) -> str:
         tmp = tempfile.TemporaryDirectory()

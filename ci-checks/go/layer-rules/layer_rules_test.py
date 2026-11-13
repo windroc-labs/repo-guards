@@ -131,6 +131,13 @@ class Generate(unittest.TestCase):
             with self.subTest(project), self.assertRaisesRegex(Error, f"{where} is not a mapping"):
                 depguard_config(project, Path(".golangci.yml"))
 
+    def test_a_null_section_is_an_empty_one(self):
+        # A YAML key whose children are all commented out is null; golangci-lint reads it as empty.
+        self.assertIsNone(depguard_config(v2(settings={"depguard": None}), Path(".golangci.yml")))
+        self.assertIsNone(depguard_config({"version": "2", "linters": None}, Path(".golangci.yml")))
+        config = depguard_config({**with_rule(), "run": None}, Path(".golangci.yml"))
+        self.assertEqual(config["run"], {"relative-path-mode": "wd"})
+
     def test_numeric_version_2_is_v2(self):
         for value in (2, 2.0, "2"):
             with self.subTest(value):

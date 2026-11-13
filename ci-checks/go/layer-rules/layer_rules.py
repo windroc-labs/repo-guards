@@ -74,9 +74,11 @@ def load(path: Path) -> dict[str, Any]:
 
 
 def section(config: dict[str, Any], path: Path, *keys: str) -> dict[str, Any]:
-    """The mapping at keys, empty when absent; golangci-lint rejects any other value there."""
+    """The mapping at keys, empty when absent or null; golangci-lint rejects any other value there."""
     for depth, key in enumerate(keys, 1):
-        config = config.get(key, {})
+        config = config.get(key)
+        if config is None:
+            config = {}
         if not isinstance(config, dict):
             raise Error(f"{path.name}: {'.'.join(keys[:depth])} is not a mapping")
     return config

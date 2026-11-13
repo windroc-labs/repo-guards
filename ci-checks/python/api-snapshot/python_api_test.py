@@ -263,6 +263,44 @@ class GenerateTest(unittest.TestCase):
             ),
         )
 
+    def test_stub_only_overloads(self):
+        entries = generate(
+            {
+                "demo/__init__.pyi": """\
+                    from typing import overload
+                    @overload
+                    def f(x: int) -> int: ...
+                    @overload
+                    def f(x: str) -> str: ...
+                    @overload
+                    def _hidden(x: int) -> int: ...
+                    class C:
+                        @overload
+                        def m(self, x: int) -> int: ...
+                        @overload
+                        def m(self, x: str) -> str: ...
+                    """
+            }
+        )
+        expected = python_api.Entry("demo", "demo", "function", "f", "(x: int) -> int\n(x: str) -> str")
+        self.assertEqual(entries[("demo", "f")], expected)
+        self.assertEqual(entries[("demo.C", "m")].signature, "(self, x: int) -> int\n(self, x: str) -> str")
+        self.assertNotIn(("demo", "_hidden"), entries)
+
+    def test_labels_sorted(self):
+        entries = generate(
+            {
+                "demo/__init__.py": """\
+                    from abc import ABC, abstractmethod
+                    class K(ABC):
+                        @classmethod
+                        @abstractmethod
+                        def make(cls) -> None: ...
+                    """
+            }
+        )
+        self.assertEqual(entries[("demo.K", "make")].signature, "abstractmethod classmethod (cls) -> None")
+
     def test_dunder_attributes_skipped(self):
         entries = generate(
             {
@@ -303,6 +341,25 @@ class SiteTest(unittest.TestCase):
             for file in ("single.py", "stubbed.pyi", "_hidden.py", "README.txt", "x.pth"):
                 (site / file).write_text("")
             self.assertEqual(python_api.units(site), ["ns", "pkg", "single", "stubbed"])
+
+    def test_no_unit_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            site = write(Path(tmp), {"_private/__init__.py": "", "demo-stubs/__init__.pyi": ""})
+            with self.assertRaisesRegex(python_api.Error, "no public package or module"):
+                python_api.units(site)
+
+    def test_bad_wheel_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wheel = write(Path(tmp), {"demo-0.1-py3-none-any.whl": "not a zip"}) / "demo-0.1-py3-none-any.whl"
+            with self.assertRaisesRegex(python_api.Error, 'cannot extract "demo-0.1-py3-none-any.whl": BadZipFile'):
+                python_api.extract([wheel], Path(tmp) / "site")
+
+    def test_no_wheel_is_an_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = project(Path(tmp) / "p", {"demo/__init__.py": ""})
+            done = subprocess.CompletedProcess([], 0)
+            with mock.patch("subprocess.run", return_value=done), self.assertRaisesRegex(python_api.Error, "no wheel"):
+                python_api.build(root, Path(tmp) / "wheels")
 
     def test_syntax_error_exits_2(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -431,10 +488,12 @@ class CliTest(unittest.TestCase):
         self.assertFalse((self.tmp / "out.json").exists())
 
     def test_syntax_error_in_wheel_exits_2(self):
-        root = project(self.tmp / "p", {"demo/__init__.py": "", "demo/broken.py": "def f(:\n"})
+        warning = 'x = "::error::pwned \\d"\n'
+        root = project(self.tmp / "p", {"demo/__init__.py": warning, "demo/broken.py": "def f(:\n"})
         result = run(root, self.tmp / "out.json")
         self.assertEqual(result.returncode, 2)
         self.assertIn('"demo/broken.py": cannot parse', result.stderr)
+        self.assertNotIn("::", result.stderr.replace("api snapshot (python):", ""))
         self.assertFalse((self.tmp / "out.json").exists())
 
     def test_unexpected_error_exits_2(self):

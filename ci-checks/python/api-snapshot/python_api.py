@@ -6,14 +6,20 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+import warnings
 import zipfile
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
-import griffe
-
 PREFIX = "api snapshot (python): "
+
+try:
+    import griffe
+except ImportError as error:
+    # A broken tool install means the check could not run: exit 2, never the mismatch code 1.
+    print(f"{PREFIX}cannot import griffe: {error}", file=sys.stderr)
+    sys.exit(2)
 SOURCE_SUFFIXES = (".py", ".pyi")
 
 
@@ -88,6 +94,8 @@ def units(site: Path) -> list[str]:
         name = path.name if path.is_dir() else path.stem if path.suffix in SOURCE_SUFFIXES else ""
         if importable(name) and not name.startswith("_"):
             names.add(name)
+    if not names:
+        raise Error("the wheel(s) hold no public package or module")
     return sorted(names)
 
 
@@ -234,6 +242,10 @@ def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[E
         entries.append(Entry(unit, path, target.kind.value, name, FORMATTERS[target.kind](target)))
         if (target.is_class and target.path not in stack) or target.is_module:
             walk(target, f"{path}.{name}", unit, (*stack, target.path), entries)
+    # Griffe keeps @overload declarations with no implementation (as in .pyi stubs) apart from the members.
+    for name, overloads in sorted(obj.overloads.items()):
+        if overloads and name not in members and overloads[0].is_public:
+            entries.append(Entry(unit, path, "function", name, "\n".join(map(one_function, overloads))))
 
 
 def generate(site: Path, names: list[str]) -> list[Entry]:
@@ -284,8 +296,9 @@ def main(argv: list[str]) -> int:
 
 
 def cli(argv: list[str]) -> int:
-    # Griffe's own log lines would carry PR-controlled names; everything that matters surfaces as an Error.
+    # Griffe's log lines and Python's SyntaxWarnings would carry PR-controlled text; what matters surfaces as an Error.
     logging.getLogger("griffe").disabled = True
+    warnings.simplefilter("ignore")
     try:
         return main(argv)
     except Exception as error:  # noqa: BLE001 -- anything unexpected means the check could not run.

@@ -217,6 +217,19 @@ describe("exports forms", () => {
     );
   });
 
+  it("imports of ambient modules, exact and wildcard, resolve as they do for tsc", () => {
+    const entries = generate(path.join(TESTDATA, "ambient"));
+    assert.deepEqual(
+      entries.map((e) => [e.kind, e.name, e.signature]),
+      [
+        ["const", "logo", "const url: string"],
+        ["const", "other", "const value: number"],
+        ["interface", "Cfg", "interface Cfg"],
+        ["property", "a", "a: number"],
+      ],
+    );
+  });
+
   it("a solution tsconfig builds its referenced projects", () => {
     const entries = generate(path.join(TESTDATA, "solution"));
     assert.deepEqual(

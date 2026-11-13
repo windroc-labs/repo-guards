@@ -41,6 +41,8 @@ interface Outputs {
   declarationOf: Map<string, string>;
   jsOf: Map<string, string>;
   options: Map<string, ts.CompilerOptions>;
+  // Per build: its own declaration files (hand-written and emitted), which may declare ambient modules.
+  declarations: Map<ts.CompilerOptions, string[]>;
 }
 
 const PREFIX = "api snapshot (typescript): ";
@@ -77,6 +79,7 @@ export function generate(projectDir: string): Entry[] {
     declarationOf: new Map(),
     jsOf: new Map(),
     options: new Map(),
+    declarations: new Map(),
   };
   const builds = new Map<string, ts.CompilerOptions>();
   for (const pkg of packages) build(pkg.config, outputs, builds, rel);
@@ -285,6 +288,19 @@ function build(
       else if (JS.test(file)) outputs.jsOf.set(source.fileName, file);
     });
     failed = errors(result.diagnostics);
+    const own = program
+      .getSourceFiles()
+      .filter(
+        (file) =>
+          file.isDeclarationFile &&
+          !program.isSourceFileFromExternalLibrary(file) &&
+          !program.isSourceFileDefaultLibrary(file),
+      )
+      .map((file) => file.fileName);
+    const emitted = [...outputs.options]
+      .filter(([file, built]) => built === options && DECLARATION.test(file))
+      .map(([file]) => file);
+    outputs.declarations.set(options, [...own, ...emitted]);
   }
   if (failed.length > 0)
     fail(`the build with ${quote(rel(config))} failed:\n${describeDiagnostics(failed, rel)}`);
@@ -371,11 +387,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
 }
 
 // Serves the in-memory outputs to a second program, also through symlinked paths such as workspace node_modules.
-function virtualHost(
-  options: ts.CompilerOptions,
-  outputs: Outputs,
-  unresolved: string[],
-): ts.CompilerHost {
+function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.CompilerHost {
   const host = ts.createCompilerHost(options, true);
   delete host.trace;
   const real = (file: string): string => {
@@ -425,11 +437,7 @@ function virtualHost(
         mode,
       );
       const found = result.resolvedModule;
-      if (found === undefined) {
-        const own = !real(containingFile).split(path.sep).includes("node_modules");
-        if (own) unresolved.push(`${containingFile}\0${literal.text}`);
-        return result;
-      }
+      if (found === undefined) return result;
       const declaration = outputs.declarationOf.get(real(found.resolvedFileName));
       if (declaration === undefined) return result;
       const extension = declaration.endsWith(".d.mts")
@@ -458,21 +466,40 @@ function read(
   rel: (file: string) => string,
 ): void {
   const options: ts.CompilerOptions = { ...buildOptions, noEmit: true, skipLibCheck: true };
-  const unresolved: string[] = [];
+  const rootNames = new Set([
+    ...units.map((u) => u.declaration),
+    ...(outputs.declarations.get(buildOptions) ?? []),
+  ]);
   const program = ts.createProgram({
-    rootNames: units.map((u) => u.declaration),
+    rootNames: [...rootNames],
     options,
-    host: virtualHost(options, outputs, unresolved),
+    host: virtualHost(options, outputs),
   });
-  // An import the reader cannot follow would silently drop what it re-exports.
+  const checker = program.getTypeChecker();
+  // An import the reader cannot follow would silently drop what it re-exports; ambient modules count as resolved.
+  const unresolved: { file: string; specifier: string }[] = [];
+  for (const file of program.getSourceFiles()) {
+    if (
+      program.isSourceFileDefaultLibrary(file) ||
+      file.fileName.split("/").includes("node_modules")
+    ) {
+      continue;
+    }
+    const visit = (node: ts.Node): void => {
+      const specifier = moduleSpecifier(node);
+      if (specifier !== undefined && checker.getSymbolAtLocation(specifier) === undefined) {
+        unresolved.push({ file: file.fileName, specifier: specifier.text });
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+  }
   if (unresolved.length > 0) {
-    const lines = unresolved.map((item) => {
-      const [file = "", specifier = ""] = item.split("\0");
-      return `${quote(rel(file))}: cannot resolve ${quote(specifier)}`;
-    });
+    const lines = unresolved.map(
+      (u) => `${quote(rel(u.file))}: cannot resolve ${quote(u.specifier)}`,
+    );
     fail(`the built declarations import modules the reader cannot resolve:\n${lines.join("\n")}`);
   }
-  const checker = program.getTypeChecker();
   for (const unit of units) {
     const file = program.getSourceFile(unit.declaration);
     if (file === undefined) fail(`cannot load ${quote(unit.declaration)}`);
@@ -480,6 +507,18 @@ function read(
     if (module === undefined) continue;
     new Reader(unit.name, checker, outputs, entries).walk(module, "");
   }
+}
+
+// The module a declaration imports from; a side-effect import brings in no names, so it is not one.
+function moduleSpecifier(node: ts.Node): ts.StringLiteral | undefined {
+  let specifier: ts.Node | undefined;
+  if (ts.isImportDeclaration(node) && node.importClause !== undefined)
+    specifier = node.moduleSpecifier;
+  else if (ts.isExportDeclaration(node)) specifier = node.moduleSpecifier;
+  else if (ts.isExternalModuleReference(node)) specifier = node.expression;
+  else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument))
+    specifier = node.argument.literal;
+  return specifier !== undefined && ts.isStringLiteral(specifier) ? specifier : undefined;
 }
 
 class Reader {

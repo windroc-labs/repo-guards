@@ -233,6 +233,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/rust/deny-merge
         run: python3 -m unittest deny_merge_test
+      - name: language-gate tests
+        id: language-gate
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/language-gate
+        run: python3 -m unittest language_gate_test
       - name: shard-artifact tests
         id: shard-artifact
         if: ${{ !cancelled() }}
@@ -299,6 +304,7 @@ jobs:
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
           GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
           GO_COVERAGE_PROFILE: ${{ steps.go-coverage-profile.outcome }}
+          LANGUAGE_GATE: ${{ steps.language-gate.outcome }}
           SHARD_ARTIFACT: ${{ steps.shard-artifact.outcome }}
           SHARD_TARGETS: ${{ steps.shard-targets.outcome }}
           PYPROJECT_CONFIG: ${{ steps.pyproject-config.outcome }}
@@ -309,7 +315,7 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE LANGUAGE_GATE SHARD_ARTIFACT SHARD_TARGETS PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

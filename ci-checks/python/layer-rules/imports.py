@@ -108,7 +108,7 @@ def main(argv):
         bases = roots(request["source-dirs"])
         for path in todo:
             for record in scan(path, (root / path).read_bytes(), bases, files):
-                print(json.dumps(record, ensure_ascii=False))
+                print(json.dumps(record))
     except (OSError, ValueError, KeyError, TypeError, Error) as error:
         print(f"imports.py: {error}", file=sys.stderr)
         return 2

@@ -1,4 +1,10 @@
+import io
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 import layer_rules as lr
 
@@ -152,6 +158,329 @@ class LoadConfig(unittest.TestCase):
     def test_go_directory_exit(self):
         data = overrides(layer("core", ["pkg/go/*"], "pkg/go"))
         self.assertEqual(self.load(data, language="go").layers[0].exit_file, "pkg/go")
+
+
+LAYERS = """
+[project."{wd}"]
+{extra}
+layers = [
+  {{ name = "api", paths = ["{src}/api/**"], exit = "{src}/api" }},
+  {{ name = "core", paths = ["{src}/core/**"], exit = "{src}/core" }},
+  {{ name = "store", paths = ["{src}/store/**"], exit = "{src}/store" }},
+]
+"""
+BASE = {
+    "src/api/__init__.py": "",
+    "src/api/a.py": "",
+    "src/core/__init__.py": "",
+    "src/core/inner.py": "",
+    "src/store/__init__.py": "",
+    "src/store/inner.py": "",
+    "src/util.py": "",
+}
+
+
+def config(wd=".", extra="", src="src"):
+    return LAYERS.format(wd=wd, extra=extra, src=src)
+
+
+class Repo:
+    """A git repo: a base commit on main, then a pr branch for head commits."""
+
+    def __init__(self, test, files, toml=None):
+        tmp = tempfile.TemporaryDirectory()
+        test.addCleanup(tmp.cleanup)
+        self.test = test
+        self.root = Path(tmp.name) / "repo"
+        self.root.mkdir()
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.email", "t@example.com")
+        self.git("config", "user.name", "t")
+        self.commit(files, toml)
+        self.git("checkout", "-q", "-b", "pr")
+
+    def git(self, *args):
+        subprocess.run(["git", "-C", str(self.root), *args], check=True, capture_output=True)
+
+    def commit(self, files, toml=None):
+        if toml is not None:
+            files = {**files, ".github/checks/repo-guards.toml": toml}
+        for path, text in files.items():
+            target = self.root / path
+            if text is None:
+                target.unlink()
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(text)
+        self.git("add", "-A")
+        self.git("commit", "-q", "--allow-empty", "-m", "c")
+
+    def run(self, language="python", wd=".", base="main"):
+        out = io.StringIO()
+        summary = self.root.parent / "summary.md"
+        summary.write_text("")
+        self.code = lr.check(self.root, language, wd, base, out, str(summary))
+        self.output = out.getvalue()
+        self.summary = summary.read_text()
+        return self.code
+
+    def errors(self):
+        return [line for line in self.output.splitlines() if line.startswith("::error ")]
+
+
+class Check(unittest.TestCase):
+    def repo(self, head=None, base=None, toml=None, head_toml=None):
+        repo = Repo(self, {**BASE, **(base or {})}, config() if toml is None else toml)
+        if head is not None or head_toml is not None:
+            repo.commit(head or {}, head_toml)
+        return repo
+
+    def assert_exit(self, repo, code, **kwargs):
+        self.assertEqual(repo.run(**kwargs), code, repo.output)
+
+    def test_s1_no_layers_lists_projects_that_have_them(self):
+        repo = self.repo(toml='[project."app"]\nlayers = []\n')
+        self.assert_exit(repo, 0)
+        self.assertIn('没有 python 的 layers', repo.output)
+        self.assertIn('"app"', repo.output)
+        repo = Repo(self, BASE)
+        self.assert_exit(repo, 0)
+        self.assertIn("（无）", repo.output)
+
+    def test_s2_import_of_the_next_layers_exit_passes(self):
+        files = {f"svc/{p}": t for p, t in BASE.items()}
+        repo = Repo(self, files, config(wd="svc"))
+        repo.commit({"svc/src/api/a.py": "from core import thing\nimport core\n"})
+        self.assert_exit(repo, 0, wd="svc")
+
+    def test_s3_test_paths_are_not_checked(self):
+        extra = 'source-dirs = ["src", "tests"]\ntest-paths = ["tests/**"]'
+        toml = config(extra=extra).replace('paths = ["src/api/**"]', 'paths = ["src/api/**", "tests/**"]')
+        repo = self.repo(head={"tests/test_api.py": "import store.inner\nimport core.inner\n"}, toml=toml)
+        self.assert_exit(repo, 0)
+
+    def test_s4_without_test_paths_tests_are_code(self):
+        toml = config(extra='source-dirs = ["src", "tests"]').replace(
+            'paths = ["src/api/**"]', 'paths = ["src/api/**", "tests/**"]'
+        )
+        repo = self.repo(head={"tests/test_api.py": "import store.inner\n"}, toml=toml)
+        self.assert_exit(repo, 1)
+
+    def test_s5_invalid_config_exits_2(self):
+        repo = self.repo(toml=config().replace('exit = "src/core"', 'exits = "src/core"'))
+        self.assert_exit(repo, 2)
+        self.assertIn('"core"', repo.output)
+        self.assertIn('"exits"', repo.output)
+
+    def test_s6_layer_rules(self):
+        rows = [
+            ("src/api/a.py", "from core import x\n", 0, None),
+            ("src/api/a.py", "import core.inner\n", 1, "绕开出口"),
+            ("src/api/a.py", "import store\n", 1, "越层"),
+            ("src/store/inner.py", "import core\n", 1, "向上"),
+            ("src/core/inner.py", "import core\nfrom core import inner\n", 0, None),
+        ]
+        for path, text, code, name in rows:
+            with self.subTest(text=text):
+                repo = self.repo(head={path: text})
+                self.assert_exit(repo, code)
+                if name:
+                    self.assertIn(name, repo.errors()[0])
+                else:
+                    self.assertEqual(repo.errors(), [])
+
+    def test_s7_new_cycle_in_a_layer(self):
+        repo = self.repo(base={"src/core/a.py": "import core.b\n", "src/core/b.py": ""})
+        repo.commit({"src/core/b.py": "import core.a\n"})
+        self.assert_exit(repo, 1)
+        self.assertIn("循环", repo.errors()[0])
+
+    def test_s8_unassigned_targets_are_counted_external_ones_ignored(self):
+        repo = self.repo(head={"src/api/a.py": "import util\nimport requests\nimport json\n"})
+        self.assert_exit(repo, 0)
+        self.assertIn("未归层 import：1 处", repo.summary)
+        self.assertNotIn("requests", repo.output)
+        self.assertNotIn("json", repo.output)
+
+    def test_s9_type_checking_import_counts(self):
+        text = "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from core.inner import T\n"
+        self.assert_exit(self.repo(head={"src/api/a.py": text}), 1)
+
+    def test_s10_dynamic_import_does_not_count(self):
+        text = "import importlib\nimportlib.import_module('store.inner')\n"
+        self.assert_exit(self.repo(head={"src/api/a.py": text}), 0)
+
+    def test_s11_source_dirs_resolution(self):
+        self.assert_exit(self.repo(head={"src/api/a.py": "import core.inner\n"}), 1)
+        toml = config(extra='source-dirs = ["lib"]', src="lib")
+        files = {p.replace("src/", "lib/", 1): t for p, t in BASE.items()}
+        repo = Repo(self, files, toml)
+        repo.commit({"lib/api/a.py": "import core.inner\n"})
+        self.assert_exit(repo, 1)
+
+    def test_s12_code_is_never_run(self):
+        payload = "open('pwned.txt', 'w').write('x')\n"
+        repo = self.repo(head={"src/api/a.py": payload, "src/core/inner.py": payload, "src/sitecustomize.py": payload})
+        before = set(Path(tempfile.gettempdir()).glob("**/pwned.txt"))
+        self.assert_exit(repo, 0)
+        self.assertEqual(list(repo.root.rglob("pwned.txt")), [])
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("**/pwned.txt")), before)
+
+    def test_s13_existing_violation_passes_and_is_summarised(self):
+        repo = self.repo(base={"src/api/a.py": "import store.inner\n"}, head={"src/util.py": "x = 1\n"})
+        self.assert_exit(repo, 0)
+        self.assertIn("| 越层 | `src/api/a.py` | `api` | `src/store/inner.py` | `store` | 1 | 1 |", repo.summary)
+
+    def test_s14_new_config_does_not_block_existing_code(self):
+        repo = self.repo(base={"src/api/a.py": "import store.inner\n"}, toml="", head_toml=config())
+        self.assert_exit(repo, 0)
+
+    def test_s15_moved_file_counts_as_new(self):
+        repo = self.repo(base={"src/api/a.py": "import store\n"})
+        repo.git("mv", "src/api/a.py", "src/api/b.py")
+        repo.commit({})
+        self.assert_exit(repo, 1)
+        self.assertTrue(repo.errors()[0].startswith("::error file=src/api/b.py,line=1,"))
+
+    def test_s16_old_cycle_passes_new_edge_closing_one_fails(self):
+        base = {"src/core/a.py": "import core.b\n", "src/core/b.py": "import core.a\n"}
+        repo = self.repo(base=base, head={"src/util.py": "x = 1\n"})
+        self.assert_exit(repo, 0)
+        repo.commit({"src/core/c.py": "import core.a\n", "src/core/b.py": "import core.a\nimport core.c\n"})
+        self.assert_exit(repo, 1)
+
+    def test_s17_annotation(self):
+        files = {f"svc/{p}": t for p, t in BASE.items()}
+        repo = Repo(self, files, config(wd="svc"))
+        repo.commit({"svc/src/api/a.py": "import os\n\nimport core.inner\n"})
+        self.assert_exit(repo, 1, wd="svc")
+        [error] = repo.errors()
+        self.assertTrue(error.startswith("::error file=svc/src/api/a.py,line=3,title=Layer rules::"), error)
+        for text in ("绕开出口", "api", "core", "svc/src/core", "merge-base 0 处", "head 1 处"):
+            self.assertIn(text, error)
+
+    def test_s18_one_annotation_per_reference_of_each_new_edge(self):
+        base = {"src/core/a.py": "import core.b\n", "src/core/b.py": "import core.c\n", "src/core/c.py": ""}
+        repo = self.repo(base=base)
+        repo.commit({"src/core/c.py": "x = 1\nimport core.a\n"})
+        self.assert_exit(repo, 1)
+        [error] = repo.errors()
+        self.assertTrue(error.startswith("::error file=src/core/c.py,line=2,"), error)
+        self.assertIn("src/core/a.py → src/core/b.py → src/core/c.py → src/core/a.py", error)
+        repo.commit({"src/core/c.py": "x = 1\nimport core.a\nfrom core import a\n"})
+        self.assert_exit(repo, 1)
+        self.assertEqual([e.split(",")[1] for e in repo.errors()], ["line=2", "line=3"])
+
+    def test_s19_unparsable_head_file_exits_2(self):
+        repo = self.repo(head={"src/core/bad.py": "def (:\n"})
+        self.assert_exit(repo, 2)
+        self.assertIn('"src/core/bad.py"', repo.output)
+
+    def test_s20_fixing_a_broken_base_file_passes(self):
+        repo = self.repo(base={"src/core/bad.py": "def (:\n"}, head={"src/core/bad.py": "import core\n"})
+        self.assert_exit(repo, 0)
+        self.assertIn('merge-base 上 "src/core/bad.py" 解析不了', repo.output)
+
+    def test_s24_only_the_working_directory(self):
+        files = {**{f"a/{p}": t for p, t in BASE.items()}, **{f"b/{p}": t for p, t in BASE.items()}}
+        repo = Repo(self, files, config(wd="a") + config(wd="b"))
+        repo.commit({"b/src/api/a.py": "import store\n"})
+        self.assert_exit(repo, 0, wd="a")
+        self.assert_exit(repo, 1, wd="b")
+
+    def test_s27_counts_per_file_pair_may_only_go_down(self):
+        for before, after, code in ((1, 2, 1), (2, 2, 0), (2, 1, 0)):
+            with self.subTest(before=before, after=after):
+                repo = self.repo(
+                    base={"src/api/a.py": "import store.inner\n" * before},
+                    head={"src/api/a.py": "import store.inner\n" * after},
+                )
+                self.assert_exit(repo, code)
+
+    def test_s28_moving_a_reference_within_the_file_passes(self):
+        lines = ["x = 1\n"] * 25
+        base, head = list(lines), list(lines)
+        base[2] = "import store.inner\n"
+        head[19] = "import store.inner\n"
+        repo = self.repo(base={"src/api/a.py": "".join(base)}, head={"src/api/a.py": "".join(head)})
+        self.assert_exit(repo, 0)
+
+    def test_s29_one_reference_counts_once(self):
+        rows = [
+            ("from store.inner import x\n", "from store.inner import x, y\n", 0),
+            ("from store.inner import x\n", "from store.inner import x\nimport store.inner\n", 1),
+        ]
+        for before, after, code in rows:
+            with self.subTest(after=after):
+                repo = self.repo(base={"src/api/a.py": before}, head={"src/api/a.py": after})
+                self.assert_exit(repo, code)
+
+    def test_s30_more_references_on_an_old_cycle_edge_pass(self):
+        base = {"src/core/a.py": "import core.b\n", "src/core/b.py": "import core.a\n"}
+        repo = self.repo(base=base, head={"src/core/b.py": "import core.a\nfrom core import a\n"})
+        self.assert_exit(repo, 0)
+
+    def test_s31_every_reference_of_a_grown_pair_is_annotated(self):
+        lines = ["x = 1\n"] * 25
+        lines[2] = "import store.inner\n"
+        base = "".join(lines)
+        lines[19] = "import store.inner\n"
+        repo = self.repo(base={"src/api/a.py": base}, head={"src/api/a.py": "".join(lines)})
+        self.assert_exit(repo, 1)
+        errors = repo.errors()
+        self.assertEqual([e.split(",")[1] for e in errors], ["line=3", "line=20"])
+        for text in ("越层", "merge-base 1 处", "head 2 处", "不超过 1 处"):
+            self.assertIn(text, errors[0])
+
+    def test_s32_shrinking_pairs_are_summarised(self):
+        for before, after in ((2, 1), (1, 0)):
+            with self.subTest(before=before, after=after):
+                repo = self.repo(
+                    base={"src/api/a.py": "import store.inner\n" * before},
+                    head={"src/api/a.py": "import store.inner\n" * after},
+                )
+                self.assert_exit(repo, 0)
+                self.assertIn(f"| `store` | {before} | {after} |", repo.summary)
+
+    def test_symlinks_and_uncommitted_changes_are_not_read(self):
+        repo = self.repo()
+        os.symlink("../store/inner.py", repo.root / "src/api/link.py")
+        repo.commit({})
+        (repo.root / "src/api/a.py").write_text("import store\n")
+        self.assert_exit(repo, 0)
+        self.assertIn("未提交的改动", repo.output)
+
+    def test_default_base_needs_origin_head(self):
+        repo = self.repo()
+        self.assert_exit(repo, 2, base=None)
+        self.assertIn("--base", repo.output)
+
+
+class Output(unittest.TestCase):
+    def test_workflow_commands_cannot_be_injected(self):
+        line = lr.annotation("a,b:c%.py", 3, "x\n::warning::y %0A")
+        self.assertEqual(line, "::error file=a%2Cb%3Ac%25.py,line=3,title=Layer rules::x%0A::warning::y %250A")
+        self.assertEqual(len(line.splitlines()), 1)
+
+    def test_code_spans_hold_any_path(self):
+        self.assertEqual(lr.code("a|b"), "`a\\|b`")
+        self.assertEqual(lr.code("a``b"), "```a``b```")
+        self.assertEqual(lr.code("`x"), "`` `x ``")
+        self.assertEqual(lr.code("a\n##[error]b"), "`a\\n##[error]b`")
+
+    def test_command_line(self):
+        repo = Repo(self, BASE, config())
+        repo.commit({"src/api/a.py": "import store\n"})
+        script = Path(lr.__file__)
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", str(script), "python", "--base", "main"],
+            cwd=repo.root,
+            capture_output=True,
+            text=True,
+            env={**os.environ, "GITHUB_STEP_SUMMARY": ""},
+        )
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("::error file=src/api/a.py,line=1,", result.stdout)
 
 
 if __name__ == "__main__":

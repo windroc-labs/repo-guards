@@ -50,7 +50,7 @@
 | 语言 | 工具 | 规则写在 |
 |---|---|---|
 | Python | import-linter | `pyproject.toml` 的 `[tool.importlinter]`，或 `.importlinter` |
-| TypeScript | dependency-cruiser | 项目自己的 dependency-cruiser 配置文件（`.dependency-cruiser.*`） |
+| TypeScript | dependency-cruiser | 项目自己的 dependency-cruiser 配置文件（`.dependency-cruiser.*`，见 [TypeScript 模板](../ci-checks/typescript/README.md#分层规则dependency-cruiser)） |
 | Go | depguard，经 golangci-lint 跑 | `.golangci.yml` |
 | Rust | 不另外检查 | 各 crate 的 `Cargo.toml` |
 
@@ -67,4 +67,4 @@
   - 不执行项目代码，没有例外：Checks job 后面的步信任 repo-guards 的文件和工具，先跑的项目代码能改掉它们。工具要执行项目代码才能跑的（如要 import 项目的包），不能放进 Checks job，要单独一个 job，像 API snapshot 一样只有 `contents: read`、不用 secrets。用 JavaScript 写的配置（如 `.dependency-cruiser.js`）加载时就会运行，所以它和它加载的每个文件都算项目代码，除非都是锁住的文件名。
   - 只改规则也要跑：这一步和工具读的每个文件（如 `.importlinter`、`.golangci.yml`、`.golangci.yaml`）都加进 [`language_gate.py`](../ci-checks/language-gate/language_gate.py) 里本语言的 `PATTERNS`，`language_gate_test` 里加一条对应的测试。
   - 各语言接入时自己定：怎样算有配置（如 `.golangci.yml` 要配了 depguard 才算）、怎样装工具；并把本语言加进 [`inline_exemptions_test.py`](../ci-checks/inline-exemptions/inline_exemptions_test.py) 的 `LAYER_RULES`。
-- 现状：Python、TypeScript、Go 还没接上工具，workflow 里还没有 Layer rules 步；Rust 不需要这一步。
+- 现状：TypeScript 已接上 dependency-cruiser（见 [TypeScript 模板](../ci-checks/typescript/README.md#分层规则dependency-cruiser)）；Python、Go 还没接上工具，workflow 里还没有 Layer rules 步；Rust 不需要这一步。

@@ -203,7 +203,7 @@ class Main(unittest.TestCase):
                 "--root", ROOT, "--format", "lcov", "--output", str(Path(tmp, "o")), str(Path(tmp, "none"))
             )
             self.assertEqual(code, 2)
-            self.assertIn("coverage_lcov:", err)
+            self.assertIn(str(Path(tmp, "none")), err)
 
 
 if __name__ == "__main__":

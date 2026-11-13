@@ -152,7 +152,7 @@ def main(argv: list[str]) -> int:
         text = lcov(report) if args.format == "lcov" else cobertura(report, args.root)
         args.output.write_text(text)
     except (OSError, ValueError) as error:
-        print(f"coverage_lcov: {error!r}", file=sys.stderr)
+        print(f"coverage_lcov: {error}", file=sys.stderr)
         return 2
     return 0
 

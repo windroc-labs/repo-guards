@@ -1,0 +1,8 @@
+{
+  "name": "plug",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./driver": "./dist/driver.js"
+  }
+}

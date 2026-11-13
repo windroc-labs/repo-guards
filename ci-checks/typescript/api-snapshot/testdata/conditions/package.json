@@ -1,0 +1,8 @@
+{
+  "type": "module",
+  "exports": {
+    ".": [{ "import": "./dist/main.js", "require": "./dist/other.cjs" }],
+    "./features/*": "./dist/features/*.js",
+    "./hand": { "types": "./lib/hand.d.ts" }
+  }
+}

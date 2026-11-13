@@ -1,0 +1,311 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import {
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { after, describe, it } from "node:test";
+import { fileURLToPath } from "node:url";
+import { generate, type Entry } from "./api-snapshot.ts";
+
+const SCRIPT = fileURLToPath(new URL("./api-snapshot.ts", import.meta.url));
+const TESTDATA = fileURLToPath(new URL("./testdata/", import.meta.url));
+const scratch = mkdtempSync(path.join(tmpdir(), "api-snapshot-test-"));
+after(() => rmSync(scratch, { recursive: true, force: true }));
+
+let copies = 0;
+function copy(fixture: string): string {
+  const dir = path.join(scratch, `copy-${copies++}`, fixture);
+  cpSync(path.join(TESTDATA, fixture), dir, { recursive: true, verbatimSymlinks: true });
+  return dir;
+}
+
+function edit(file: string, from: string, to: string): void {
+  const text = readFileSync(file, "utf8");
+  assert.ok(text.includes(from), `${file} lacks ${from}`);
+  writeFileSync(file, text.replace(from, to));
+}
+
+const keyOf = (e: Entry): string => JSON.stringify([e.unit, e.parent, e.kind, e.name]);
+
+function find(entries: Entry[], unit: string, parent: string, kind: string, name: string): Entry {
+  const found = entries.filter(
+    (e) => e.unit === unit && e.parent === parent && e.kind === kind && e.name === name,
+  );
+  assert.equal(
+    found.length,
+    1,
+    `expected one ${JSON.stringify([unit, parent, kind, name])} in ${JSON.stringify(entries, null, 1)}`,
+  );
+  return found[0]!;
+}
+
+function run(
+  project: string,
+  out: string,
+): { status: number | null; stdout: string; stderr: string } {
+  const result = spawnSync(process.execPath, [SCRIPT, project, out], { encoding: "utf8" });
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+function listing(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, withFileTypes: true })
+    .map((d) => path.relative(dir, path.join(d.parentPath, d.name)))
+    .sort();
+}
+
+describe("generate on the basic fixture", () => {
+  const entries = generate(path.join(TESTDATA, "basic"));
+  const sig = (parent: string, kind: string, name: string, unit = "basic"): string =>
+    find(entries, unit, parent, kind, name).signature;
+
+  it("S-4 export function open is an entry with all five fields; function helper is not", () => {
+    const open = find(entries, "basic", "", "function", "open");
+    assert.deepEqual(Object.keys(open), ["unit", "parent", "kind", "name", "signature"]);
+    assert.equal(open.signature, "function open(path: string, x: number = 5): number");
+    assert.ok(!entries.some((e) => e.name === "helper" || e.signature.includes("helper")));
+  });
+
+  it("S-4 entries are sorted by unit, parent, kind, name and every key is unique", () => {
+    const keys = entries.map((e) => [e.unit, e.parent, e.kind, e.name]);
+    const byKey = (a: string[], b: string[]): number => {
+      const i = a.findIndex((field, n) => field !== b[n]);
+      return i === -1 ? 0 : a[i]! < b[i]! ? -1 : 1;
+    };
+    assert.deepEqual(keys, [...keys].sort(byKey));
+    assert.equal(new Set(entries.map(keyOf)).size, entries.length);
+  });
+
+  it("S-24 the two overloads of load are one entry, in declaration order", () => {
+    assert.equal(
+      sig("", "function", "load"),
+      "function load(id: number): string\nfunction load(id: string, strict?: boolean): string",
+    );
+  });
+
+  it("top-level declarations: const with an arrow default, default export, type, enum", () => {
+    assert.equal(sig("", "const", "twice"), "const twice: (n: number, by: number = 2) => number");
+    assert.equal(sig("", "function", "default"), "function main(): void");
+    assert.equal(sig("", "const", "VERSION"), 'const VERSION = "1.0"');
+    assert.equal(sig("", "type", "Pair"), "type Pair<A> = [A, A]");
+    assert.equal(sig("", "enum", "Color"), 'enum Color { Red = 0, Green = "g" }');
+  });
+
+  it("class members: public and protected in, private and #private out, static apart", () => {
+    assert.equal(sig("", "class", "Box"), "class Box<T extends object = object> extends Base");
+    assert.equal(
+      sig("Box", "constructor", "constructor"),
+      "constructor(value: T, scale: number = 2)",
+    );
+    assert.equal(sig("Box", "property", "value"), "readonly value: T");
+    assert.equal(sig("Box", "property", "guard"), "protected guard: number");
+    assert.equal(sig("Box", "static property", "count"), "static count: number");
+    assert.equal(sig("Box", "get", "size"), "get size(): number");
+    assert.equal(sig("Box", "set", "size"), "set size(v: number)");
+    assert.equal(sig("Box", "method", "grow"), "grow(by: number = 1): this");
+    assert.equal(sig("Box", "static method", "create"), "static create(): Box<object>");
+    assert.equal(sig("Box", "method", "create"), "create(): void");
+    const members = entries.filter((e) => e.parent === "Box").map((e) => e.name);
+    assert.ok(
+      !members.includes("hidden") && !members.some((m) => m.startsWith("#")),
+      String(members),
+    );
+  });
+
+  it("interface members, call and index signatures", () => {
+    assert.equal(sig("", "interface", "Options"), "interface Options");
+    assert.equal(sig("Options", "property", "size"), "readonly size?: number");
+    assert.equal(sig("Options", "property", "label"), "label: string");
+    assert.equal(sig("Options", "call", ""), "(x: number): void");
+    assert.equal(sig("Options", "index", ""), "[key: string]: unknown");
+  });
+
+  it("namespace re-export and nested namespaces nest their parents", () => {
+    assert.equal(sig("", "namespace", "util"), "namespace util");
+    assert.equal(
+      sig("util", "function", "clamp"),
+      "function clamp(n: number, lo: number = 0, hi: number = 1): number",
+    );
+    assert.equal(sig("util", "namespace", "Shapes"), "namespace Shapes");
+    assert.equal(sig("util.Shapes", "function", "origin"), "function origin(): Point");
+    assert.equal(sig("util.Shapes.Point", "property", "x"), "x: number");
+  });
+
+  it("each exports subpath is a unit; null subpaths and packages without exports or types are not", () => {
+    assert.equal(sig("", "let", "counter", "basic/extra"), "let counter: number");
+    const units = [...new Set(entries.map((e) => e.unit))];
+    assert.deepEqual(units, ["basic", "basic/extra"]);
+  });
+});
+
+describe("exports forms", () => {
+  it("condition arrays, subpath patterns and hand-written types; a nameless package uses its directory", () => {
+    const entries = generate(path.join(TESTDATA, "conditions"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.kind, e.name, e.signature]),
+      [
+        [".", "const", "main", "const main = 1"],
+        ["./features/a", "function", "a", "function a(): void"],
+        ["./features/b", "function", "b", "function b(): void"],
+        ["./hand", "function", "hand", "function hand(x: number): string"],
+      ],
+    );
+  });
+
+  it("workspace packages build against a referenced project's source", () => {
+    const entries = generate(path.join(TESTDATA, "workspace"));
+    assert.equal(
+      find(entries, "@ws/app", "", "function", "make").signature,
+      "function make(): Core",
+    );
+    assert.equal(find(entries, "@ws/app", "", "class", "Core").signature, "class Core");
+    assert.equal(find(entries, "@ws/app", "Core", "method", "id").signature, "id(): string");
+    assert.equal(find(entries, "@ws/core", "", "class", "Core").signature, "class Core");
+  });
+});
+
+describe("signature changes", () => {
+  const base = generate(path.join(TESTDATA, "basic"));
+  const changedKeys = (after: Entry[]): string[] => {
+    const before = new Map(base.map((e) => [keyOf(e), e.signature]));
+    assert.deepEqual(after.map(keyOf), base.map(keyOf));
+    return after.filter((e) => before.get(keyOf(e)) !== e.signature).map((e) => e.name);
+  };
+
+  it("S-6 changing the default of x from 5 to 6 changes the signature of open", () => {
+    const dir = copy("basic");
+    edit(path.join(dir, "src/index.ts"), "x = 5", "x = 6");
+    const after = generate(dir);
+    assert.deepEqual(changedKeys(after), ["open"]);
+    assert.equal(
+      find(after, "basic", "", "function", "open").signature,
+      "function open(path: string, x: number = 6): number",
+    );
+  });
+
+  it("S-24 changing one overload of load changes only the load entry", () => {
+    const dir = copy("basic");
+    edit(path.join(dir, "src/index.ts"), "strict?: boolean", "strict?: number");
+    const after = generate(dir);
+    assert.equal(new Set(after.map(keyOf)).size, after.length);
+    assert.deepEqual(changedKeys(after), ["load"]);
+  });
+
+  it("S-7 editing the doc comment and moving open to another file of the unit changes nothing", () => {
+    const dir = copy("basic");
+    const index = path.join(dir, "src/index.ts");
+    const text = readFileSync(index, "utf8");
+    const moved = text.slice(0, text.indexOf("export function load"));
+    assert.ok(moved.includes("function open") && moved.includes("function helper"));
+    writeFileSync(index, `export { open } from "./open.js";\n\n${text.slice(moved.length)}`);
+    writeFileSync(
+      path.join(dir, "src/open.ts"),
+      moved.replace("/** Opens a path. */", "/**\n * Opens the given path.\n */"),
+    );
+    assert.deepEqual(generate(dir), base);
+  });
+});
+
+describe("command line", () => {
+  it("S-8 two runs write byte-identical entry files with no absolute paths", () => {
+    const dir = copy("basic");
+    const out = mkdtempSync(path.join(scratch, "out-"));
+    for (const name of ["a.json", "b.json"]) {
+      const result = run(dir, path.join(out, name));
+      assert.equal(result.status, 0, result.stderr);
+    }
+    const a = readFileSync(path.join(out, "a.json"), "utf8");
+    assert.equal(a, readFileSync(path.join(out, "b.json"), "utf8"));
+    assert.ok(!a.includes(scratch) && !a.includes(TESTDATA), "entries carry an absolute path");
+    assert.deepEqual(JSON.parse(a), generate(dir));
+    assert.ok(a.endsWith("]\n"));
+  });
+
+  it("security#5 a tsconfig pointing every output outside the project writes no file anywhere", () => {
+    const dir = copy("hostile");
+    const parent = path.dirname(dir);
+    const before = listing(parent);
+    const out = path.join(mkdtempSync(path.join(scratch, "out-")), "entries.json");
+    const result = run(dir, out);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(listing(parent), before);
+    assert.deepEqual(JSON.parse(readFileSync(out, "utf8")), [
+      {
+        unit: "hostile",
+        parent: "",
+        kind: "function",
+        name: "open",
+        signature: "function open(): void",
+      },
+    ]);
+  });
+
+  it("exits 2 on a type error and writes no entry file", () => {
+    const out = path.join(scratch, "broken.json");
+    const result = run(path.join(TESTDATA, "broken"), out);
+    assert.equal(result.status, 2);
+    assert.match(result.stderr, /TS2322/);
+    assert.match(result.stderr, /src\/index\.ts/);
+    assert.ok(!result.stderr.includes(TESTDATA), result.stderr);
+    assert.throws(() => readFileSync(out));
+  });
+
+  for (const [name, setup, message] of [
+    [
+      "a missing tsconfig.json",
+      (dir: string) => rmSync(path.join(dir, "tsconfig.json")),
+      /no tsconfig\.json/,
+    ],
+    [
+      "an unreadable package.json",
+      (dir: string) => writeFileSync(path.join(dir, "package.json"), "{"),
+      /package\.json/,
+    ],
+    [
+      "an entry that is neither built nor on disk",
+      (dir: string) => edit(path.join(dir, "package.json"), "./dist/extra.js", "./dist/missing.js"),
+      /dist\/missing\.d\.ts/,
+    ],
+    [
+      "two packages with the same name and subpath",
+      (dir: string) =>
+        writeFileSync(
+          path.join(dir, "tools/package.json"),
+          '{ "name": "basic", "types": "../src/index.ts" }',
+        ),
+      /unit "basic" comes from both "\." and "tools"/,
+    ],
+  ] as const) {
+    it(`exits 2 on ${name}`, () => {
+      const dir = copy("basic");
+      setup(dir);
+      const result = run(dir, path.join(scratch, "unused.json"));
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, message);
+      for (const line of result.stderr.split("\n")) assert.ok(!line.startsWith("::"), line);
+    });
+  }
+
+  it("exits 2 with usage on a wrong argument count", () => {
+    const result = run(path.join(TESTDATA, "basic"), "");
+    const usage = spawnSync(process.execPath, [SCRIPT], { encoding: "utf8" });
+    assert.equal(usage.status, 2);
+    assert.match(usage.stderr, /usage/);
+    assert.equal(result.status, 2);
+  });
+
+  it("an empty project directory without packages writes []", () => {
+    const dir = path.join(scratch, "empty");
+    mkdirSync(dir);
+    const out = path.join(scratch, "empty.json");
+    assert.equal(run(dir, out).status, 0);
+    assert.equal(readFileSync(out, "utf8"), "[]\n");
+  });
+});

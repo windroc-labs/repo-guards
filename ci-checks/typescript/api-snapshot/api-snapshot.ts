@@ -1,0 +1,736 @@
+import {
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
+
+export interface Entry {
+  unit: string;
+  parent: string;
+  kind: string;
+  name: string;
+  signature: string;
+}
+
+export class Failure extends Error {}
+
+interface Unit {
+  name: string;
+  declaration: string;
+}
+
+interface Package {
+  dir: string;
+  config: string;
+  targets: [subpath: string, target: string][];
+  name: string;
+}
+
+// Everything the build emits, kept in memory: the build never writes a file, whatever the tsconfig says.
+interface Outputs {
+  text: Map<string, string>;
+  dirs: Set<string>;
+  source: Map<string, ts.SourceFile>;
+  declarationOf: Map<string, string>;
+  jsOf: Map<string, string>;
+}
+
+const PREFIX = "api snapshot (typescript): ";
+const CONDITIONS = new Set(["types", "import", "require", "node", "default"]);
+const DROPPED_MODIFIERS = new Set([
+  ts.SyntaxKind.ExportKeyword,
+  ts.SyntaxKind.DeclareKeyword,
+  ts.SyntaxKind.DefaultKeyword,
+]);
+const printer = ts.createPrinter({ removeComments: true, newLine: ts.NewLineKind.LineFeed });
+
+export function quote(text: string): string {
+  // No raw line breaks, so no log line starts with "::"; "#" is escaped against the legacy "##[command]" syntax.
+  return JSON.stringify(text).replaceAll("#", "\\u0023");
+}
+
+function fail(message: string): never {
+  throw new Failure(message);
+}
+
+export function generate(projectDir: string): Entry[] {
+  const root = path.resolve(projectDir);
+  const rel = (file: string): string => path.relative(root, file).split(path.sep).join("/") || ".";
+  const packages = findPackages(root, root, rel);
+  const outputs: Outputs = {
+    text: new Map(),
+    dirs: new Set(),
+    source: new Map(),
+    declarationOf: new Map(),
+    jsOf: new Map(),
+  };
+  const builds = new Map<string, ts.CompilerOptions>();
+  for (const config of new Set(packages.map((p) => p.config)))
+    builds.set(config, build(config, outputs, rel));
+  const byConfig = new Map<string, Unit[]>();
+  const owner = new Map<string, string>();
+  for (const pkg of packages) {
+    for (const unit of units(pkg, outputs, rel)) {
+      const other = owner.get(unit.name);
+      if (other !== undefined) {
+        fail(
+          `unit ${quote(unit.name)} comes from both ${quote(other)} and ${quote(rel(pkg.dir))}: give each package.json its own name`,
+        );
+      }
+      owner.set(unit.name, rel(pkg.dir));
+      byConfig.set(pkg.config, [...(byConfig.get(pkg.config) ?? []), unit]);
+    }
+  }
+  const entries = new Map<string, Entry>();
+  for (const [config, configUnits] of byConfig)
+    read(configUnits, builds.get(config) ?? {}, outputs, entries);
+  return [...entries.values()].sort(compare);
+}
+
+function compare(a: Entry, b: Entry): number {
+  for (const field of ["unit", "parent", "kind", "name"] as const) {
+    if (a[field] !== b[field]) return a[field] < b[field] ? -1 : 1;
+  }
+  return 0;
+}
+
+function findPackages(dir: string, root: string, rel: (file: string) => string): Package[] {
+  const found: Package[] = [];
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) =>
+    a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+  );
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory() && entry.name !== "node_modules" && !entry.name.startsWith(".")) {
+      found.push(...findPackages(full, root, rel));
+    } else if (entry.isFile() && entry.name === "package.json") {
+      const pkg = readPackage(full, root, rel);
+      if (pkg !== undefined) found.push(pkg);
+    }
+  }
+  return found;
+}
+
+function readPackage(
+  file: string,
+  root: string,
+  rel: (file: string) => string,
+): Package | undefined {
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(file, "utf8"));
+  } catch (error) {
+    fail(
+      `cannot read ${quote(rel(file))}: ${quote(error instanceof Error ? error.message : String(error))}`,
+    );
+  }
+  if (typeof json !== "object" || json === null || Array.isArray(json))
+    fail(`${quote(rel(file))} is not a JSON object`);
+  const manifest = json as Record<string, unknown>;
+  const dir = path.dirname(file);
+  const targets = entryTargets(manifest);
+  if (targets.length === 0) return undefined;
+  return {
+    dir,
+    config:
+      nearestConfig(dir, root) ??
+      fail(`${quote(rel(dir))}: no tsconfig.json in it or above it up to the working directory`),
+    targets,
+    name: typeof manifest["name"] === "string" ? manifest["name"] : rel(dir),
+  };
+}
+
+function entryTargets(manifest: Record<string, unknown>): [string, string][] {
+  const exports = manifest["exports"];
+  if (exports === undefined || exports === null) {
+    const types = manifest["types"] ?? manifest["typings"];
+    return typeof types === "string" ? [[".", types]] : [];
+  }
+  const isSubpathMap =
+    typeof exports === "object" &&
+    !Array.isArray(exports) &&
+    Object.keys(exports).some((key) => key.startsWith("."));
+  const map: Record<string, unknown> = isSubpathMap
+    ? (exports as Record<string, unknown>)
+    : { ".": exports };
+  const targets: [string, string][] = [];
+  for (const [subpath, value] of Object.entries(map)) {
+    const target = pick(value);
+    if (target !== undefined) targets.push([subpath, target]);
+  }
+  return targets;
+}
+
+// Node's rule: the first listed condition this generator accepts wins; null excludes the subpath.
+function pick(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const target = pick(item);
+      if (target !== undefined) return target;
+    }
+    return undefined;
+  }
+  if (typeof value === "object" && value !== null) {
+    for (const [condition, target] of Object.entries(value)) {
+      if (!CONDITIONS.has(condition)) continue;
+      const picked = pick(target);
+      if (picked !== undefined) return picked;
+    }
+  }
+  return undefined;
+}
+
+function nearestConfig(dir: string, root: string): string | undefined {
+  for (let current = dir; ; current = path.dirname(current)) {
+    const config = path.join(current, "tsconfig.json");
+    if (existsSync(config)) return config;
+    if (current === root || path.dirname(current) === current) return undefined;
+  }
+}
+
+function describeDiagnostics(
+  diagnostics: readonly ts.Diagnostic[],
+  rel: (file: string) => string,
+): string {
+  return diagnostics
+    .map((d) => {
+      const text = `TS${d.code} ${quote(ts.flattenDiagnosticMessageText(d.messageText, "\n"))}`;
+      if (d.file === undefined || d.start === undefined) return text;
+      const { line, character } = d.file.getLineAndCharacterOfPosition(d.start);
+      return `${quote(rel(d.file.fileName))}:${line + 1}:${character + 1}: ${text}`;
+    })
+    .join("\n");
+}
+
+function build(
+  config: string,
+  outputs: Outputs,
+  rel: (file: string) => string,
+): ts.CompilerOptions {
+  const configErrors: ts.Diagnostic[] = [];
+  const parsed = ts.getParsedCommandLineOfConfigFile(config, undefined, {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: (d) => configErrors.push(d),
+  });
+  if (parsed === undefined || configErrors.length > 0) {
+    fail(`cannot read ${quote(rel(config))}:\n${describeDiagnostics(configErrors, rel)}`);
+  }
+  const { outFile: _outFile, ...projectOptions } = parsed.options;
+  const options: ts.CompilerOptions = {
+    ...projectOptions,
+    noEmit: false,
+    declaration: true,
+    emitDeclarationOnly: false,
+    noEmitOnError: false,
+    sourceMap: false,
+    inlineSourceMap: false,
+    declarationMap: false,
+  };
+  const host = ts.createCompilerHost(options, true);
+  host.writeFile = (file) => {
+    throw new Error(`the compiler tried to write ${quote(rel(file))}`);
+  };
+  // A referenced project is not built: its sources stand in for its declaration output.
+  Object.assign(host, { useSourceOfProjectReferenceRedirect: () => true });
+  const program = ts.createProgram({
+    rootNames: parsed.fileNames,
+    options,
+    host,
+    ...(parsed.projectReferences === undefined
+      ? {}
+      : { projectReferences: parsed.projectReferences }),
+    configFileParsingDiagnostics: ts.getConfigFileParsingDiagnostics(parsed),
+  });
+  const errors = (diagnostics: readonly ts.Diagnostic[]): ts.Diagnostic[] =>
+    diagnostics.filter((d) => d.category === ts.DiagnosticCategory.Error);
+  let failed = errors(ts.getPreEmitDiagnostics(program));
+  if (failed.length === 0) {
+    const result = program.emit(undefined, (file, text, _bom, _onError, sources) => {
+      outputs.text.set(file, text);
+      for (let dir = path.dirname(file); !outputs.dirs.has(dir); dir = path.dirname(dir))
+        outputs.dirs.add(dir);
+      const source = sources?.length === 1 ? sources[0] : undefined;
+      if (source === undefined) return;
+      outputs.source.set(file, source);
+      if (/\.d\.[cm]?ts$/.test(file)) outputs.declarationOf.set(source.fileName, file);
+      else if (/\.[cm]?jsx?$/.test(file)) outputs.jsOf.set(source.fileName, file);
+    });
+    failed = errors(result.diagnostics);
+  }
+  if (failed.length > 0)
+    fail(`the build with ${quote(rel(config))} failed:\n${describeDiagnostics(failed, rel)}`);
+  return options;
+}
+
+function toDeclaration(target: string, outputs: Outputs): string | undefined {
+  if (/\.d\.[cm]?ts$/.test(target)) return target;
+  if (/\.[cm]?jsx?$/.test(target)) return target.replace(/\.([cm]?)jsx?$/, ".d.$1ts");
+  if (/\.[cm]?tsx?$/.test(target)) return outputs.declarationOf.get(target);
+  return undefined;
+}
+
+function isFile(file: string): boolean {
+  try {
+    return statSync(file).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): Unit[] {
+  const found: Unit[] = [];
+  for (const [subpath, target] of pkg.targets) {
+    const absolute = path.resolve(pkg.dir, target);
+    const unitName = (sub: string): string => pkg.name + sub.slice(1);
+    if (subpath.includes("*")) {
+      const sources = /\.d\.[cm]?ts$/.test(absolute) || !/\.[cm]?tsx?$/.test(absolute);
+      const pattern = sources ? (toDeclaration(absolute, outputs) ?? absolute) : absolute;
+      const [head = "", tail = ""] = pattern.split("*", 2);
+      const pool = sources ? [...outputs.text.keys()] : [...outputs.declarationOf.keys()];
+      const matches = pool
+        .filter(
+          (file) =>
+            file.length >= head.length + tail.length &&
+            file.startsWith(head) &&
+            file.endsWith(tail),
+        )
+        .sort();
+      if (matches.length === 0) {
+        fail(
+          `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)} matches no built declaration file`,
+        );
+      }
+      for (const file of matches) {
+        const middle = file.slice(head.length, file.length - tail.length);
+        const declaration = sources ? file : (outputs.declarationOf.get(file) ?? file);
+        found.push({ name: unitName(subpath.replace("*", middle)), declaration });
+      }
+      continue;
+    }
+    const declaration = toDeclaration(absolute, outputs);
+    if (declaration === undefined || !(outputs.text.has(declaration) || isFile(declaration))) {
+      const wanted = declaration === undefined ? quote(target) : quote(rel(declaration));
+      fail(
+        `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)}, but no declaration file ${wanted} was built or exists`,
+      );
+    }
+    found.push({ name: unitName(subpath), declaration });
+  }
+  return found;
+}
+
+// Serves the in-memory outputs to a second program, also through symlinked paths such as workspace node_modules.
+function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.CompilerHost {
+  const host = ts.createCompilerHost(options, true);
+  const real = (file: string): string => {
+    if (outputs.text.has(file) || outputs.dirs.has(file)) return file;
+    let dir = file;
+    while (!existsSync(dir)) {
+      const up = path.dirname(dir);
+      if (up === dir) return file;
+      dir = up;
+    }
+    return path.join(realpathSync(dir), path.relative(dir, file));
+  };
+  const { fileExists, readFile, directoryExists } = host;
+  host.fileExists = (file) => outputs.text.has(real(file)) || fileExists.call(host, file);
+  host.readFile = (file) => outputs.text.get(real(file)) ?? readFile.call(host, file);
+  host.directoryExists = (dir) =>
+    outputs.dirs.has(real(dir)) || (directoryExists?.call(host, dir) ?? false);
+  host.realpath = (file) => {
+    const resolved = real(file);
+    return outputs.text.has(resolved) ? resolved : (ts.sys.realpath?.(file) ?? file);
+  };
+  host.writeFile = () => {
+    throw new Error("the declaration reader must not write files");
+  };
+  return host;
+}
+
+function read(
+  units: Unit[],
+  buildOptions: ts.CompilerOptions,
+  outputs: Outputs,
+  entries: Map<string, Entry>,
+): void {
+  const options: ts.CompilerOptions = { ...buildOptions, noEmit: true, skipLibCheck: true };
+  const program = ts.createProgram({
+    rootNames: units.map((u) => u.declaration),
+    options,
+    host: virtualHost(options, outputs),
+  });
+  const checker = program.getTypeChecker();
+  for (const unit of units) {
+    const file = program.getSourceFile(unit.declaration);
+    if (file === undefined) fail(`cannot load ${quote(unit.declaration)}`);
+    const module = checker.getSymbolAtLocation(file);
+    if (module === undefined) continue;
+    new Reader(unit.name, checker, outputs, entries).walk(module, "");
+  }
+}
+
+class Reader {
+  private readonly unit: string;
+  private readonly checker: ts.TypeChecker;
+  private readonly outputs: Outputs;
+  private readonly entries: Map<string, Entry>;
+  private readonly js = new Map<string, ts.SourceFile>();
+
+  constructor(
+    unit: string,
+    checker: ts.TypeChecker,
+    outputs: Outputs,
+    entries: Map<string, Entry>,
+  ) {
+    this.unit = unit;
+    this.checker = checker;
+    this.outputs = outputs;
+    this.entries = entries;
+  }
+
+  walk(container: ts.Symbol, parent: string): void {
+    for (const exported of this.checker.getExportsOfModule(container)) {
+      const target =
+        exported.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(exported) : exported;
+      this.symbol(target, exported.getName(), parent);
+    }
+  }
+
+  private add(parent: string, kind: string, name: string, signature: string): void {
+    const key = JSON.stringify([this.unit, parent, kind, name]);
+    const existing = this.entries.get(key);
+    if (existing === undefined)
+      this.entries.set(key, { unit: this.unit, parent, kind, name, signature });
+    else existing.signature += `\n${signature}`;
+  }
+
+  private symbol(symbol: ts.Symbol, name: string, parent: string): void {
+    const declarations = symbol.declarations ?? [];
+    if (declarations.length === 0)
+      fail(`unit ${quote(this.unit)}: export ${quote(name)} does not resolve to a declaration`);
+    const path = parent === "" ? name : `${parent}.${name}`;
+    const single = declarations.filter(ts.isFunctionDeclaration).length === 1;
+    let namespace = false;
+    for (const d of declarations) {
+      if (ts.isSourceFile(d) || ts.isModuleDeclaration(d)) {
+        if (namespace) continue;
+        namespace = true;
+        this.add(parent, "namespace", name, `namespace ${name}`);
+        this.walk(symbol, path);
+      } else if (ts.isFunctionDeclaration(d)) {
+        this.add(parent, "function", name, print(single ? this.withDefaults(d) : d));
+      } else if (ts.isClassDeclaration(d)) {
+        const header = ts.factory.updateClassDeclaration(
+          d,
+          kept(d.modifiers),
+          d.name,
+          d.typeParameters,
+          d.heritageClauses,
+          [],
+        );
+        this.add(parent, "class", name, print(header).replace(/\s*\{\s*\}$/, ""));
+        this.members(d, path);
+      } else if (ts.isInterfaceDeclaration(d)) {
+        const header = ts.factory.updateInterfaceDeclaration(
+          d,
+          kept(d.modifiers),
+          d.name,
+          d.typeParameters,
+          d.heritageClauses,
+          [],
+        );
+        this.add(parent, "interface", name, print(header).replace(/\s*\{\s*\}$/, ""));
+        this.members(d, path);
+      } else if (ts.isTypeAliasDeclaration(d)) {
+        this.add(parent, "type", name, print(d));
+      } else if (ts.isEnumDeclaration(d)) {
+        this.add(parent, "enum", name, print(d));
+      } else if (ts.isVariableDeclaration(d)) {
+        const flags = ts.getCombinedNodeFlags(d);
+        const kind =
+          flags & ts.NodeFlags.Const ? "const" : flags & ts.NodeFlags.Let ? "let" : "var";
+        this.add(parent, kind, name, `${kind} ${print(this.withDefaults(d))}`);
+      } else {
+        this.add(parent, ts.SyntaxKind[d.kind], name, print(d));
+      }
+    }
+  }
+
+  private members(owner: ts.ClassDeclaration | ts.InterfaceDeclaration, parent: string): void {
+    const counts = new Map<string, number>();
+    const keyOf = (m: ts.ClassElement | ts.TypeElement): string =>
+      `${m.kind}:${isStatic(m)}:${memberName(m)}`;
+    for (const m of owner.members) counts.set(keyOf(m), (counts.get(keyOf(m)) ?? 0) + 1);
+    for (const m of owner.members) {
+      if (m.name !== undefined && ts.isPrivateIdentifier(m.name)) continue;
+      if (ts.getCombinedModifierFlags(m as ts.Declaration) & ts.ModifierFlags.Private) continue;
+      const kind = memberKind(m);
+      if (kind === undefined) continue;
+      const shown = counts.get(keyOf(m)) === 1 ? this.withDefaults(m, owner) : m;
+      this.add(parent, isStatic(m) ? `static ${kind}` : kind, memberName(m), print(shown));
+    }
+  }
+
+  // Default values are not in the .d.ts: read them from the .js the same build emitted for the same source.
+  private withDefaults<T extends ts.Node>(
+    node: T,
+    owner?: ts.ClassDeclaration | ts.InterfaceDeclaration,
+  ): T {
+    const fn = jsCounterpart(node, owner, this.jsFor(node));
+    const parameters = signatureParameters(node);
+    if (fn === undefined || parameters === undefined || fn.parameters.length !== parameters.length)
+      return node;
+    let changed = false;
+    const updated = parameters.map((p, i) => {
+      const initializer = fn.parameters[i]?.initializer;
+      if (initializer === undefined) return p;
+      changed = true;
+      const value = ts.factory.createIdentifier(print(initializer));
+      return ts.factory.updateParameterDeclaration(
+        p,
+        p.modifiers,
+        p.dotDotDotToken,
+        p.name,
+        undefined,
+        p.type,
+        value,
+      );
+    });
+    return changed ? replaceParameters(node, updated) : node;
+  }
+
+  private jsFor(node: ts.Node): ts.SourceFile | undefined {
+    const source = this.outputs.source.get(node.getSourceFile().fileName);
+    const file = source === undefined ? undefined : this.outputs.jsOf.get(source.fileName);
+    const text = file === undefined ? undefined : this.outputs.text.get(file);
+    if (file === undefined || text === undefined) return undefined;
+    let parsed = this.js.get(file);
+    if (parsed === undefined) {
+      parsed = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+      this.js.set(file, parsed);
+    }
+    return parsed;
+  }
+}
+
+type FunctionLike =
+  | ts.FunctionDeclaration
+  | ts.MethodDeclaration
+  | ts.ConstructorDeclaration
+  | ts.ArrowFunction
+  | ts.FunctionExpression;
+
+function signatureParameters(node: ts.Node): ts.NodeArray<ts.ParameterDeclaration> | undefined {
+  if (
+    ts.isFunctionDeclaration(node) ||
+    ts.isMethodDeclaration(node) ||
+    ts.isConstructorDeclaration(node)
+  )
+    return node.parameters;
+  if (ts.isVariableDeclaration(node) && node.type !== undefined && ts.isFunctionTypeNode(node.type))
+    return node.type.parameters;
+  return undefined;
+}
+
+function replaceParameters<T extends ts.Node>(node: T, parameters: ts.ParameterDeclaration[]): T {
+  const f = ts.factory;
+  if (ts.isFunctionDeclaration(node)) {
+    return f.updateFunctionDeclaration(
+      node,
+      node.modifiers,
+      node.asteriskToken,
+      node.name,
+      node.typeParameters,
+      parameters,
+      node.type,
+      node.body,
+    ) as ts.Node as T;
+  }
+  if (ts.isMethodDeclaration(node)) {
+    return f.updateMethodDeclaration(
+      node,
+      node.modifiers,
+      node.asteriskToken,
+      node.name,
+      node.questionToken,
+      node.typeParameters,
+      parameters,
+      node.type,
+      node.body,
+    ) as ts.Node as T;
+  }
+  if (ts.isConstructorDeclaration(node)) {
+    return f.updateConstructorDeclaration(
+      node,
+      node.modifiers,
+      parameters,
+      node.body,
+    ) as ts.Node as T;
+  }
+  if (
+    ts.isVariableDeclaration(node) &&
+    node.type !== undefined &&
+    ts.isFunctionTypeNode(node.type)
+  ) {
+    const type = f.updateFunctionTypeNode(
+      node.type,
+      node.type.typeParameters,
+      f.createNodeArray(parameters),
+      node.type.type,
+    );
+    return f.updateVariableDeclaration(
+      node,
+      node.name,
+      node.exclamationToken,
+      type,
+      node.initializer,
+    ) as ts.Node as T;
+  }
+  return node;
+}
+
+function nameText(name: ts.Node | undefined): string | undefined {
+  return name !== undefined && (ts.isIdentifier(name) || ts.isStringLiteral(name))
+    ? name.text
+    : undefined;
+}
+
+// Finds the emitted JS function for a top-level function, a const holding one, or a class constructor or method.
+function jsCounterpart(
+  node: ts.Node,
+  owner: ts.ClassDeclaration | ts.InterfaceDeclaration | undefined,
+  js: ts.SourceFile | undefined,
+): FunctionLike | undefined {
+  if (js === undefined) return undefined;
+  const topLevel = (decl: ts.Node): boolean =>
+    ts.isSourceFile(decl.parent) ||
+    (ts.isVariableDeclarationList(decl.parent) && ts.isSourceFile(decl.parent.parent.parent));
+  if (owner !== undefined) {
+    if (!ts.isClassDeclaration(owner) || !topLevel(owner)) return undefined;
+    const name = nameText(owner.name);
+    const cls = js.statements.find(
+      (s): s is ts.ClassDeclaration =>
+        ts.isClassDeclaration(s) && nameText(s.name) === name && isDefault(s) === isDefault(owner),
+    );
+    if (cls === undefined) return undefined;
+    if (ts.isConstructorDeclaration(node)) return cls.members.find(ts.isConstructorDeclaration);
+    if (!ts.isMethodDeclaration(node)) return undefined;
+    return cls.members.find(
+      (m): m is ts.MethodDeclaration =>
+        ts.isMethodDeclaration(m) &&
+        nameText(m.name) === nameText(node.name) &&
+        isStatic(m) === isStatic(node),
+    );
+  }
+  if (!topLevel(node)) return undefined;
+  if (ts.isFunctionDeclaration(node)) {
+    const name = nameText(node.name);
+    return js.statements.find(
+      (s): s is ts.FunctionDeclaration =>
+        ts.isFunctionDeclaration(s) &&
+        s.body !== undefined &&
+        nameText(s.name) === name &&
+        isDefault(s) === isDefault(node),
+    );
+  }
+  if (ts.isVariableDeclaration(node)) {
+    for (const statement of js.statements) {
+      if (!ts.isVariableStatement(statement)) continue;
+      const decl = statement.declarationList.declarations.find(
+        (d) => nameText(d.name) === nameText(node.name),
+      );
+      const init = decl?.initializer;
+      if (init !== undefined && (ts.isArrowFunction(init) || ts.isFunctionExpression(init)))
+        return init;
+    }
+  }
+  return undefined;
+}
+
+function isDefault(node: ts.Node): boolean {
+  return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Default) !== 0;
+}
+
+function isStatic(node: ts.Node): boolean {
+  return (ts.getCombinedModifierFlags(node as ts.Declaration) & ts.ModifierFlags.Static) !== 0;
+}
+
+function memberKind(m: ts.ClassElement | ts.TypeElement): string | undefined {
+  if (ts.isConstructorDeclaration(m)) return "constructor";
+  if (ts.isMethodDeclaration(m) || ts.isMethodSignature(m)) return "method";
+  if (ts.isPropertyDeclaration(m) || ts.isPropertySignature(m)) return "property";
+  if (ts.isGetAccessorDeclaration(m)) return "get";
+  if (ts.isSetAccessorDeclaration(m)) return "set";
+  if (ts.isCallSignatureDeclaration(m)) return "call";
+  if (ts.isConstructSignatureDeclaration(m)) return "construct";
+  if (ts.isIndexSignatureDeclaration(m)) return "index";
+  return undefined;
+}
+
+function memberName(m: ts.ClassElement | ts.TypeElement): string {
+  if (ts.isConstructorDeclaration(m)) return "constructor";
+  if (m.name === undefined) return "";
+  return nameText(m.name) ?? printer.printNode(ts.EmitHint.Unspecified, m.name, m.getSourceFile());
+}
+
+function kept(modifiers: ts.NodeArray<ts.ModifierLike> | undefined): ts.ModifierLike[] {
+  return (modifiers ?? []).filter((m) => !DROPPED_MODIFIERS.has(m.kind));
+}
+
+function singleLine(node: ts.Node): void {
+  ts.setEmitFlags(node, ts.EmitFlags.SingleLine);
+  ts.forEachChild(node, singleLine);
+}
+
+// One line per signature, whatever the layout: type literals and tuples print on one line, other line breaks become spaces.
+function print(node: ts.Node): string {
+  const source = ts.getOriginalNode(node).getSourceFile();
+  const bare =
+    ts.canHaveModifiers(node) && ts.isStatement(node)
+      ? ts.factory.replaceModifiers(node, kept(node.modifiers) as ts.Modifier[])
+      : node;
+  singleLine(bare);
+  return printer
+    .printNode(ts.EmitHint.Unspecified, bare, source)
+    .replace(/\n\s*/g, " ")
+    .replace(/;$/, "");
+}
+
+function main(args: string[]): number {
+  const [project, out] = args;
+  if (
+    args.length !== 2 ||
+    project === undefined ||
+    out === undefined ||
+    project === "" ||
+    out === ""
+  ) {
+    console.error(`${PREFIX}usage: api-snapshot.ts <project-dir> <entries-file>`);
+    return 2;
+  }
+  try {
+    const entries = generate(project);
+    writeFileSync(out, `${JSON.stringify(entries, null, 2)}\n`);
+    console.log(`${PREFIX}${entries.length} entries`);
+    return 0;
+  } catch (error) {
+    const message =
+      error instanceof Failure
+        ? error.message
+        : `unexpected error: ${quote(error instanceof Error ? (error.stack ?? error.message) : String(error))}`;
+    for (const line of message.split("\n")) console.error(`${PREFIX}${line}`);
+    return 2;
+  }
+}
+
+const entry = process.argv[1];
+if (entry !== undefined && realpathSync(entry) === fileURLToPath(import.meta.url)) {
+  process.exitCode = main(process.argv.slice(2));
+}

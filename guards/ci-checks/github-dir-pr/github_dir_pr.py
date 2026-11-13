@@ -69,7 +69,11 @@ def snapshot_files(root: Path, merge_base: str) -> set[str]:
         return set()
     trees = [tree_modes(root, merge_base), tree_modes(root, "HEAD")]
     error = config_overrides.snapshot_path_error
-    return {path for path in settings.values() if all(error(path, tree.get) is None for tree in trees)}
+    return {
+        path
+        for (_, language), path in settings.items()
+        if all(error(path, language, tree.get) is None for tree in trees)
+    }
 
 
 def check(root: Path, base_ref: str) -> int:

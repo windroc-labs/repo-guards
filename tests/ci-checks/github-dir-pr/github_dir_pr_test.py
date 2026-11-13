@@ -198,13 +198,24 @@ class Snapshot(Repo):
         self.assertEqual(code, 1)
         self.assertIn(f"  {json.dumps(workflow)}", out)
 
+    def test_other_github_files_set_as_snapshots_are_not_exempt(self):
+        for path in [".github/CODEOWNERS", ".github/scripts/x", ".github/checks/api-go.json"]:
+            with self.subTest(path=path):
+                self.setUp()
+                code, out = self.pr(
+                    self.base(snapshot_toml(rust=path), **{path: "a\n"}),
+                    {"src/lib.rs": "pub fn b() {}\n", path: "b\n"},
+                )
+                self.assertEqual(code, 1)
+                self.assertIn(f"  {json.dumps(path)}", out)
+
     def test_overrides_path_is_not_exempt(self):
         toml = snapshot_toml(rust=OVERRIDES)
         head = {"src/lib.rs": "pub fn b() {}\n", OVERRIDES: toml.replace("minLines = 9", "minLines = 90")}
         self.assertEqual(self.pr(self.base(toml), head)[0], 1)
 
     def test_other_working_directories_and_languages_pass(self):
-        go = ".github/api/go.json"
+        go = ".github/checks/api-go.json"
         toml = snapshot_toml(rust=RUST_SNAPSHOT) + f'\n[project."svc"."api-snapshot"]\ngo = "{go}"\n'
         code, _ = self.pr(
             self.base(toml, **{go: "[]\n"}),

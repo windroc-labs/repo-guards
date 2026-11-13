@@ -260,15 +260,15 @@ class SnapshotPathTest(unittest.TestCase):
     def test_each_language_reads_its_own_path(self) -> None:
         repo = Repo(
             self,
-            '[project."."]\napi-snapshot.python = ".github/api/py.json"\n'
-            'api-snapshot.typescript = ".github/api/ts.json"\n',
+            '[project."."]\napi-snapshot.python = ".github/checks/api-python.json"\n'
+            'api-snapshot.typescript = ".github/checks/api-typescript.json"\n',
         )
-        self.assertEqual(repo.snapshot_path(".", "python"), (0, ".github/api/py.json\n", ""))
-        self.assertEqual(repo.snapshot_path(".", "typescript"), (0, ".github/api/ts.json\n", ""))
+        self.assertEqual(repo.snapshot_path(".", "python"), (0, ".github/checks/api-python.json\n", ""))
+        self.assertEqual(repo.snapshot_path(".", "typescript"), (0, ".github/checks/api-typescript.json\n", ""))
 
     def test_other_working_directory_is_ignored(self) -> None:
-        repo = Repo(self, setting("go", ".github/api/a.json", "a") + setting("go", ".github/api/b.json", "b"))
-        self.assertEqual(repo.snapshot_path("b", "go"), (0, ".github/api/b.json\n", ""))
+        repo = Repo(self, setting("go", "a/api.json", "a") + setting("go", ".github/checks/api-go.json", "b"))
+        self.assertEqual(repo.snapshot_path("b", "go"), (0, ".github/checks/api-go.json\n", ""))
         self.assertEqual(repo.snapshot_path(".", "go"), (0, "", ""))
 
     def test_missing_file_is_accepted(self) -> None:
@@ -276,9 +276,9 @@ class SnapshotPathTest(unittest.TestCase):
         self.assertEqual(repo.snapshot_path(".", "rust"), (0, ".github/checks/api-rust.json\n", ""))
 
     def test_existing_regular_file_is_accepted(self) -> None:
-        repo = Repo(self, setting("go", ".github/api/go.json"))
-        repo.write(".github/api/go.json", "[]\n")
-        self.assertEqual(repo.snapshot_path(".", "go"), (0, ".github/api/go.json\n", ""))
+        repo = Repo(self, setting("go", ".github/checks/api-go.json"))
+        repo.write(".github/checks/api-go.json", "[]\n")
+        self.assertEqual(repo.snapshot_path(".", "go"), (0, ".github/checks/api-go.json\n", ""))
 
     def test_rejected_paths_exit_2_naming_the_path(self) -> None:
         paths = [
@@ -295,12 +295,22 @@ class SnapshotPathTest(unittest.TestCase):
             ".github/a\rb.json",
             ".github/a\x00b.json",
             ".github/a\x7fb.json",
+            ".github/CODEOWNERS",
+            ".github/scripts/x",
+            ".github/api/go.json",
+            ".github/checks/api-rust.json",
+            ".github/checks/api-go.json/",
+            ".github/checks/./api-go.json",
+            "./.github/checks/api-go.json",
+            ".github/checks/API-go.json",
+            ".github/checks/api-go.json5",
         ]
         for path in paths:
             with self.subTest(path=path):
                 code, out, err = Repo(self, setting("go", path)).snapshot_path(".", "go")
                 self.assertEqual((code, out), (2, ""))
                 self.assertIn(json.dumps(path, ensure_ascii=False), err)
+                self.assertIn('must be ".github/checks/api-go.json"', err)
 
     def test_s25_paths_appear_verbatim(self) -> None:
         s25 = ["api/go.json", ".github/../api/go.json", ".github/workflows/ci.yml", ".github/checks/repo-guards.toml"]
@@ -311,24 +321,25 @@ class SnapshotPathTest(unittest.TestCase):
                 self.assertIn(path, err)
 
     def test_symlinked_file_or_parent_is_rejected(self) -> None:
-        repo = Repo(self, setting("go", ".github/api/go.json"))
+        repo = Repo(self, setting("go", ".github/checks/api-go.json"))
         target = repo.write("elsewhere/go.json", "[]\n")
-        (repo.root / ".github/api").mkdir(parents=True)
-        os.symlink(target, repo.root / ".github/api/go.json")
+        os.symlink(target, repo.root / ".github/checks/api-go.json")
         code, _, err = repo.snapshot_path(".", "go")
         self.assertEqual(code, 2)
-        self.assertIn("symbolic link", err)
+        self.assertIn('".github/checks/api-go.json" is a symbolic link', err)
 
-        repo = Repo(self, setting("go", ".github/api/go.json"))
-        repo.write("elsewhere/go.json", "[]\n")
-        os.symlink(repo.root / "elsewhere", repo.root / ".github/api")
+        # The overrides file sits in .github/checks, so link the directory and keep the file reachable.
+        repo = Repo(self)
+        repo.write("elsewhere/repo-guards.toml", setting("go", ".github/checks/api-go.json"))
+        (repo.root / ".github").mkdir()
+        os.symlink(repo.root / "elsewhere", repo.root / ".github/checks")
         code, _, err = repo.snapshot_path(".", "go")
         self.assertEqual(code, 2)
-        self.assertIn('".github/api" is a symbolic link', err)
+        self.assertIn('".github/checks" is a symbolic link', err)
 
     def test_directory_is_rejected(self) -> None:
-        repo = Repo(self, setting("go", ".github/api"))
-        (repo.root / ".github/api").mkdir()
+        repo = Repo(self, setting("go", ".github/checks/api-go.json"))
+        (repo.root / ".github/checks/api-go.json").mkdir()
         code, _, err = repo.snapshot_path(".", "go")
         self.assertEqual(code, 2)
         self.assertIn("not a regular file", err)
@@ -348,7 +359,7 @@ class SnapshotPathTest(unittest.TestCase):
                 self.assertIn("project", err)
 
     def test_unknown_language_key_exits_2(self) -> None:
-        code, out, err = Repo(self, setting("rsut", ".github/a.json")).snapshot_path(".", "rust")
+        code, out, err = Repo(self, setting("rsut", ".github/checks/api-rsut.json")).snapshot_path(".", "rust")
         self.assertEqual((code, out), (2, ""))
         self.assertIn("rsut", err)
 
@@ -360,7 +371,7 @@ class SnapshotPathTest(unittest.TestCase):
             ('api-snapshot-scope = ["pkg"]\n', ['[project."."] api-snapshot-scope is not a table']),
         ]:
             with self.subTest(text=text):
-                code, out, err = Repo(self, setting("go", ".github/api/go.json") + text).snapshot_path(".", "go")
+                code, out, err = Repo(self, setting("go", ".github/checks/api-go.json") + text).snapshot_path(".", "go")
                 self.assertEqual((code, out), (2, ""))
                 for needle in needles:
                     self.assertIn(needle, err)
@@ -373,8 +384,8 @@ class SnapshotPathTest(unittest.TestCase):
     def test_scope_values_are_left_to_the_generators(self) -> None:
         for value in ('["pkg.sub"]', "[]", "1", '["not a prefix"]'):
             with self.subTest(value=value):
-                text = setting("python", ".github/api/py.json") + f"api-snapshot-scope.python = {value}\n"
-                self.assertEqual(Repo(self, text).snapshot_path(".", "python"), (0, ".github/api/py.json\n", ""))
+                text = setting("python", ".github/checks/api-python.json") + f"api-snapshot-scope.python = {value}\n"
+                self.assertEqual(Repo(self, text).snapshot_path(".", "python"), (0, ".github/checks/api-python.json\n", ""))
 
     def test_invalid_toml_exits_2(self) -> None:
         code, out, err = Repo(self, "[project\n").snapshot_path(".", "go")
@@ -402,31 +413,37 @@ def git_tree(entries: dict[str, str]):
 
 
 class SnapshotPathErrorTest(unittest.TestCase):
-    def test_text_rules_need_no_lookup(self) -> None:
+    def test_only_the_language_file_is_allowed_without_lookup(self) -> None:
         def never(path: str) -> int | None:
             raise AssertionError(f"looked up {path}")
 
-        reasons = {
-            ".github/a\nb": "control characters",
-            "a/../.github/x": '".."',
-            "/.github/x": "relative",
-            "api/go.json": "under .github/",
-            ".github": "under .github/",
-            ".github/workflows/ci.yml": ".github/workflows/",
-            ".github/checks/repo-guards.toml": "repo-guards.toml",
-        }
-        for path, reason in reasons.items():
-            with self.subTest(path=path):
-                self.assertIn(reason, snapshot_path_error(path, never) or "")
+        for language in ("rust", "python", "typescript", "go"):
+            for path in [
+                ".github/CODEOWNERS",
+                ".github/scripts/x",
+                ".github/workflows/ci.yml",
+                ".github/checks/repo-guards.toml",
+                ".github/checks/jscpd-baseline.json",
+                ".github/checks/api-other.json",
+                ".github/a\nb",
+                "/.github/x",
+            ]:
+                with self.subTest(language=language, path=path):
+                    error = snapshot_path_error(path, language, never) or ""
+                    self.assertEqual(error, f'must be ".github/checks/api-{language}.json"')
 
     def test_revision_modes(self) -> None:
-        tree = git_tree(
-            {".github": "040000", ".github/api": "120000", ".github/d": "040000", ".github/ok.json": "100644"}
-        )
-        self.assertIn("symbolic link", snapshot_path_error(".github/api/go.json", tree) or "")
-        self.assertIn("not a regular file", snapshot_path_error(".github/d", tree) or "")
-        self.assertIsNone(snapshot_path_error(".github/ok.json", tree))
-        self.assertIsNone(snapshot_path_error(".github/new.json", tree))
+        tree = git_tree({".github": "040000", ".github/checks": "040000", ".github/checks/api-go.json": "100644"})
+        self.assertIsNone(snapshot_path_error(".github/checks/api-go.json", "go", tree))
+        self.assertIsNone(snapshot_path_error(".github/checks/api-rust.json", "rust", tree))
+        self.assertIn("must be", snapshot_path_error(".github/checks/api-go.json", "rust", tree) or "")
+        go = ".github/checks/api-go.json"
+        linked = git_tree({".github": "040000", ".github/checks": "120000"})
+        self.assertIn('".github/checks" is a symbolic link', snapshot_path_error(go, "go", linked) or "")
+        linked_file = git_tree({".github": "040000", ".github/checks": "040000", go: "120000"})
+        self.assertIn(f"{json.dumps(go)} is a symbolic link", snapshot_path_error(go, "go", linked_file) or "")
+        directory = git_tree({".github": "040000", ".github/checks": "040000", go: "040000"})
+        self.assertIn("not a regular file", snapshot_path_error(go, "go", directory) or "")
 
     def test_checkout_mode(self) -> None:
         repo = Repo(self)

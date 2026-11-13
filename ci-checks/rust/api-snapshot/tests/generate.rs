@@ -49,8 +49,11 @@ impl Run {
     }
 }
 
-/// Runs the generator with `API_SNAPSHOT_SCOPE` set to `scope`, or unset.
-fn generate_scoped_in(project: &Path, tag: &str, scope: Option<&str>) -> Run {
+/// The working-directory the scoped tests' repo-guards.toml has a section for.
+const WORKING_DIRECTORY: &str = "crates/demo";
+
+/// Runs the generator; with `config`, writes it as the repo-guards.toml the generator reads (`None` inside: no file).
+fn generate_with(project: &Path, tag: &str, config: Option<Option<&str>>) -> Run {
     let dir = temp(tag);
     let output = dir.join("entries.json");
     let mut command = Command::new(env!("CARGO_BIN_EXE_api-snapshot"));
@@ -59,10 +62,16 @@ fn generate_scoped_in(project: &Path, tag: &str, scope: Option<&str>) -> Run {
         .arg(project)
         .arg("--output")
         .arg(&output)
-        .env("CARGO_TARGET_DIR", dir.join("target"))
-        .env_remove("API_SNAPSHOT_SCOPE");
-    if let Some(scope) = scope {
-        command.env("API_SNAPSHOT_SCOPE", scope);
+        .env("CARGO_TARGET_DIR", dir.join("target"));
+    if let Some(text) = config {
+        let file = dir.join("repo-guards.toml");
+        if let Some(text) = text {
+            fs::write(&file, text).unwrap();
+        }
+        command
+            .arg("--config")
+            .arg(file)
+            .args(["--working-directory", WORKING_DIRECTORY]);
     }
     let result = command.output().unwrap();
     Run {
@@ -73,15 +82,17 @@ fn generate_scoped_in(project: &Path, tag: &str, scope: Option<&str>) -> Run {
 }
 
 fn generate_in(project: &Path, tag: &str) -> Run {
-    generate_scoped_in(project, tag, None)
+    generate_with(project, tag, None)
 }
 
 fn generate(name: &str, tag: &str) -> Run {
     generate_in(&fixture(name), tag)
 }
 
+/// Runs the generator with `api-snapshot-scope.rust = <scope>` (a TOML value) for its working-directory.
 fn generate_scoped(name: &str, tag: &str, scope: &str) -> Run {
-    generate_scoped_in(&fixture(name), tag, Some(scope))
+    let config = format!("[project.\"{WORKING_DIRECTORY}\"]\napi-snapshot-scope.rust = {scope}\n");
+    generate_with(&fixture(name), tag, Some(Some(&config)))
 }
 
 fn signature<'a>(entries: &'a [Value], kind: &str, parent: &str, name: &str) -> &'a str {
@@ -698,16 +709,18 @@ fn scope_keeps_only_entries_under_its_modules() {
 #[test]
 fn no_scope_writes_every_entry() {
     let unset = generate("scoped_v1", "scoped-unset").text();
-    for (tag, scope) in [
-        ("scoped-empty", ""),
-        ("scoped-blank", " \n"),
-        ("scoped-none", "[]"),
+    let other_section = format!(
+        "[project.\".\"]\napi-snapshot-scope.rust = [\"scope_demo::driver\"]\n\n\
+         [project.\"{WORKING_DIRECTORY}\"]\napi-snapshot.rust = \".github/checks/api-rust.json\"\n\
+         api-snapshot-scope.python = [\"pkg\"]\n"
+    );
+    for (tag, config) in [
+        ("scoped-no-file", None),
+        ("scoped-empty-file", Some("")),
+        ("scoped-no-setting", Some(other_section.as_str())),
     ] {
-        assert_eq!(
-            generate_scoped("scoped_v1", tag, scope).text(),
-            unset,
-            "{scope:?}"
-        );
+        let run = generate_with(&fixture("scoped_v1"), tag, Some(config));
+        assert_eq!(run.text(), unset, "{config:?}");
     }
     let entries: Vec<Value> = serde_json::from_str(&unset).unwrap();
     let keys = keys(&entries);
@@ -736,16 +749,62 @@ fn scope_of_the_crate_writes_every_entry() {
 }
 
 #[test]
-fn unreadable_scope_exits_2() {
-    for (tag, scope) in [
-        ("scope-not-json", "scope_demo::driver"),
-        ("scope-object", r#"{"scope": "scope_demo::driver"}"#),
-        ("scope-number", r#"["scope_demo::driver", 1]"#),
+fn invalid_scope_exits_2() {
+    for (tag, scope, error) in [
+        (
+            "scope-string",
+            r#""scope_demo::driver""#,
+            " is not an array of strings",
+        ),
+        (
+            "scope-number",
+            r#"["scope_demo::driver", 1]"#,
+            " is not an array of strings",
+        ),
+        (
+            "scope-empty",
+            "[]",
+            " = []: must list at least one module prefix",
+        ),
+        (
+            "scope-package",
+            r#"["scope-demo"]"#,
+            r#": "scope-demo": must be a module path"#,
+        ),
+        (
+            "scope-glob",
+            r#"["scope_demo::*"]"#,
+            r#": "scope_demo::*": must be a module path"#,
+        ),
     ] {
         let run = generate_scoped("scoped_v1", tag, scope);
         assert_fails_with_2(&run);
-        assert!(run.stderr.contains("API_SNAPSHOT_SCOPE"), "{}", run.stderr);
+        let at = format!("[project.\"{WORKING_DIRECTORY}\"] api-snapshot-scope.rust");
+        assert!(
+            run.stderr.contains(&format!("{at}{error}")),
+            "{}",
+            run.stderr
+        );
     }
+    let broken = generate_with(
+        &fixture("scoped_v1"),
+        "scope-broken-toml",
+        Some(Some("[project\n")),
+    );
+    assert_fails_with_2(&broken);
+    let half = Command::new(env!("CARGO_BIN_EXE_api-snapshot"))
+        .args([
+            "--project",
+            ".",
+            "--output",
+            "out.json",
+            "--config",
+            "repo-guards.toml",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(half.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&half.stderr).contains("usage: "));
 }
 
 /// Compares `changed` against a snapshot of scoped_v1, both generated with the driver scope.

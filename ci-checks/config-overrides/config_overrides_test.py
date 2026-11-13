@@ -530,7 +530,7 @@ class SnapshotPathErrorTest(unittest.TestCase):
 
 
 class SnapshotJobTest(unittest.TestCase):
-    """Each language's API snapshot job reads the scope with the path and hands it to Generate."""
+    """Python, TypeScript and Go hand the scope to Generate; Rust's generator reads it from repo-guards.toml itself."""
 
     WORKFLOWS = CI_CHECKS.parent / ".github/workflows"
 
@@ -544,7 +544,7 @@ class SnapshotJobTest(unittest.TestCase):
         return steps
 
     def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("python", "typescript", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
@@ -558,10 +558,18 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("python", "typescript", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
+
+    def test_rust_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("rust")
+        self.assertNotIn("scope", steps["Read the snapshot settings"])
+        generate = steps["Generate"]
+        self.assertNotIn("API_SNAPSHOT_SCOPE", generate)
+        self.assertIn('--config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"', generate)
+        self.assertIn('--working-directory "$PROJECT_DIR"', generate)
 
 
 class ScopeDocsTest(unittest.TestCase):

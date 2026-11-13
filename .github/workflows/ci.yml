@@ -223,6 +223,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/inline-exemptions
         run: python3 -m unittest inline_exemptions_test
+      - name: layer-rules tests
+        id: layer-rules
+        if: ${{ !cancelled() }}
+        working-directory: repo/ci-checks/layer-rules
+        run: python3 -m unittest layer_rules_test
       - name: github-dir-pr tests
         id: github-dir-pr
         if: ${{ !cancelled() }}
@@ -324,10 +329,11 @@ jobs:
           GO_INLINE_EXEMPTIONS: ${{ steps.go-inline-exemptions.outcome }}
           TYPESCRIPT_INLINE_EXEMPTIONS: ${{ steps.typescript-inline-exemptions.outcome }}
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
+          LAYER_RULES: ${{ steps.layer-rules.outcome }}
           PYTHON_LAYER_RULES: ${{ steps.python-layer-rules.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS PYTHON_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS LAYER_RULES PYTHON_LAYER_RULES; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

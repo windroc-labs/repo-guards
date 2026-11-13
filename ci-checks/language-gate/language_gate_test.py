@@ -20,7 +20,7 @@ INLINE_EXEMPTIONS = CI_CHECKS / "inline-exemptions/inline_exemptions.py"
 
 MATCHES = {
     "python": ["a.py", "src/b.pyi", "x/a.ipynb", "pyproject.toml", "sub/uv.lock", "dev-requirements.txt"]
-    + ["pytest.toml", "requirements.in"],
+    + ["pytest.toml", "requirements.in", "pkg/.importlinter"],
     "rust": ["src/main.rs", "Cargo.toml", "crates/a/Cargo.lock", ".cargo/config.toml", "a/clippy.toml"],
     "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"]
     + [".prettierrc", "web/.eslintrc", "README", "public/site.webmanifest", ".prettierignore"],

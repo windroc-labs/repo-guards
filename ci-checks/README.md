@@ -31,8 +31,8 @@
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot path、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot path、Generate、Compare、Upload the new snapshot） |
+| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
 | `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 | `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 
@@ -58,11 +58,12 @@ PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Change
 - 合并：表逐层按键合并；列表和其他值整个替换。列表没有例外：要在默认列表上加一条，连默认的一起写。只能改值，不能删键。
 - 每个 job 检出 repo-guards、装好 uv 后，先跑 Apply caller overrides 步：[`config-overrides/config_overrides.py`](config-overrides/config_overrides.py)（只用标准库，要 Python 3.11 及以上）的 `apply` 把各节原地写进检出的 `repo-guards/` 里对应的文件（TOML 重写后不留注释，JSON 缩进 2 格），后面各步照旧读这些文件。
 - 节对应的文件不存在、不是 `.toml` 或 `.json`、读不懂，或者节不是表，合并就失败并报出节名，一个文件都不写。路径不做别的检查。
-- 保留节 `[project."<working-directory>"]` 不是文件，放项目设置，按 workflow 的 `working-directory` 选节；`project` 或其中一节不是表时读设置的步退出 2。现有四项：
+- 保留节 `[project."<working-directory>"]` 不是文件，放项目设置，按 workflow 的 `working-directory` 选节；`project` 或其中一节不是表时读设置的步退出 2。现有五项：
   - `source-dirs`：Python 要查的源码目录，默认 `["src"]`。
   - `layers`：分层，表的数组，从上层到下层排，每层写 `name`、`paths`（glob 列表）、`exit`（出口，一个路径），都相对 `working-directory`。设了才查分层规则（[第 4 层](../architecture/README.md#第-2-项分层规则)第 2 项），由 Checks job 的 Layer rules 步跑；没设时这一步打印一行提示就通过。
   - `test-paths`：glob 列表，相对 `working-directory`，匹配的文件是测试代码，Layer rules 不查。没有默认值。Go 的 `_test.go` 不用写，总是测试代码。
   - `api-snapshot.<语言>`：这个 `working-directory` 下本语言的接口快照文件路径，相对 repo 根目录，`<语言>` 是 `rust`、`python`、`typescript`、`go` 之一。没有默认值：没设就不启用，API snapshot job 只往 job summary 写一行"未启用"，然后通过。每种语言、每个 `working-directory` 各设各的，一种语言只读自己的快照文件，从不改写它。设了别的语言名、值不是字符串，或者路径不合下面的规定，API snapshot job 退出 2，并给出这个路径。路径的规定：在 `.github/` 下；没有空的、`.` 或 `..` 段，也不以 `/` 开头；没有控制字符；不在 `.github/workflows/` 下；不是 `.github/checks/repo-guards.toml` 本身；路径上的文件和每一级目录都不是符号链接，文件存在时是普通文件。文件不存在不算违规：第一次运行就是这样，见[第 1 项接口快照](../architecture/README.md#第-1-项接口快照)。读设置和检查路径的是 `config_overrides.py` 的 `snapshot-path ROOT WORKING_DIRECTORY 语言`，Changes 也用同一份代码。
+  - `api-snapshot-scope.<语言>`：这个 `working-directory` 下本语言接口快照的冻结范围，一组模块前缀（字符串数组），`<语言>` 同上。没设就是整个项目的公开接口，和以前一样。设了就只冻结范围内的条目：范围内仍是多、少、变都失败，范围外的条目不进快照、不比对。前缀的写法：Rust 是从 crate 名起的模块路径（如 `kvm_op::driver`）；Python 是点分模块名（如 `pkg.sub`）；Go 是包的 import 路径（如 `example.com/mod/driver`）；TypeScript 是 `package.json` 的导出子路径（如 `./driver`，包的根入口是 `.`），不带 `*`。设了别的语言名、值不是字符串数组、数组为空，或前缀不合本语言的写法、含控制字符，API snapshot job 的 Read the snapshot settings 步退出 2，并给出这个前缀，和 `api-snapshot.<语言>` 不对时一样；没设 `api-snapshot.<语言>` 时快照不启用，范围照样校验。读设置和检查前缀的是 `config_overrides.py` 的 `snapshot-scope ROOT WORKING_DIRECTORY 语言`。生成器怎样拿到范围、按什么筛条目见[冻结范围](#冻结范围)。
 - 依赖白名单在 [`dependency-allowlist/allowlist.toml`](dependency-allowlist/allowlist.toml) 的 `allow`（见[依赖白名单](#依赖白名单)），Python、TypeScript、Go 的许可证例外在 [`licenses.toml`](licenses.toml) 的 `exceptions`，Rust 的依赖来源、构建脚本白名单和许可证例外在 [`rust/deny.toml`](rust/deny.toml)，knip 的 `entry`、`project` 在 [`typescript/knip.json`](typescript/knip.json)：默认都是共用值或空列表，项目在对应文件那一节改。
 - clippy、tsc、deptry、cargo machete、vitest 读项目自己的文件，不归这个文件管；jscpd 基线照旧是 `.github/checks/jscpd-baseline.json`。
 - 覆盖能放宽安全检查，这是有意的：比如放开 `rust/deny.toml` 的依赖来源（`sources`）、忽略漏洞（`advisories`），加依赖白名单和许可证例外。把关靠 CODEOWNERS：改这个文件要 owner 批准，审的时候看清每一节放宽了什么。
@@ -84,6 +85,7 @@ entry = ["src/main.ts!"]
 [project."."]
 source-dirs = ["src", "tools"]
 api-snapshot.rust = ".github/checks/api-rust.json"
+api-snapshot-scope.rust = ["kvm_op::driver"]
 test-paths = ["tests/**"]
 layers = [
   { name = "api", paths = ["src/api/**"], exit = "src/api" },
@@ -470,7 +472,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 `--snapshot` 可以不存在，脚本只读它，从不改写它。`--artifact`、`--path` 只写进输出，告诉 worker 新快照在哪个 artifact、该放到 repo 的哪个路径。
 
 - 条目：一个 JSON 对象，恰好五个字符串字段：`unit`（所属单元）、`parent`（上级条目，没有上级为 `""`）、`kind`（种类）、`name`（名字）、`signature`（完整签名）。`parent` 写什么由各语言的生成器定。键是（`unit`、`parent`、`kind`、`name`），同一份文件里不能重复。
-- 生成：各语言的生成器在 API snapshot job 的 Generate 步写条目文件，失败时退出 2，不跑比对。Go 的是 [`go/api-snapshot/`](go/README.md#接口快照生成api-snapshot)：只读 runner 平台（GOOS、GOARCH）上编进来的文件，只在别的平台编译的接口查不到；别的限制见那一节。Python 的见[接口快照：Python 生成](#接口快照python-生成)。Rust 的是 [`rust/api-snapshot/`](rust/README.md#接口快照)，用固定的 nightly 从 rustdoc JSON 生成：一个 crate 内部按模块分的层不在它的公开接口里，查不到；只有二进制、没有库 target 的 crate 没有条目；feature 互斥、全部打开编不过的项目退出 2。TypeScript 的见[接口快照：TypeScript 生成](#接口快照typescript-生成)。
+- 生成：各语言的生成器在 API snapshot job 的 Generate 步写条目文件，设了冻结范围时只写范围内的（见[冻结范围](#冻结范围)），失败时退出 2，不跑比对。Go 的是 [`go/api-snapshot/`](go/README.md#接口快照生成api-snapshot)：只读 runner 平台（GOOS、GOARCH）上编进来的文件，只在别的平台编译的接口查不到；别的限制见那一节。Python 的见[接口快照：Python 生成](#接口快照python-生成)。Rust 的是 [`rust/api-snapshot/`](rust/README.md#接口快照)，用固定的 nightly 从 rustdoc JSON 生成：一个 crate 内部按模块分的层不在它的公开接口里，查不到；只有二进制、没有库 target 的 crate 没有条目；feature 互斥、全部打开编不过的项目退出 2。TypeScript 的见[接口快照：TypeScript 生成](#接口快照typescript-生成)。
 - 条目文件：生成器的输出，条目组成的 JSON 数组，顺序不限。
 - 快照文件：也是条目组成的 JSON 数组，第 7 项照这个形状读。条目按键排序（依次比 `unit`、`parent`、`kind`、`name`，按 Unicode 码位），字段按 `unit`、`parent`、`kind`、`name`、`signature` 的顺序，缩进 2 格，非 ASCII 字符原样写，UTF-8，以换行结尾；没有条目时是 `[]`。同样的条目写出来逐字节相同。读的时候只看内容，顺序或缩进不同的快照照样能比。
 
@@ -493,6 +495,20 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 四个语言 workflow 的 API snapshot job 用它：比对后不一致或快照文件不存在（退出 1）时，把新快照作为 artifact 上传，名字由 [`api-snapshot/snapshot_artifact.py`](api-snapshot/snapshot_artifact.py) 生成：`<语言>-api-snapshot-<working-directory 的 sha256 前 16 位>`，理由同覆盖率分片的 artifact（见[覆盖率](#覆盖率)）。artifact 里的文件和配置的快照文件同名。
 - Generate 会构建 PR 的代码，PR 的 `build.rs` 和过程宏在 Compare 之前、同一个 job 里执行。恶意的构建脚本能改掉这个 job 的结果，所以 API snapshot 通过不能代替 owner 审 `build.rs` 和过程宏的改动。
 - 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test snapshot_artifact_test`。
+
+#### 冻结范围
+
+`api-snapshot-scope.<语言>`（见[覆盖默认配置](#覆盖默认配置)）由 API snapshot job 的 Read the snapshot settings 步读出并校验，四种语言用同一种方式交给 Generate 步：环境变量 `API_SNAPSHOT_SCOPE`，值是前缀组成的一行 JSON 数组，顺序同配置，如 `["kvm_op::driver","kvm_op::net"]`。比对不变，只比生成器写出的条目。各语言的生成器照下面做：
+
+- 没设或为空：写整个项目的公开接口，和没有这个设置时一样。
+- 否则只写模块路径在范围内的条目：模块路径等于某个前缀，或在它下面，按段比（`kvm_op::driver` 包括 `kvm_op::driver::io`，不包括 `kvm_op::driverx`）。
+- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。
+- 条目的模块路径：
+  - Rust：crate 名（库 target 的名字）加上条目公开路径里除最后一段外的模块部分。经 `pub use` 到达的每条路径各算各的。trait 的方法、关联常量和关联类型跟着 trait 走。impl 条目和它里面的方法等：impl 头里任何一个本地路径（本 crate 的类型或 trait 的规范路径）所在的模块在范围内，它就在范围内。看三处：实现它的类型，先去掉 `&`、`&mut`、`*const`、`*mut`，所以别的 crate 的 trait 为 `&` 本地类型的实现（如 `impl core::fmt::Display for &kvm_op::driver::Id`）归 `kvm_op::driver`；trait 本身；trait 的泛型参数，所以类型和 trait 都是别的 crate 的实现（如 `impl core::convert::From<kvm_op::driver::Id> for u32`）也归 `kvm_op::driver`。头里一个本地路径都没有的 impl 总在范围内，不会被悄悄漏掉。现在的生成器还查不到上面两例这样没挂在本 crate 公开类型或公开 trait 上的 impl（见 [Rust 模板](rust/README.md#接口快照)），这几条定的是查得到时它们归哪个模块。
+  - Python：条目所在模块的点分名；类的成员跟着类走。
+  - Go：条目所在包的 import 路径。
+  - TypeScript：条目所在的导出子路径（`package.json` 的 `exports` 键，只有 `types` 入口的包是 `.`），每个包都按子路径比。
+- 现状：四种语言的生成器都还没接上，设了范围，Generate 照旧写整个项目的条目。
 
 ### 接口快照：Python 生成
 

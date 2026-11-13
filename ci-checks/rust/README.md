@@ -109,4 +109,6 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 
 不进快照：文档注释、源文件位置、私有和 `#[doc(hidden)]` 条目、blanket impl、不稳定的自动 trait（`Freeze`、`UnsafeUnpin`）；自动 trait 的 impl（`Send`、`Sync`、`Unpin`、`UnwindSafe`、`RefUnwindSafe`）不带 where 子句，因为 rustdoc 是从私有字段的类型推出来的。宏的签名是 rustdoc 给的各分支模式，关联常量的默认值是 rustdoc 印出的文字，改它们的写法也算签名变化。既没挂在本 crate 公开类型上、也没挂在公开 trait 上的 impl（如别的 crate 的 trait 为 `&Id` 实现）查不到。升级 nightly 时 rustdoc 记的标准库路径可能变，快照要重新生成。
 
+冻结范围（`api-snapshot-scope.rust`）：条目怎样归到模块，包括 impl 的归属，见[冻结范围](../README.md#冻结范围)。生成器还没接上，设了也照旧写全部条目。
+
 测试：在 `api-snapshot/` 跑 `RUSTUP_TOOLCHAIN=<api-snapshot.toml 的 toolchain> cargo test --locked`（要先装这个 nightly 和 `python3`），fixture 项目在 `api-snapshot/tests/fixtures/`。

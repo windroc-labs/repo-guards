@@ -36,9 +36,10 @@
 由四个语言 workflow（[`ci-checks/`](../ci-checks/README.md#每个-repo-自己要做的)）的 API snapshot job 跑，`ci.yml` 不用改。比对规则和输出见 [接口快照比对](../ci-checks/README.md#接口快照比对)。
 
 - 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设快照路径，如 `api-snapshot.rust = ".github/checks/api-rust.json"`。路径相对 repo 根目录，要放在 `.github/` 下（已由 CODEOWNERS 锁住），每种语言、每个 `working-directory` 各一份；路径的规定见[覆盖默认配置](../ci-checks/README.md#覆盖默认配置)。没设就不启用。改这个设置按第 21 项单独提一个只改 `.github/` 的 PR。
+- 只冻结一部分：在同一节设 `api-snapshot-scope.<语言>`，列出要冻结的模块前缀，如 `api-snapshot-scope.rust = ["kvm_op::driver"]`，项目自己的代码不用改。范围内仍是多、少、变都失败，范围外的条目不进快照。没设就冻结整个项目的公开接口。写法和生成器的约定见[冻结范围](../ci-checks/README.md#冻结范围)；改它也按第 21 项单独提 PR。
 - 第一次：文件还不存在，job 失败，并把完整快照作为 artifact 上传。把它原样放到配置的路径，提交进同一个 PR。
 - 改接口时：生成结果和快照对不上，job 失败，job summary 列出多、少、变的条目，并写明 artifact 名字和该放的路径。接口改动是有意的，就从这次运行的 artifact 下载新快照，原样放到配置的路径，和代码在同一个 PR 里提交；快照在 `.github/` 下，owner 审 PR 时逐条看快照的 diff。不是有意的，就改回代码。
-- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](../ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](../ci-checks/go/README.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](../ci-checks/README.md#接口快照typescript-生成)。
+- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](../ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](../ci-checks/go/README.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](../ci-checks/README.md#接口快照typescript-生成)。冻结范围四种语言的生成器都还没接上，设了也照旧冻结整个项目。
 
 ### 第 2 项分层规则
 

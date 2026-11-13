@@ -1,0 +1,12 @@
+{
+  "name": "basic",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./extra": "./dist/extra.js",
+    "./internal": null
+  }
+}

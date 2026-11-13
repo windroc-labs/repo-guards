@@ -1,8 +1,12 @@
 import json
 import subprocess
 import sys
+from collections.abc import Iterable
 from fnmatch import fnmatchcase
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "config-overrides"))
+import config_overrides  # noqa: E402
 
 # Each list is the files the language workflow's tools read, not only its source.
 # A glob starting with / is rooted at the repo root; any other matches at any depth. fnmatch's * also matches /.
@@ -77,9 +81,17 @@ def matches(glob: str, path: str) -> bool:
     return fnmatchcase(path, glob) or fnmatchcase(path, f"*/{glob}")
 
 
-def touches(language: str, paths: list[str]) -> list[str]:
+def touches(language: str, paths: list[str], snapshots: Iterable[str] = ()) -> list[str]:
+    # Snapshot paths are the caller's exact file names, never globs.
     globs = PATTERNS[language] + SHARED
-    return [path for path in paths if any(matches(glob, path) for glob in globs)]
+    exact = set(snapshots)
+    return [path for path in paths if path in exact or any(matches(glob, path) for glob in globs)]
+
+
+def snapshot_paths(language: str) -> list[str]:
+    # Every working-directory's API snapshot for this language, from HEAD's repo-guards.toml.
+    settings = config_overrides.read_snapshot_settings(Path.cwd())
+    return [path for (_, configured), path in settings.items() if configured == language]
 
 
 def changed(base: str) -> list[str]:
@@ -101,8 +113,8 @@ def main(argv: list[str]) -> int:
         print(f"unknown language {language!r}; expected one of {', '.join(PATTERNS)}", file=sys.stderr)
         return 2
     try:
-        hits = touches(language, changed(base))
-    except Error as error:
+        hits = touches(language, changed(base), snapshot_paths(language))
+    except (Error, config_overrides.Error) as error:
         print(error, file=sys.stderr)
         return 2
     if hits:

@@ -65,6 +65,10 @@
 
 repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的 `@vitest/coverage-v8`，版本由 repo 自己的 lockfile 固定。`typescript.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上跑 `vitest run`，不选测试文件：repo 自己的 vitest 配置（`test.include`、`test.exclude`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 用另一份配置另跑（如 `vitest run --config vitest.integration.config.ts`）。覆盖率设置全用命令行参数给（provider `v8`、Cobertura 报告、`include`、`exclude`），命令行优先于 repo 的 vitest 配置；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`/* v8 ignore */` 注释算行内豁免。
 
+## 接口快照生成（api-snapshot）
+
+[`api-snapshot/`](api-snapshot/) 生成 TypeScript 的接口快照条目，用 Node 自带的类型剥离直接运行；做法和限制见[接口快照：TypeScript 生成](../README.md#接口快照typescript-生成)。
+
 ## 读写配置（workflow-config）
 
 [`workflow-config/`](workflow-config/) 是 `typescript.yml` 读写 JSON 用的脚本，`node workflow-config.ts <命令>` 直接跑，不用装依赖（要 Node 22.18 及以上）。

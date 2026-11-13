@@ -1,0 +1,12 @@
+{
+  "name": "em",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./package.json": "./package.json",
+    "./styles.css": "./dist/styles.css",
+    "./a": "./dist/a.js",
+    "./*": "./dist/*.js",
+    "./internal/*": null
+  }
+}

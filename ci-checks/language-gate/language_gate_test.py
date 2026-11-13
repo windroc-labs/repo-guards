@@ -12,7 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 import prettier_files
-from language_gate import PATTERNS, PRETTIER, main, touches
+from language_gate import PATTERNS, PRETTIER, config_overrides, main, touches
 
 HERE = Path(__file__).resolve().parent
 CI_CHECKS = HERE.parent
@@ -53,6 +53,15 @@ class Touches(unittest.TestCase):
                 if other != language:
                     with self.subTest(language=language, other=other):
                         self.assertEqual(touches(language, paths), [])
+
+    def test_snapshot_setting_knows_every_gated_language(self):
+        self.assertEqual(set(config_overrides.LANGUAGES), set(PATTERNS))
+
+    def test_snapshot_paths_match_exactly(self):
+        snapshots = [".github/api/go.json", ".github/api/[a]*.json"]
+        self.assertEqual(touches("go", [".github/api/go.json"], snapshots), [".github/api/go.json"])
+        self.assertEqual(touches("go", [".github/api/a.json", "x/.github/api/go.json"], snapshots), [])
+        self.assertEqual(touches("go", [".github/api/[a]*.json"], snapshots), [".github/api/[a]*.json"])
 
     def test_repo_guards_call_and_settings_match_every_language(self):
         for language in PATTERNS:
@@ -227,6 +236,43 @@ class Cli(unittest.TestCase):
         _, _, err = self.run_gate("python", "HEAD^")
         self.assertIn('"a\\n::error::x.py"', err)
         self.assertFalse(any(line.startswith("::") for line in err.splitlines()))
+
+    def configure(self, text: str) -> None:
+        path = self.root / ".github/checks/repo-guards.toml"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        (self.root / ".github/api").mkdir(parents=True, exist_ok=True)
+        (self.root / ".github/api/go.json").write_text("[]\n")
+        self.commit()
+
+    def test_snapshot_only_change_runs_its_language(self):
+        self.configure('[project."."]\napi-snapshot.go = ".github/api/go.json"\n')
+        (self.root / ".github/api/go.json").write_text('[{"x": 1}]\n')
+        self.commit()
+        code, out, err = self.run_gate("go", "HEAD^")
+        self.assertEqual((code, out), (0, "run=true\n"))
+        self.assertIn('".github/api/go.json"', err)
+
+    def test_snapshot_of_another_language_does_not_run(self):
+        self.configure('[project."."]\napi-snapshot.go = ".github/api/go.json"\n')
+        (self.root / ".github/api/go.json").write_text('[{"x": 1}]\n')
+        self.commit()
+        self.assertEqual(self.run_gate("python", "HEAD^")[:2], (0, "run=false\n"))
+
+    def test_snapshot_in_any_working_directory_counts(self):
+        self.configure(
+            '[project."a"]\napi-snapshot.go = ".github/api/a.json"\n'
+            '[project."b"]\napi-snapshot.go = ".github/api/go.json"\n'
+        )
+        (self.root / ".github/api/go.json").write_text('[{"x": 1}]\n')
+        self.commit()
+        self.assertEqual(self.run_gate("go", "HEAD^")[:2], (0, "run=true\n"))
+
+    def test_bad_snapshot_setting_exits_2(self):
+        self.configure('[project."."]\napi-snapshot.golang = ".github/api/go.json"\n')
+        code, out, err = self.run_gate("go", "HEAD^")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("golang", err)
 
     def test_unknown_language_exits_2(self):
         code, out, err = self.run_gate("cobol", "HEAD")

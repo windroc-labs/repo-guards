@@ -1,14 +1,21 @@
 import datetime
 import json
 import math
+import os
 import re
+import stat
 import sys
 import tomllib
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 PROJECT = "project"
 DEFAULT_SOURCE_DIRS = ["src"]
+OVERRIDES = ".github/checks/repo-guards.toml"
+API_SNAPSHOT = "api-snapshot"
+API_SNAPSHOT_SCOPE = "api-snapshot-scope"
+LANGUAGES = ("rust", "python", "typescript", "go")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 ESCAPES = {
     "\\": "\\\\",
@@ -19,9 +26,12 @@ ESCAPES = {
     "\f": "\\f",
     "\r": "\\r",
 }
-USAGE = """usage: config_overrides.py apply ROOT OVERRIDES
+USAGE = f"""usage: config_overrides.py apply ROOT OVERRIDES
        config_overrides.py source-dirs OVERRIDES WORKING_DIRECTORY
+       config_overrides.py snapshot-path REPO_ROOT WORKING_DIRECTORY {{{'|'.join(LANGUAGES)}}}
        config_overrides.py get FILE KEY..."""
+
+Mode = Callable[[str], int | None]
 
 
 class Error(Exception):
@@ -145,11 +155,118 @@ def apply(root: Path, overrides: Path) -> int:
     return 0
 
 
+def section_header(working_directory: str) -> str:
+    return f"[{PROJECT}.{json.dumps(working_directory, ensure_ascii=False)}]"
+
+
+def project_sections(overrides: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    project = overrides.get(PROJECT, {})
+    if not isinstance(project, dict):
+        raise Error(f"[{PROJECT}] is not a table")
+    for working_directory, section in project.items():
+        if not isinstance(section, dict):
+            raise Error(f"{section_header(working_directory)} is not a table")
+    return project
+
+
+def parse_overrides(text: str) -> dict[str, Any]:
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as error:
+        raise Error(f"{OVERRIDES}: {error}") from error
+
+
 def source_dirs(overrides: Path, working_directory: str) -> list[str]:
     if not overrides.exists():
         return DEFAULT_SOURCE_DIRS
-    project = tomllib.loads(overrides.read_text(encoding="utf-8")).get(PROJECT, {})
+    project = project_sections(parse_overrides(overrides.read_text(encoding="utf-8")))
     return project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
+
+
+def language_table(section: dict[str, Any], key: str, working_directory: str) -> dict[str, Any]:
+    """A section's <key>.<language> table, its language names checked."""
+    table = section.get(key, {})
+    where = f"{section_header(working_directory)} {key}"
+    if not isinstance(table, dict):
+        raise Error(f"{where} is not a table")
+    for language in table:
+        if language not in LANGUAGES:
+            raise Error(f"{where}: unknown language {json.dumps(language)}; expected one of {', '.join(LANGUAGES)}")
+    return table
+
+
+def snapshot_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], str]:
+    settings: dict[tuple[str, str], str] = {}
+    for working_directory, section in project_sections(overrides).items():
+        for language, path in language_table(section, API_SNAPSHOT, working_directory).items():
+            if not isinstance(path, str):
+                raise Error(f"{section_header(working_directory)} {API_SNAPSHOT}.{language} is not a string")
+            settings[working_directory, language] = path
+    return settings
+
+
+def read_overrides(root: Path) -> dict[str, Any]:
+    path = root / OVERRIDES
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as error:
+        raise Error(f"{OVERRIDES}: {error}") from error
+    return parse_overrides(text)
+
+
+def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
+    return snapshot_settings(read_overrides(root))
+
+
+def checkout_mode(root: Path) -> Mode:
+    def mode(path: str) -> int | None:
+        try:
+            return os.lstat(root / path).st_mode
+        except (FileNotFoundError, NotADirectoryError):
+            return None
+
+    return mode
+
+
+def snapshot_path_error(path: str, mode: Mode) -> str | None:
+    # Paths are compared with git's output, so only one spelling of each file is accepted.
+    parts = path.split("/")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in path):
+        return "must not contain control characters"
+    if any(part in ("", ".", "..") for part in parts):
+        return 'must be a relative path without empty, "." or ".." parts'
+    if parts[0] != ".github" or len(parts) < 2:
+        return "must be a file under .github/"
+    if parts[1] == "workflows":
+        return "must not be under .github/workflows/"
+    if path == OVERRIDES:
+        return f"must not be {OVERRIDES}"
+    for end in range(1, len(parts) + 1):
+        prefix = "/".join(parts[:end])
+        found = mode(prefix)
+        if found is not None and stat.S_ISLNK(found):
+            return f"{json.dumps(prefix, ensure_ascii=False)} is a symbolic link"
+    found = mode(path)
+    if found is not None and not stat.S_ISREG(found):
+        return "is not a regular file"
+    return None
+
+
+def snapshot_path(root: Path, working_directory: str, language: str) -> str | None:
+    overrides = read_overrides(root)
+    path = snapshot_settings(overrides).get((working_directory, language))
+    # Each generator reads and checks its own scope; a misspelt language belongs to none of them.
+    for section_directory, section in project_sections(overrides).items():
+        language_table(section, API_SNAPSHOT_SCOPE, section_directory)
+    if path is None:
+        return None
+    error = snapshot_path_error(path, checkout_mode(root))
+    if error:
+        where = f"{section_header(working_directory)} {API_SNAPSHOT}.{language}"
+        raise Error(f"{where} = {json.dumps(path, ensure_ascii=False)}: {error}")
+    return path
 
 
 def text(value: Any) -> str:
@@ -174,6 +291,11 @@ def main(argv: list[str]) -> int:
             return apply(Path(args[0]), Path(args[1]))
         if command == "source-dirs" and len(args) == 2:
             print(" ".join(source_dirs(Path(args[0]), args[1])))
+            return 0
+        if command == "snapshot-path" and len(args) == 3 and args[2] in LANGUAGES:
+            path = snapshot_path(Path(args[0]), args[1], args[2])
+            if path is not None:
+                print(path)
             return 0
         if command == "get" and len(args) >= 2:
             for line in get(Path(args[0]), args[1:]):

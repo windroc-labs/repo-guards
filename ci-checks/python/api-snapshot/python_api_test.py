@@ -42,17 +42,23 @@ def project(root: Path, files: dict[str, str], name: str = "demo") -> Path:
     return write(root / "src", files).parent
 
 
-def run(project_dir: Path, output: Path, scope: str | None = None) -> subprocess.CompletedProcess:
-    """Run the generator as the Generate step does: API_SNAPSHOT_SCOPE is scope, or unset for None."""
-    env = {key: value for key, value in os.environ.items() if key != "API_SNAPSHOT_SCOPE"}
-    if scope is not None:
-        env["API_SNAPSHOT_SCOPE"] = scope
+def scope_setting(prefixes: str, working_directory: str = ".", language: str = "python") -> str:
+    """A repo-guards.toml section setting api-snapshot-scope.<language> to prefixes, written as TOML."""
+    return f"[project.{json.dumps(working_directory)}]\napi-snapshot-scope.{language} = {prefixes}\n"
+
+
+def settings(root: Path, text: str) -> Path:
+    return write(root, {".github/checks/repo-guards.toml": text})
+
+
+def run(root: Path, output: Path, working_directory: str = ".", env: dict[str, str] | None = None):
+    """Run the generator as the Generate step does: from the repo root and the working-directory key."""
     return subprocess.run(
-        [sys.executable, "-I", str(SCRIPT), str(project_dir), str(output)],
+        [sys.executable, "-I", str(SCRIPT), str(root), working_directory, str(output)],
         capture_output=True,
         text=True,
         check=False,
-        env=env,
+        env={**os.environ, **(env or {})},
     )
 
 
@@ -452,15 +458,6 @@ class ScopeTest(unittest.TestCase):
             with self.subTest(scope=scope):
                 self.assertEqual(generate(SCOPED, scope), {})
 
-    def test_read_scope(self):
-        for value in (None, "", "[]"):
-            with self.subTest(value=value):
-                self.assertIsNone(python_api.read_scope(value))
-        self.assertEqual(python_api.read_scope('["demo.sub", "other"]'), ("demo.sub", "other"))
-        for value in ("demo.sub", '"demo.sub"', '{"demo": 1}', "[1]", '["demo", null]', "["):
-            with self.subTest(value=value), self.assertRaisesRegex(python_api.Error, "API_SNAPSHOT_SCOPE"):
-                python_api.read_scope(value)
-
     def test_in_scope_compares_by_segment(self):
         scope = ("demo.sub",)
         self.assertTrue(python_api.in_scope("demo.sub", scope))
@@ -468,6 +465,68 @@ class ScopeTest(unittest.TestCase):
         self.assertFalse(python_api.in_scope("demo.subx", scope))
         self.assertFalse(python_api.in_scope("demo", scope))
         self.assertTrue(python_api.in_scope("demo", None))
+
+
+class ReadScopeTest(unittest.TestCase):
+    WHERE = '[project."."] api-snapshot-scope.python'
+
+    def setUp(self):
+        self.root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def read(self, text: str | None, working_directory: str = ".") -> python_api.Scope:
+        if text is not None:
+            settings(self.root, text)
+        return python_api.read_scope(self.root, working_directory)
+
+    def assert_rejected(self, text: str, *needles: str) -> None:
+        with self.assertRaises(python_api.Error) as caught:
+            self.read(text)
+        for needle in needles:
+            self.assertIn(needle, str(caught.exception))
+
+    def test_unset_is_the_whole_project(self):
+        cases = {
+            "no file": None,
+            "no section": '[project."other"]\nsource-dirs = ["src"]\n',
+            "path only": '[project."."]\napi-snapshot.python = ".github/checks/api-python.json"\n',
+            "other language only": scope_setting('["kvm_op::driver"]', language="rust"),
+            "other working directory": scope_setting('["pkg.sub"]', "sub"),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.assertIsNone(self.read(text))
+
+    def test_valid_prefixes_in_order(self):
+        self.assertEqual(self.read(scope_setting('["pkg.sub", "pkg", "_pkg.a1"]')), ("pkg.sub", "pkg", "_pkg.a1"))
+        self.assertEqual(self.read(scope_setting('["paquet.módulo"]')), ("paquet.módulo",))
+
+    def test_own_working_directory_section(self):
+        text = scope_setting('["a.b"]') + scope_setting('["c.d"]', "svc/api")
+        self.assertEqual(self.read(text, "svc/api"), ("c.d",))
+        self.assertEqual(self.read(text, "."), ("a.b",))
+
+    def test_invalid_prefixes_name_key_and_value(self):
+        for prefix in ["pkg/sub", "pkg.", ".pkg", "pkg..sub", "pkg-sub", "1pkg", "", "pkg.sub.*", "a\x00", "a\nb"]:
+            with self.subTest(prefix=prefix):
+                text = scope_setting(json.dumps(["pkg", prefix]))
+                self.assert_rejected(text, self.WHERE, python_api.quote(prefix), "dotted module name")
+
+    def test_empty_list_is_rejected(self):
+        self.assert_rejected(scope_setting("[]"), self.WHERE, "at least one")
+
+    def test_bad_setting_types(self):
+        for text, needle in [
+            ('[project."."]\napi-snapshot-scope = ["a"]\n', '[project."."] api-snapshot-scope is not a table'),
+            (scope_setting('"pkg.sub"'), "is not an array of strings"),
+            (scope_setting("[1]"), "is not an array of strings"),
+            (scope_setting('[["a"]]'), "is not an array of strings"),
+            (scope_setting('{ a = "b" }'), "is not an array of strings"),
+            ('[project]\n"." = 1\n', '[project."."] is not a table'),
+            ('project = "x"\n', "[project] is not a table"),
+            ("[project\n", "cannot read .github/checks/repo-guards.toml"),
+        ]:
+            with self.subTest(text=text):
+                self.assert_rejected(text, needle)
 
 
 class SiteTest(unittest.TestCase):
@@ -635,17 +694,26 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("::", result.stderr.replace("api snapshot (python):", ""))
         self.assertFalse((self.tmp / "out.json").exists())
 
+    def test_working_directory_is_under_the_repo_root(self):
+        root = self.tmp / "repo"
+        project(root / "svc", {"demo/__init__.py": "def open() -> None: ...\n"})
+        result = run(root, self.tmp / "out.json", "svc")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("1 wheel(s)", result.stdout)
+
     def test_unexpected_error_exits_2(self):
         root = project(self.tmp / "p", {"demo/__init__.py": ""})
         stderr = io.StringIO()
         with mock.patch("subprocess.run", side_effect=RuntimeError("boom")), contextlib.redirect_stderr(stderr):
-            code = python_api.cli([str(root), str(self.tmp / "out.json")])
+            code = python_api.cli([str(root), ".", str(self.tmp / "out.json")])
         self.assertEqual(code, 2)
         self.assertIn('api snapshot (python): RuntimeError: "boom"', stderr.getvalue())
 
     def test_usage_exits_2(self):
-        with contextlib.redirect_stderr(io.StringIO()):
-            self.assertEqual(python_api.cli([]), 2)
+        for argv in ([], [str(self.tmp), str(self.tmp / "out.json")]):
+            with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(python_api.cli(argv), 2)
+                self.assertIn("usage: python_api.py REPO_ROOT WORKING_DIRECTORY OUTPUT", stderr.getvalue())
 
 
 DRIVER = {
@@ -659,17 +727,22 @@ class ScopeCliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
 
-    def generate(self, name: str, files: dict[str, str], scope: str | None) -> Path:
+    def generate(self, name: str, files: dict[str, str], scope: str | None, **kwargs) -> Path:
+        """Generate from a project whose repo-guards.toml sets scope (a TOML array) or has no file for None."""
         output = self.tmp / f"{name}.json"
-        result = run(project(self.tmp / name, files), output, scope)
+        root = project(self.tmp / name, files)
+        if scope is not None:
+            settings(root, scope_setting(scope))
+        result = run(root, output, **kwargs)
         self.assertEqual(result.returncode, 0, result.stderr)
         return output
 
     def test_no_scope_output_unchanged(self):
         unset = self.generate("unset", RICH, None).read_bytes()
-        for name, scope in (("empty", ""), ("empty_array", "[]"), ("whole_unit", '["demo"]')):
-            with self.subTest(scope=scope):
-                self.assertEqual(self.generate(name, RICH, scope).read_bytes(), unset)
+        self.assertEqual(self.generate("whole_unit", RICH, '["demo"]').read_bytes(), unset)
+        # The variable WDRC-851 passed the scope in is no longer read.
+        env = {"API_SNAPSHOT_SCOPE": '["demo.sub"]'}
+        self.assertEqual(self.generate("old_env", RICH, None, env=env).read_bytes(), unset)
 
     def test_new_public_item_outside_scope_passes(self):
         scope = '["demo.driver"]'
@@ -695,14 +768,21 @@ class ScopeCliTest(unittest.TestCase):
         self.assertIn('"name": "write"', result.stdout)
 
     def test_scope_named_in_log(self):
-        result = run(project(self.tmp / "p", DRIVER), self.tmp / "out.json", '["demo.driver", "demo.net"]')
+        root = settings(project(self.tmp / "p", DRIVER), scope_setting('["demo.driver", "demo.net"]'))
+        result = run(root, self.tmp / "out.json")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('units: "demo", scope: "demo.driver", "demo.net"', result.stdout)
 
-    def test_unreadable_scope_exits_2(self):
-        result = run(project(self.tmp / "p", DRIVER), self.tmp / "out.json", "demo.driver")
-        self.assertEqual(result.returncode, 2)
-        self.assertIn("api snapshot (python): API_SNAPSHOT_SCOPE is not a JSON array of strings", result.stderr)
+    def test_bad_scope_exits_2_before_building(self):
+        root = settings(project(self.tmp / "p", DRIVER), scope_setting('["demo-driver"]'))
+        with mock.patch("subprocess.run") as build, contextlib.redirect_stderr(io.StringIO()) as stderr:
+            code = python_api.cli([str(root), ".", str(self.tmp / "out.json")])
+        self.assertEqual(code, 2)
+        build.assert_not_called()
+        self.assertIn(
+            'api snapshot (python): [project."."] api-snapshot-scope.python: "demo-driver": must be a dotted module name',
+            stderr.getvalue(),
+        )
         self.assertFalse((self.tmp / "out.json").exists())
 
 
@@ -718,11 +798,23 @@ class PinTest(unittest.TestCase):
         self.assertIn("griffelib==2.4.1", [name for name, _ in blocks])
 
     def test_workflow_installs_with_hashes(self):
-        workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
-        step = workflow.split("      - name: Generate\n", 1)[1].split("      - name: Compare\n", 1)[0]
-        self.assertIn('--require-hashes -r "$api/requirements.txt"', step)
-        self.assertIn('env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" .', step)
-        self.assertIn('"$RUNNER_TEMP/api-entries.json"', step)
+        self.assertIn('--require-hashes -r "$api/requirements.txt"', generate_step())
+
+
+def generate_step() -> str:
+    workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+    return workflow.split("      - name: Generate\n", 1)[1].split("      - name: Compare\n", 1)[0]
+
+
+class WorkflowTest(unittest.TestCase):
+    def test_generate_passes_repo_root_and_working_directory(self):
+        step = generate_step()
+        self.assertIn(
+            'env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" '
+            '"$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$RUNNER_TEMP/api-entries.json"',
+            step,
+        )
+        self.assertNotIn("API_SNAPSHOT_SCOPE", step)
         self.assertNotIn("not wired up", step)
 
 

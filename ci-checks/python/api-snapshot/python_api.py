@@ -2,7 +2,6 @@ import ast
 import json
 import keyword
 import logging
-import os
 import subprocess
 import sys
 import tempfile
@@ -14,6 +13,8 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 PREFIX = "api snapshot (python): "
+OVERRIDES = ".github/checks/repo-guards.toml"
+SCOPE_KEY = "api-snapshot-scope"
 
 try:
     import griffe
@@ -243,17 +244,34 @@ class PromoteOverloads(griffe.Extension):
 Scope = tuple[str, ...] | None
 
 
-def read_scope(value: str | None) -> Scope:
-    """API_SNAPSHOT_SCOPE's module prefixes; None, the whole project, when it is unset, empty or `[]`."""
-    if not value:
-        return None
+def table(value: Any, where: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Error(f"{where} is not a table")
+    return value
+
+
+def read_scope(root: Path, working_directory: str) -> Scope:
+    """The working directory's api-snapshot-scope.python in repo-guards.toml; None, the whole project, when unset."""
     try:
-        prefixes = json.loads(value)
-    except json.JSONDecodeError:
-        prefixes = None
+        overrides = tomllib.loads((root / OVERRIDES).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise Error(f"cannot read {OVERRIDES}: {quote(str(error))}") from error
+    section = f"[project.{quote(working_directory)}]"
+    project = table(overrides.get("project", {}), "[project]")
+    scopes = table(table(project.get(working_directory, {}), section).get(SCOPE_KEY, {}), f"{section} {SCOPE_KEY}")
+    if "python" not in scopes:
+        return None
+    prefixes, where = scopes["python"], f"{section} {SCOPE_KEY}.python"
     if not isinstance(prefixes, list) or not all(isinstance(prefix, str) for prefix in prefixes):
-        raise Error(f"API_SNAPSHOT_SCOPE is not a JSON array of strings: {quote(value)}")
-    return tuple(prefixes) or None
+        raise Error(f"{where} is not an array of strings")
+    if not prefixes:
+        raise Error(f"{where} = []: must list at least one module prefix; leave it unset to freeze the whole project")
+    for prefix in prefixes:
+        if not all(part.isidentifier() for part in prefix.split(".")):
+            raise Error(f'{where}: {quote(prefix)}: must be a dotted module name such as "pkg.sub"')
+    return tuple(prefixes)
 
 
 def in_scope(module: str, scope: Scope) -> bool:
@@ -318,12 +336,14 @@ def write(path: str, content: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: python_api.py PROJECT_DIR OUTPUT", file=sys.stderr)
+    if len(argv) != 3:
+        print("usage: python_api.py REPO_ROOT WORKING_DIRECTORY OUTPUT", file=sys.stderr)
         return 2
-    project, output = Path(argv[0]), argv[1]
+    root, working_directory, output = Path(argv[0]), argv[1], argv[2]
     try:
-        scope = read_scope(os.environ.get("API_SNAPSHOT_SCOPE"))
+        # Read before the build: the build runs the PR's code, which could rewrite the setting file.
+        scope = read_scope(root, working_directory)
+        project = root / working_directory
         with tempfile.TemporaryDirectory() as tmp:
             wheels = build(project, Path(tmp) / "wheels")
             site = Path(tmp) / "site"

@@ -136,6 +136,14 @@ jobs:
         env:
           UV_NO_CONFIG: "1"
         run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" python
+      - name: Layer rules
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        # The step parses the project's code and never runs it. uv looks the interpreter up from /: from the checkout, a
+        # cold lookup runs the project's .venv python, and its .pth files with it. -I -S keeps site-packages out.
+        working-directory: repo
+        run: |
+          python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)
+          "$python" -I -S "$RG/layer-rules/layer_rules.py" python --working-directory "$PROJECT_DIR" --base "$BASE_REF"
       - name: Format
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format ruff-format -- ruff format --check --output-format json --config "$RG/python/pyproject.toml" .

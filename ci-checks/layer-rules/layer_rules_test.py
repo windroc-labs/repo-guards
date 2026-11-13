@@ -597,6 +597,31 @@ layers = [
         self.assertEqual(repo.code, 1, repo.output)
         self.assertEqual((result.returncode, result.stdout), (repo.code, repo.output))
         self.assertIn("::error file=src/api/a.ts,line=1,", result.stdout)
+        usage = subprocess.run([sys.executable, "-I", "-S", str(Path(lr.__file__)), "--help"], capture_output=True, text=True)
+        self.assertRegex(usage.stdout, r"\{python,typescript[,}]")
+
+    def test_scanner_without_its_dependencies_exits_2_with_its_message(self):
+        # The scanner, unmodified, copied where no node_modules holds typescript.
+        copy = Path(tempfile.mkdtemp()) / "imports.ts"
+        self.addCleanup(lambda: copy.unlink() or copy.parent.rmdir())
+        copy.write_bytes((lr.CI_CHECKS / "typescript/layer-rules/imports.ts").read_bytes())
+
+        def runner(argv, **kwargs):
+            return subprocess.run([argv[0], str(copy), *argv[2:]], **kwargs)
+
+        repo = self.ts_repo(head={"src/api/a.ts": 'import "../store/inner";\n'})
+        out = io.StringIO()
+        self.assertEqual(lr.check(repo.root, "typescript", ".", "main", out, None, runner), 2, out.getvalue())
+        self.assertIn("typescript scanner exited with 2: imports.ts: typescript is not installed", out.getvalue())
+
+    def test_missing_scanner_program_exits_2(self):
+        def runner(argv, **kwargs):
+            raise FileNotFoundError(argv[0])
+
+        repo = self.ts_repo(head={"src/api/a.ts": 'import "../store/inner";\n'})
+        out = io.StringIO()
+        self.assertEqual(lr.check(repo.root, "typescript", ".", "main", out, None, runner), 2, out.getvalue())
+        self.assertIn("typescript scanner needs node, which is not installed", out.getvalue())
 
 
 class MoreChecks(Helpers, unittest.TestCase):

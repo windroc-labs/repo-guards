@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
@@ -141,6 +141,13 @@ describe("resolution", () => {
     assert.deepEqual(targets({ "src/a.ts": 'import "./x";\n' }, "src/a.ts", ["src/x.ts"]), [["src/x.ts"]]);
   });
 
+  it("a file on disk but not in files is no target", () => {
+    const root = tempDir();
+    write(root, { "src/a.ts": 'import "./x";\n', "src/x.ts": "" });
+    const request: Request = { files: ["src/a.ts"], scan: ["src/a.ts"], context: [], settings: {} };
+    assert.deepEqual(scanRequest(root, request), []);
+  });
+
   it("tsconfig paths with and without baseUrl", () => {
     const source = { "src/a.ts": 'import "@core/inner";\n', "src/core/inner.ts": "" };
     for (const options of [{ paths: { "@core/*": ["src/core/*"] } }, { baseUrl: "src", paths: { "@core/*": ["core/*"] } }]) {
@@ -210,14 +217,20 @@ describe("resolution", () => {
     assert.deepEqual(targets(files), [["src/x.ts"]]);
   });
 
-  it("package.json imports under nodenext", () => {
-    const files = {
-      "package.json": JSON.stringify({ type: "module", imports: { "#core/*": "./src/core/*" } }),
-      "tsconfig.json": JSON.stringify({ compilerOptions: { module: "nodenext", moduleResolution: "nodenext" } }),
-      "src/a.ts": 'import "#core/inner.js";\n',
-      "src/core/inner.ts": "",
-    };
-    assert.deepEqual(targets(files), [["src/core/inner.ts"]]);
+  it("package.json imports under node16, nodenext and bundler", () => {
+    for (const [module, moduleResolution] of [
+      ["node16", "node16"],
+      ["nodenext", "nodenext"],
+      ["esnext", "bundler"],
+    ]) {
+      const files = {
+        "package.json": JSON.stringify({ type: "module", imports: { "#core/*": "./src/core/*" } }),
+        "tsconfig.json": JSON.stringify({ compilerOptions: { module, moduleResolution } }),
+        "src/a.ts": 'import "#core/inner.js";\n',
+        "src/core/inner.ts": "",
+      };
+      assert.deepEqual(targets(files), [["src/core/inner.ts"]], moduleResolution);
+    }
   });
 
   it("require resolves in CommonJS mode under nodenext", () => {
@@ -295,6 +308,15 @@ describe("command line", () => {
     const result = run([root], JSON.stringify(request));
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stdout, '{"file":"src/a.ts","line":1,"targets":["src/x.ts"]}\n');
+  });
+
+  it("without typescript installed it exits 2 with one imports.ts: line", () => {
+    // The scanner, unmodified, copied where no node_modules holds typescript.
+    const copy = path.join(tempDir(), "imports.ts");
+    writeFileSync(copy, readFileSync(SCRIPT));
+    const result = spawnSync(process.execPath, [copy, tempDir()], { input: "{}", encoding: "utf8", cwd: "/" });
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /^imports\.ts: typescript is not installed: run npm ci --ignore-scripts in .+\n$/);
   });
 
   it("bad usage and bad requests exit 2 with one imports.ts: line", () => {

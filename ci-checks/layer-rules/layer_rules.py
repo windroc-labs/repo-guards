@@ -380,7 +380,11 @@ def scanner_records(language: str, side_root: Path, request: dict[str, Any], run
     scanner = LANGUAGES[language].scanner
     assert scanner is not None
     # From /, outside the caller's tree and the side's directory.
-    result = runner(scanner(side_root), input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False)
+    argv = scanner(side_root)
+    try:
+        result = runner(argv, input=json.dumps(request), capture_output=True, text=True, cwd="/", check=False)
+    except FileNotFoundError as error:
+        raise Error(f"{language} scanner needs {argv[0]}, which is not installed") from error
     if result.returncode != 0:
         last = (result.stderr or "").strip().splitlines()[-1:] or [""]
         raise Error(f"{language} scanner exited with {result.returncode}: {last[0]}")

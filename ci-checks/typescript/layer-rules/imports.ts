@@ -20,7 +20,7 @@ let ts: typeof TS;
 try {
   ts = (await import("typescript")).default;
 } catch {
-  fail(`typescript 未安装：在 ${HERE} 跑 npm ci --ignore-scripts`);
+  fail(`typescript is not installed: run npm ci --ignore-scripts in ${HERE}`);
 }
 
 export interface Request {
@@ -240,7 +240,7 @@ export function scanRequest(root: string, request: Request): Output[] {
 }
 
 function paths(value: unknown, key: string): string[] {
-  if (!Array.isArray(value) || !value.every((p) => typeof p === "string")) throw new Error(`${key} 不是字符串列表`);
+  if (!Array.isArray(value) || !value.every((p) => typeof p === "string")) throw new Error(`${key} is not a list of strings`);
   for (const p of value as string[]) {
     if (p === "" || path.posix.isAbsolute(p) || p.split("/").includes("..")) throw new Error(`bad path ${JSON.stringify(p)}`);
   }
@@ -249,7 +249,7 @@ function paths(value: unknown, key: string): string[] {
 
 function parseRequest(text: string): Request {
   const raw: unknown = JSON.parse(text);
-  if (typeof raw !== "object" || raw === null) throw new Error("request 不是 JSON 对象");
+  if (typeof raw !== "object" || raw === null) throw new Error("the request is not a JSON object");
   const object = raw as Record<string, unknown>;
   const settings = object["settings"];
   return {

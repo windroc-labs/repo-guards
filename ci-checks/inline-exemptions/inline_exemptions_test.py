@@ -512,7 +512,7 @@ class Workflows(unittest.TestCase):
     WORKFLOWS = ie.CI_CHECKS.parent / ".github/workflows"
     GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}"
     # Languages whose Checks job runs a Layer rules step, right after Inline exemptions.
-    LAYER_RULES = frozenset()
+    LAYER_RULES = frozenset({"go"})
 
     @staticmethod
     def steps(job):

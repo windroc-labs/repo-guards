@@ -129,6 +129,16 @@ jobs:
         env:
           UV_NO_CONFIG: "1"
         run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" go
+      - name: Layer rules
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        # depguard with the depguard rules of the project's golangci-lint config, if it has any. uv runs from $RUNNER_TEMP
+        # without config, so neither a .venv nor a uv setting the PR commits is used.
+        env:
+          UV_NO_CONFIG: "1"
+        run: |
+          venv=$RUNNER_TEMP/layer-rules-venv
+          (cd "$RUNNER_TEMP" && uv venv -q --python 3.12 "$venv" && uv pip install -q --python "$venv/bin/python" --require-hashes -r "$RG/go/layer-rules/requirements.txt")
+          "$venv/bin/python" -I "$RG/go/layer-rules/layer_rules.py"
       - name: Format
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: |

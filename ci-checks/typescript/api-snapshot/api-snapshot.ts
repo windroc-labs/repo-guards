@@ -22,6 +22,7 @@ export class Failure extends Error {}
 
 interface Unit {
   name: string;
+  subpath: string;
   declaration: string;
 }
 
@@ -118,7 +119,8 @@ function fail(message: string): never {
   throw new Failure(message);
 }
 
-export function generate(projectDir: string): Entry[] {
+// An empty or absent scope is the whole project.
+export function generate(projectDir: string, scope: readonly string[] = []): Entry[] {
   const root = path.resolve(projectDir);
   const rel = (file: string): string => path.relative(root, file).split(path.sep).join("/") || ".";
   const packages = findPackages(root, root, rel);
@@ -145,6 +147,7 @@ export function generate(projectDir: string): Entry[] {
         );
       }
       owner.set(unit.name, rel(pkg.dir));
+      if (!inScope(unit.subpath, scope)) continue;
       // Read each declaration with the options of the build that emitted it.
       const options = outputs.options.get(unit.declaration) ?? builds.get(pkg.config) ?? {};
       byOptions.set(options, [...(byOptions.get(options) ?? []), unit]);
@@ -153,6 +156,14 @@ export function generate(projectDir: string): Entry[] {
   const entries = new Map<string, Entry>();
   for (const [options, optionUnits] of byOptions) read(optionUnits, options, outputs, entries, rel);
   return [...entries.values()].sort(compare);
+}
+
+// By segment, so "./driver" covers "./driver/io" but not "./driverx"; "." covers every subpath.
+function inScope(subpath: string, scope: readonly string[]): boolean {
+  return (
+    scope.length === 0 ||
+    scope.some((prefix) => prefix === "." || subpath === prefix || subpath.startsWith(`${prefix}/`))
+  );
 }
 
 function compare(a: Entry, b: Entry): number {
@@ -420,7 +431,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
         const declaration = toDeclaration(file, outputs);
         if (winner(expanded, keys) !== subpath || declaration === undefined) continue;
         if (!outputs.text.has(declaration)) continue;
-        found.push({ name: unitName(expanded), declaration });
+        found.push({ name: unitName(expanded), subpath: expanded, declaration });
       }
       continue;
     }
@@ -433,7 +444,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
         `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)}, but no declaration file ${wanted} was built or exists`,
       );
     }
-    found.push({ name: unitName(subpath), declaration });
+    found.push({ name: unitName(subpath), subpath, declaration });
   }
   return found;
 }
@@ -925,6 +936,19 @@ function print(node: ts.Node): string {
     .replace(/;$/, "");
 }
 
+function readScope(value: string | undefined): string[] {
+  if (value === undefined || value === "") return [];
+  let scope: unknown;
+  try {
+    scope = JSON.parse(value);
+  } catch {
+    scope = undefined;
+  }
+  if (!Array.isArray(scope) || !scope.every((prefix) => typeof prefix === "string"))
+    fail(`API_SNAPSHOT_SCOPE ${quote(value)} is not a JSON array of strings`);
+  return scope;
+}
+
 function main(args: string[]): number {
   const [project, out] = args;
   if (
@@ -938,7 +962,7 @@ function main(args: string[]): number {
     return 2;
   }
   try {
-    const entries = generate(project);
+    const entries = generate(project, readScope(process.env["API_SNAPSHOT_SCOPE"]));
     writeFileSync(out, `${JSON.stringify(entries, null, 2)}\n`);
     console.log(`${PREFIX}${entries.length} entries`);
     return 0;

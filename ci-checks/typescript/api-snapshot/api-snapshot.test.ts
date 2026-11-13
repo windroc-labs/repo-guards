@@ -50,8 +50,12 @@ function find(entries: Entry[], unit: string, parent: string, kind: string, name
 function run(
   project: string,
   out: string,
+  scope?: string,
 ): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, project, out], { encoding: "utf8" });
+  const env = { ...process.env };
+  delete env["API_SNAPSHOT_SCOPE"];
+  if (scope !== undefined) env["API_SNAPSHOT_SCOPE"] = scope;
+  const result = spawnSync(process.execPath, [SCRIPT, project, out], { encoding: "utf8", env });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -441,4 +445,102 @@ describe("command line", () => {
     assert.equal(run(dir, out).status, 0);
     assert.equal(readFileSync(out, "utf8"), "[]\n");
   });
+});
+
+describe("freeze scope", () => {
+  const units = (entries: Entry[]): string[] => [...new Set(entries.map((e) => e.unit))];
+  const whole = generate(path.join(TESTDATA, "scoped"));
+
+  it("no scope or an empty one writes the whole project", () => {
+    assert.deepEqual(units(whole), [
+      "kvm",
+      "kvm/driver",
+      "kvm/driver/io",
+      "kvm/driverx",
+      "kvm/net/tcp",
+      "plug",
+      "plug/driver",
+    ]);
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), []), whole);
+  });
+
+  it("a prefix keeps its subpath and those below it by segment, in every package", () => {
+    const entries = generate(path.join(TESTDATA, "scoped"), ["./driver"]);
+    assert.deepEqual(units(entries), ["kvm/driver", "kvm/driver/io", "plug/driver"]);
+    assert.deepEqual(
+      entries,
+      whole.filter((e) => units(entries).includes(e.unit)),
+    );
+  });
+
+  it("prefixes match expanded pattern subpaths, and . covers every subpath", () => {
+    assert.deepEqual(units(generate(path.join(TESTDATA, "scoped"), ["./net", "./driver/io"])), [
+      "kvm/driver/io",
+      "kvm/net/tcp",
+    ]);
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), ["."]), whole);
+  });
+
+  it("a new public export outside the scope leaves the entries unchanged", () => {
+    const dir = copy("scoped");
+    const before = generate(dir, ["./driver"]);
+    writeFileSync(
+      path.join(dir, "src/driverx.ts"),
+      "export const x = 2;\nexport const added = 9;\n",
+    );
+    writeFileSync(
+      path.join(dir, "plug/src/index.ts"),
+      "export const plugged = 4;\nexport const added = 9;\n",
+    );
+    assert.deepEqual(generate(dir, ["./driver"]), before);
+    assert.ok(generate(dir).some((e) => e.name === "added"));
+  });
+
+  it("a new public export inside the scope is a new entry", () => {
+    const dir = copy("scoped");
+    const before = generate(dir, ["./driver"]);
+    writeFileSync(
+      path.join(dir, "src/driver/io.ts"),
+      "export const io = 1;\nexport const added = 9;\n",
+    );
+    const after = generate(dir, ["./driver"]);
+    assert.deepEqual(
+      after.filter((e) => !before.some((b) => keyOf(b) === keyOf(e))),
+      [
+        {
+          unit: "kvm/driver/io",
+          parent: "",
+          kind: "const",
+          name: "added",
+          signature: "const added = 9",
+        },
+      ],
+    );
+  });
+
+  it("the command line reads API_SNAPSHOT_SCOPE; unset, empty and [] write the whole project", () => {
+    const out = mkdtempSync(path.join(scratch, "scope-"));
+    const dir = path.join(TESTDATA, "scoped");
+    for (const [name, scope, expected] of [
+      ["unset", undefined, whole],
+      ["empty", "", whole],
+      ["none", "[]", whole],
+      ["driver", '["./driver"]', generate(dir, ["./driver"])],
+    ] as const) {
+      const file = path.join(out, `${name}.json`);
+      const result = run(dir, file, scope);
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), expected, name);
+    }
+  });
+
+  for (const value of ["{", '"./driver"', "[1]", '["./driver", null]']) {
+    it(`exits 2 on API_SNAPSHOT_SCOPE=${value} and writes no entry file`, () => {
+      const out = path.join(mkdtempSync(path.join(scratch, "scope-")), "entries.json");
+      const result = run(path.join(TESTDATA, "scoped"), out, value);
+      assert.equal(result.status, 2, result.stderr);
+      assert.match(result.stderr, /^api snapshot \(typescript\): API_SNAPSHOT_SCOPE /);
+      assert.throws(() => readFileSync(out));
+    });
+  }
 });

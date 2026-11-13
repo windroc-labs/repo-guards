@@ -143,8 +143,8 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 | 项 | 内容 |
 |---|---|
-| 配置放哪 | `working-directory` 里的 `.golangci.json`、`.golangci.toml`、`.golangci.yaml` 或 `.golangci.yml`，有几个时按这个顺序取第一个（同 golangci-lint），不往上级、下级目录找。要 v2 格式（`version: "2"`），规则写在 `linters.settings.depguard.rules`。`files` 里的 `${base-path}` 是 `working-directory`（配置里设了别的 `run.relative-path-mode` 时按它） |
-| 怎样算有配置 | 文件里 `linters.settings.depguard.rules` 不空。没有文件、或文件里没有 depguard 规则：打印一行提示后通过。v1 格式的文件里有 depguard 设置：失败，提示改成 v2（`golangci-lint migrate`） |
+| 配置放哪 | `working-directory` 里的 `.golangci.json`、`.golangci.toml`、`.golangci.yaml` 或 `.golangci.yml`，有几个时按这个顺序取第一个（同 golangci-lint），不往上级、下级目录找。要 v2 格式（`version: "2"`），规则写在 `linters.settings.depguard.rules`。`files` 里的 `${config-path}` 是 `working-directory`，`${base-path}` 也是（配置里设了别的 `run.relative-path-mode` 时按它）。同 golangci-lint，键名不分大小写，YAML 按 1.2 读（`no`、日期都是字符串） |
+| 怎样算有配置 | 文件里 `linters.settings.depguard.rules` 不空。没有文件、或文件里没有 depguard 规则：打印一行提示后通过。v1 格式的文件里有 depguard 设置：失败，提示改成 v2（`golangci-lint migrate`）。`run`、`linters`、`linters.settings`、`linters.settings.depguard` 不是映射：失败 |
 | 用配置里的哪些 | 只用 `linters.settings.depguard`、`linters.exclusions` 和 `run` 的 `relative-path-mode`、`build-tags`、`tests`：脚本把它们抄进自己生成的配置，只开 depguard，问题不限条数。别的都不用：golangci-lint 会加载 `linters.settings.custom` 写的 Go 插件（不管开没开），`output` 能往别处写文件，`issues.new*` 只查新增 |
 | 结果 | 对 `./...` 跑一次 `golangci-lint run`：有违规退出 1；配置读不懂、被 golangci-lint 拒绝（如不认识的 `list-mode`）或工具跑不起来，退出 2 |
 | 豁免已有违规 | 写在同一个文件里：规则的 `files` 加 `!` 开头的排除，或写 `linters.exclusions`（路径相对 `working-directory`）。行内的 `//nolint:depguard` 按[行内豁免](../README.md#行内豁免)登记 |

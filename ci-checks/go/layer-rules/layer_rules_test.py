@@ -2,6 +2,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -79,6 +80,17 @@ class Load(unittest.TestCase):
             with self.subTest(name):
                 self.assertEqual(load(self.write(name, text)), want)
 
+    def test_keys_ignore_case_like_viper(self):
+        text = "Version: '2'\nLinters:\n  Settings:\n    DepGuard:\n      Rules:\n        Domain:\n          Files: [$all]\n          Deny: [{Pkg: example.com/A}]\n"
+        config = load(self.write(".golangci.yml", text))
+        self.assertEqual(config, {"version": "2", "linters": {"settings": {"depguard": {"rules": {"domain": {"files": ["$all"], "deny": [{"pkg": "example.com/A"}]}}}}}})
+        self.assertIsNotNone(depguard_config(config, Path(".golangci.yml")))
+
+    def test_yaml_scalars_read_as_yaml_1_2(self):
+        # yaml.v3 keeps a date and yes/no as strings; YAML 1.1 would make them a date and booleans.
+        text = "a: 2024-01-01\nb: no\nc: yes\nd: true\ne: False\nf: on\n"
+        self.assertEqual(load(self.write(".golangci.yml", text)), {"a": "2024-01-01", "b": "no", "c": "yes", "d": True, "e": False, "f": "on"})
+
     def test_empty_yaml_is_an_empty_config(self):
         self.assertEqual(load(self.write(".golangci.yml", "")), {})
 
@@ -104,10 +116,31 @@ class Generate(unittest.TestCase):
             v2(enable=["errcheck"]),
             v2(settings={"depguard": {}}),
             v2(settings={"depguard": {"rules": {}}}),
-            {"version": "2", "linters": "x"},
         ]:
             with self.subTest(project):
                 self.assertIsNone(depguard_config(project, Path(".golangci.yml")))
+
+    def test_a_section_that_is_not_a_mapping_is_an_error(self):
+        # golangci-lint rejects these too.
+        for project, where in [
+            ({"version": "2", "linters": "x"}, "linters"),
+            (v2(settings=["depguard"]), "linters.settings"),
+            (v2(settings={"depguard": "x"}), "linters.settings.depguard"),
+            ({**with_rule(), "run": 5}, "run"),
+        ]:
+            with self.subTest(project), self.assertRaisesRegex(Error, f"{where} is not a mapping"):
+                depguard_config(project, Path(".golangci.yml"))
+
+    def test_numeric_version_2_is_v2(self):
+        for value in (2, 2.0, "2"):
+            with self.subTest(value):
+                self.assertIsNotNone(depguard_config({**with_rule(), "version": value}, Path(".golangci.yml")))
+
+    def test_config_path_is_the_config_directory(self):
+        rule = {"rules": {"app": {"files": ["${config-path}/app/**", "!${config-path}/app/x/**", "$test"], "deny": []}}}
+        config = depguard_config(v2(settings={"depguard": rule}), Path("/p/.golangci.yml"))
+        self.assertEqual(config["linters"]["settings"]["depguard"]["rules"]["app"]["files"], ["/p/app/**", "!/p/app/x/**", "$test"])
+        self.assertEqual(rule["rules"]["app"]["files"][0], "${config-path}/app/**")
 
     def test_v1_with_depguard_is_an_error(self):
         for project in [
@@ -237,6 +270,15 @@ class Main(unittest.TestCase):
         self.assertIn("missing", err.getvalue())
 
 
+class Pin(unittest.TestCase):
+    def test_tests_use_the_golangci_lint_go_yml_installs(self):
+        pin = re.compile(r"golangci-lint/v2/cmd/golangci-lint@(v[0-9.]+)")
+        workflows = HERE.parents[2] / ".github/workflows"
+        versions = {name: pin.findall((workflows / name).read_text()) for name in ("go.yml", "ci.yml")}
+        self.assertEqual(len(versions["go.yml"]), 1, versions)
+        self.assertEqual(versions["ci.yml"], versions["go.yml"], versions)
+
+
 @unittest.skipUnless(GOLANGCI_LINT, "GOLANGCI_LINT is not set")
 class EndToEnd(unittest.TestCase):
     """The pinned golangci-lint on testdata/layers, where domain/legacy imports app."""
@@ -278,6 +320,12 @@ class EndToEnd(unittest.TestCase):
         rule = {"rules": {"app": {"files": ["${base-path}/app/**"], "deny": [{"pkg": "example.com/layers/domain/legacy"}]}}}
         result = self.run_script(".golangci.json", v2(settings={"depguard": rule}))
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_config_path_names_the_project(self):
+        rule = {"rules": {"app": {"files": ["${config-path}/app/**"], "deny": [{"pkg": "example.com/layers/domain"}]}}}
+        result = self.run_script(".golangci.json", v2(settings={"depguard": rule}))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("app/app.go", result.stdout)
 
     def test_files_negation_exempts(self):
         rule = {"rules": {"domain": {**DOMAIN_RULE["rules"]["domain"], "files": ["${base-path}/domain/**", "!**/legacy/**"]}}}

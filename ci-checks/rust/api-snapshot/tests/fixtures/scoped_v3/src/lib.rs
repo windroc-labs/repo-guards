@@ -1,4 +1,6 @@
 pub mod driver {
+    pub use core::cell::Cell;
+
     pub struct Id(pub u32);
 
     impl Id {
@@ -32,6 +34,7 @@ pub mod driverx {
 
 pub mod net {
     pub use crate::driver::Id as DriverId;
+    pub use core::cell::RefCell;
 
     #[derive(Clone)]
     pub struct Socket;

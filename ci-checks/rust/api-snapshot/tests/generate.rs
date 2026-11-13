@@ -653,6 +653,8 @@ fn scope_keeps_only_entries_under_its_modules() {
         "function driver::Device open",
         "module driver io",
         "function driver::io read",
+        // Another crate's item re-exported here sits in the re-exporting module.
+        "struct driver Cell",
         // Impls with a local path in an in-scope module: the self type, `&` stripped, or a trait argument.
         "impl driver::Id impl scope_demo::driver::Id",
         "function impl scope_demo::driver::Id get",
@@ -679,6 +681,7 @@ fn scope_keeps_only_entries_under_its_modules() {
         // Another path to an in-scope item counts on its own.
         "function  read",
         "struct net DriverId",
+        "struct net RefCell",
         "struct net Socket",
         "trait net Ping",
         "function net::Ping ping",
@@ -713,6 +716,7 @@ fn no_scope_writes_every_entry() {
         "function  top",
         "function  read",
         "struct net Socket",
+        "struct net RefCell",
         "impl net::Socket impl core::clone::Clone for scope_demo::net::Socket",
     ] {
         assert!(

@@ -1,5 +1,5 @@
 use std::fs;
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -26,7 +26,11 @@ fn binary(root: &Path, stdin: &[u8]) -> (bool, String) {
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
-    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    // A child that exits before reading (a usage error) closes the pipe; its exit code still tells.
+    match child.stdin.take().unwrap().write_all(stdin) {
+        Err(error) if error.kind() == ErrorKind::BrokenPipe => {}
+        written => written.unwrap(),
+    }
     let output = child.wait_with_output().unwrap();
     (
         output.status.success(),

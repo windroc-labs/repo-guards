@@ -542,8 +542,8 @@ class Workflows(unittest.TestCase):
                 names = [self.name(step) for step in steps]
                 at = names.index("Inline exemptions")
                 self.assertLess(names.index("Apply caller overrides"), at)
-                # python.yml, typescript.yml and go.yml run Layer rules between them; it is gated like the rest.
-                self.assertEqual(names[at + 1], "Layer rules" if language in ("python", "typescript", "go") else "Format")
+                # Every language workflow runs Layer rules between them; it is gated like the rest.
+                self.assertEqual(names[at + 1], "Layer rules")
                 step = steps[at]
                 self.assertIn("id: inline-exemptions", step)
                 self.assertIn("working-directory: repo\n", step)

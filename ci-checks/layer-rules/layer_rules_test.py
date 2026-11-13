@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -748,6 +749,172 @@ class GoProtocol(unittest.TestCase):
         self.assertIn('包 "lib" 的文件分在层 "api"、"core" 里', "\n".join(caught.exception.problems))
 
 
+RUST_LAYERS = """
+[project."WD"]
+EXTRA
+layers = [
+  { name = "api", paths = ["src/api/**"], exit = "src/api/mod.rs" },
+  { name = "core", paths = ["src/core/**"], exit = "src/core/mod.rs" },
+  { name = "store", paths = ["src/store/**"], exit = "src/store/mod.rs" },
+]
+"""
+RUST_BASE = {
+    "Cargo.toml": '[package]\nname = "app"\nversion = "0.1.0"\nedition = "2024"\n',
+    "src/lib.rs": "mod api;\nmod core;\nmod store;\nmod util;\n",
+    "src/util.rs": "",
+    "src/api/mod.rs": "",
+    "src/api/a.rs": "",
+    "src/core/mod.rs": "",
+    "src/core/inner.rs": "",
+    "src/core/a.rs": "",
+    "src/core/b.rs": "",
+    "src/store/mod.rs": "",
+    "src/store/inner.rs": "",
+    "src/store/other.rs": "",
+}
+
+
+def rust_config(wd=".", extra=""):
+    return RUST_LAYERS.replace("WD", wd).replace("EXTRA", extra)
+
+
+class RustProtocol(Helpers, unittest.TestCase):
+    """The core's side of the Rust scanner: its command and the targets outside the working-directory."""
+
+    def test_rust_scanner_command(self):
+        manifest = str(lr.CI_CHECKS / "rust/layer-rules/Cargo.toml")
+        tail = ["run", "--release", "--locked", "--quiet", "--manifest-path", manifest, "--"]
+        with unittest.mock.patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": "x"}):
+            self.assertEqual(lr.rust_scanner(Path("/side")), ["cargo", *tail])
+        env = {k: v for k, v in os.environ.items() if k != "RUSTUP_TOOLCHAIN"}
+        pinned = tomllib.loads((lr.CI_CHECKS / "rust/rust-toolchain.toml").read_text())["toolchain"]["channel"]
+        with unittest.mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(lr.rust_scanner(Path("/side")), ["cargo", f"+{pinned}", *tail])
+        self.assertIs(lr.LANGUAGES["rust"].scanner, lr.rust_scanner)
+
+    def check(self, targets):
+        def runner(argv, **kwargs):
+            request = json.loads(kwargs["input"])
+            self.assertEqual(request["context"], ["Cargo.toml"])
+            scanned = "src/api/a.rs" in request["scan"]
+            out = json.dumps({"file": "src/api/a.rs", "line": 1, "targets": targets}) if scanned else ""
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        files = {f"svc/{p}": t for p, t in RUST_BASE.items()}
+        repo = Repo(self, files, rust_config(wd="svc"))
+        repo.commit({"svc/src/api/a.rs": "use shared::x;\n"})
+        out, summary = io.StringIO(), repo.root.parent / "summary.md"
+        summary.write_text("")
+        code = lr.check(repo.root, "rust", "svc", "main", out, str(summary), runner)
+        return code, out.getvalue(), summary.read_text()
+
+    def test_outside_targets_count_as_unassigned(self):
+        code, out, summary = self.check(["../shared", "../../elsewhere", ".."])
+        self.assertEqual(code, 0, out)
+        self.assertIn("未归层 import：3 处（终点不属于任何层：项目里未归层的文件，或 working-directory 之外的 crate）", summary)
+
+    def test_targets_that_do_not_leave_the_working_directory_are_rejected(self):
+        for target in ["../svc/src/core/inner.rs", "../x/../shared", "../shared/./y", "../svc", "..shared"]:
+            with self.subTest(target=target):
+                code, out, _ = self.check([target])
+                self.assertEqual(code, 2, out)
+                self.assertIn("not in the project", out)
+
+
+class RustChecks(Helpers, unittest.TestCase):
+    """The scenarios' Rust rows, end to end with the real scanner (cargo builds it on first use)."""
+
+    def rust(self, head=None, base=None, wd=".", extra="", files=None, toml=None):
+        files = {**RUST_BASE, **(base or {})} if files is None else files
+        prefix = "" if wd == "." else f"{wd}/"
+        repo = Repo(self, {prefix + p: t for p, t in files.items()}, toml or rust_config(wd, extra))
+        if head is not None:
+            repo.commit({prefix + p: t for p, t in head.items()})
+        return repo
+
+    def test_s2_import_of_the_next_layers_exit_passes(self):
+        repo = self.rust(head={"src/api/a.rs": "use crate::core::Thing;\nfn f() { crate::core::g(); }\n"}, wd="svc")
+        self.assert_exit(repo, 0, language="rust", wd="svc")
+
+    def test_s3_cfg_test_code_is_not_checked(self):
+        tests = "#[cfg(test)]\nmod tests {\n    use crate::core::inner::x;\n}\n"
+        self.assert_exit(self.rust(head={"src/api/mod.rs": tests}, extra="test-paths = []"), 0, language="rust")
+        plain = "mod tests {\n    use crate::core::inner::x;\n}\n"
+        self.assert_exit(self.rust(head={"src/api/mod.rs": plain}, extra="test-paths = []"), 1, language="rust")
+
+    def test_s7_new_cycle_in_a_layer(self):
+        repo = self.rust(base={"src/core/a.rs": "use super::b::B;\n"}, head={"src/core/b.rs": "use super::a::A;\n"})
+        self.assert_exit(repo, 1, language="rust")
+        self.assertIn("循环", repo.errors()[0])
+
+    def test_s9_full_path_without_use_counts(self):
+        repo = self.rust(head={"src/api/a.rs": "fn f() {\n    crate::core::inner::f();\n}\n"})
+        self.assert_exit(repo, 1, language="rust")
+        self.assertIn("::error file=src/api/a.rs,line=2,", repo.errors()[0])
+        self.assertIn("绕开出口", repo.errors()[0])
+
+    def test_s9_other_workspace_crate_counts(self):
+        files = {
+            "Cargo.toml": '[workspace]\nmembers = ["crates/api", "crates/corelib"]\n',
+            "crates/api/Cargo.toml": '[package]\nname = "api"\n[dependencies]\ncorelib = { path = "../corelib" }\n',
+            "crates/api/src/lib.rs": "",
+            "crates/corelib/Cargo.toml": '[package]\nname = "corelib"\n',
+            "crates/corelib/src/lib.rs": "pub mod inner;\n",
+            "crates/corelib/src/inner.rs": "",
+        }
+        toml = (
+            '[project."."]\nlayers = [\n'
+            '  { name = "api", paths = ["crates/api/**"], exit = "crates/api/src/lib.rs" },\n'
+            '  { name = "core", paths = ["crates/corelib/**"], exit = "crates/corelib/src/lib.rs" },\n]\n'
+        )
+        repo = self.rust(head={"crates/api/src/lib.rs": "use corelib::inner::x;\n"}, files=files, toml=toml)
+        self.assert_exit(repo, 1, language="rust")
+        self.assertIn("crates/corelib/src/inner.rs", repo.errors()[0])
+        repo = self.rust(head={"crates/api/src/lib.rs": "use corelib::X;\n"}, files=files, toml=toml)
+        self.assert_exit(repo, 0, language="rust")
+
+    def test_s10_mod_declaration_does_not_count(self):
+        self.assert_exit(self.rust(head={"src/api/a.rs": "mod store;\n"}), 0, language="rust")
+
+    def test_s29_one_reference_counts_once(self):
+        before = "use crate::store::inner::a;\n"
+        rows = [
+            ("use crate::store::inner::{a, b};\n", 0),
+            (before + "fn f() {\n    crate::store::inner::f();\n}\n", 1),
+            ("use crate::store::{inner::a, other::b};\n", 1),
+        ]
+        for after, code in rows:
+            with self.subTest(after=after):
+                repo = self.rust(base={"src/api/a.rs": before}, head={"src/api/a.rs": after})
+                self.assert_exit(repo, code, language="rust")
+
+    def test_outside_crate_is_unassigned_std_is_ignored(self):
+        files = {f"svc/{p}": t for p, t in RUST_BASE.items()}
+        files["svc/Cargo.toml"] += '[dependencies]\nshared = { path = "../shared" }\n'
+        files["shared/Cargo.toml"] = '[package]\nname = "shared"\n'
+        files["shared/src/lib.rs"] = ""
+        repo = Repo(self, files, rust_config(wd="svc"))
+        repo.commit({"svc/src/api/a.rs": "use shared::x;\nuse std::fmt;\n"})
+        self.assert_exit(repo, 0, language="rust", wd="svc")
+        self.assertIn("未归层 import：1 处", repo.summary)
+        self.assertNotIn("std", repo.output)
+
+    def test_unparsable_head_file_exits_2(self):
+        repo = self.rust(head={"src/core/inner.rs": "fn (\n"})
+        self.assert_exit(repo, 2, language="rust")
+        self.assertIn('"src/core/inner.rs"', repo.output)
+
+    def test_build_rs_is_never_run(self):
+        payload = 'fn main() { std::fs::write("pwned.txt", "x").unwrap(); }\n'
+        repo = self.rust(head={"build.rs": payload, "src/api/a.rs": "use crate::core::X;\n"})
+        before = set(Path(tempfile.gettempdir()).glob("**/pwned.txt"))
+        self.assert_exit(repo, 0, language="rust")
+        self.assertEqual(list(repo.root.rglob("pwned.txt")), [])
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("**/pwned.txt")), before)
+        status = subprocess.run(["git", "-C", str(repo.root), "status", "--porcelain"], capture_output=True, text=True)
+        self.assertEqual(status.stdout, "")
+
+
 GO_LAYERS = """
 [project."{wd}"]
 {extra}
@@ -883,7 +1050,7 @@ class GoRunner(Helpers, unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    LANGUAGES = ("python", "typescript", "go")
+    LANGUAGES = ("python", "typescript", "go", "rust")
 
     def steps(self, language):
         workflow = lr.CI_CHECKS.parent / f".github/workflows/{language}.yml"
@@ -927,6 +1094,10 @@ class Workflow(unittest.TestCase):
         step = next(s for s in self.steps("go") if s.startswith("name: Layer rules\n"))
         self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
 
+    def test_rust_step_sees_the_project_dir(self):
+        step = next(s for s in self.steps("rust") if s.startswith("name: Layer rules\n"))
+        self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
+
 
 class Docs(unittest.TestCase):
     ROOT = lr.CI_CHECKS.parent
@@ -937,16 +1108,18 @@ class Docs(unittest.TestCase):
         self.assertIn("  - `layers`：", section)
         self.assertIn("  - `test-paths`：", section)
         self.assertIn('layers = [\n  { name = "api"', section)
-        for workflow in ("python.yml", "typescript.yml", "go.yml"):
+        for workflow in ("python.yml", "typescript.yml", "go.yml", "rust.yml"):
             row = f"| `{workflow}` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、"
             self.assertIn(row, ci)
         arch = (self.ROOT / "architecture/README.md").read_text()
         self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
         self.assertIn("\n### 第 2 项分层规则\n", arch)
         item = arch.split("\n### 第 2 项分层规则\n", 1)[1].split("\n### ", 1)[0]
-        self.assertIn("`python.yml`、`typescript.yml` 和 `go.yml` 有这一步", item)
+        self.assertIn("`python.yml`、`typescript.yml`、`go.yml` 和 `rust.yml` 有这一步", item)
         self.assertIn("- 什么算 import（TypeScript）：", item)
         self.assertIn("再把命令里的 `python` 换成 `typescript`", item)
+        self.assertIn("- 什么算 import（Rust）：", item)
+        self.assertIn("Rust 扫描器在 [`ci-checks/rust/layer-rules/`](../ci-checks/rust/layer-rules/)，在该目录跑 `cargo test --locked`", item)
 
 
 class Output(unittest.TestCase):

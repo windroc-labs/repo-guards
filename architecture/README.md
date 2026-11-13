@@ -50,7 +50,7 @@
 | 语言 | 工具 | 规则写在 |
 |---|---|---|
 | Python | import-linter | `pyproject.toml` 的 `[tool.importlinter]`，或 `.importlinter` |
-| TypeScript | dependency-cruiser | `.dependency-cruiser.json`，只认 JSON（见 [TypeScript 模板](../ci-checks/typescript/README.md#分层规则dependency-cruiser)） |
+| TypeScript | dependency-cruiser | 项目自己的 dependency-cruiser 配置文件（`.dependency-cruiser.*`，见 [TypeScript 模板](../ci-checks/typescript/README.md#分层规则dependency-cruiser)） |
 | Go | depguard，经 golangci-lint 跑 | `.golangci.yml` |
 | Rust | 不另外检查 | 各 crate 的 `Cargo.toml` |
 

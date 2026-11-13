@@ -178,28 +178,52 @@ describe("with .dependency-cruiser.json", () => {
   });
 });
 
-describe("never runs the project's code", () => {
+describe("with a script config", () => {
+  const COMMONJS = [".dependency-cruiser.js", ".dependency-cruiser.cjs", ".dependency-cruiser.cts"];
+  const config = (name: string, rules: string): string =>
+    COMMONJS.includes(name)
+      ? `module.exports = { forbidden: ${rules} };\n`
+      : `export default { forbidden: ${rules} };\n`;
+
   for (const name of SCRIPT_CONFIGS) {
-    it(`fails on a lone ${name} without loading it`, (t) => {
-      const dir = project(t, VIOLATION);
-      const marker = path.join(dir, "ran");
-      const commonjs = [
-        ".dependency-cruiser.js",
-        ".dependency-cruiser.cjs",
-        ".dependency-cruiser.cts",
-      ].includes(name);
-      const body = commonjs
-        ? marking(marker, "{ forbidden: [] }")
-        : `import { writeFileSync } from "node:fs";\nwriteFileSync(${JSON.stringify(marker)}, "ran");\nexport default { forbidden: [] };\n`;
-      writeFileSync(path.join(dir, name), body);
-      const done = run(dir);
-      assert.equal(done.status, 1, done.out);
-      assert.ok(done.out.includes(name), done.out);
-      assert.match(done.out, /\.dependency-cruiser\.json/);
-      assert.equal(existsSync(marker), false);
+    it(`runs a lone ${name}: fails on a broken rule, passes without one`, (t) => {
+      const rules = JSON.stringify(RULES.forbidden);
+      const broken = run(project(t, { ...VIOLATION, [name]: config(name, rules) }));
+      assert.equal(broken.status, 1, broken.out);
+      assert.match(broken.out, /a-not-b/);
+      const clean = run(project(t, { ...CLEAN, [name]: config(name, rules) }));
+      assert.equal(clean.status, 0, clean.out);
     });
   }
 
+  it("loads the other locked .dependency-cruiser* files it requires", (t) => {
+    const done = run(
+      project(t, {
+        ...VIOLATION,
+        ".dependency-cruiser.cjs":
+          'module.exports = { forbidden: require("./.dependency-cruiser-rules.cjs") };\n',
+        ".dependency-cruiser-rules.cjs": `module.exports = ${JSON.stringify(RULES.forbidden)};\n`,
+      }),
+    );
+    assert.equal(done.status, 1, done.out);
+    assert.match(done.out, /a-not-b/);
+  });
+
+  it("fails without running a file it requires that is not a locked name", (t) => {
+    const dir = project(t, {
+      ...CLEAN,
+      ".dependency-cruiser.cjs": 'module.exports = { forbidden: require("./rules.cjs") };\n',
+    });
+    const marker = path.join(dir, "ran");
+    writeFileSync(path.join(dir, "rules.cjs"), marking(marker, "[]"));
+    const done = run(dir);
+    assert.equal(done.status, 1, done.out);
+    assert.match(done.out, /rules\.cjs/);
+    assert.equal(existsSync(marker), false);
+  });
+});
+
+describe("never runs the project's other code", () => {
   for (const [label, config, file] of [
     ["an extends target", { ...RULES, extends: "./base.cjs" }, "base.cjs"],
     [

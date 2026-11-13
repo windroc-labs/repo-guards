@@ -117,6 +117,10 @@ export function quote(text: string): string {
   return JSON.stringify(text).replaceAll("#", "\\u0023");
 }
 
+function errorText(error: unknown): string {
+  return quote(error instanceof Error ? error.message : String(error));
+}
+
 function fail(message: string): never {
   throw new Failure(message);
 }
@@ -187,13 +191,13 @@ export function readScope(root: string, workingDirectory: string): string[] {
     text = readFileSync(path.join(root, OVERRIDES), "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
-    fail(`${OVERRIDES}: ${quote(error instanceof Error ? error.message : String(error))}`);
+    fail(`${OVERRIDES}: ${errorText(error)}`);
   }
   let overrides: Record<string, unknown>;
   try {
     overrides = parseToml(text);
   } catch (error) {
-    fail(`${OVERRIDES}: ${quote(error instanceof Error ? error.message : String(error))}`);
+    fail(`${OVERRIDES}: ${errorText(error)}`);
   }
   const project = own(overrides, "project") ?? {};
   if (!isTable(project)) fail("[project] is not a table");
@@ -205,8 +209,9 @@ export function readScope(root: string, workingDirectory: string): string[] {
   const scope = own(scopes, "typescript");
   const where = `${header} ${SCOPE_KEY}`;
   if (scope === undefined) return [];
-  if (!Array.isArray(scope) || !scope.every((prefix) => typeof prefix === "string"))
+  if (!Array.isArray(scope) || !scope.every((prefix) => typeof prefix === "string")) {
     fail(`${where} is not an array of strings`);
+  }
   if (scope.length === 0) {
     fail(
       `${where} = []: must list at least one module prefix; leave it unset to freeze the whole project`,
@@ -264,9 +269,7 @@ function readPackage(
   try {
     json = JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
-    fail(
-      `cannot read ${quote(rel(file))}: ${quote(error instanceof Error ? error.message : String(error))}`,
-    );
+    fail(`cannot read ${quote(rel(file))}: ${errorText(error)}`);
   }
   if (typeof json !== "object" || json === null || Array.isArray(json))
     fail(`${quote(rel(file))} is not a JSON object`);

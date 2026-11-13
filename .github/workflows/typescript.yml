@@ -338,7 +338,7 @@ jobs:
           done < "$RG/typescript/.npmrc"
           npm ci --prefix "$RG/typescript/api-snapshot" --no-audit --no-fund || exit 2
           npm ci --no-audit --no-fund || exit 2
-          node "$RG/typescript/api-snapshot/api-snapshot.ts" --root "$GITHUB_WORKSPACE/repo" --working-directory "$PROJECT_DIR" \
+          node "$RG/typescript/api-snapshot/api-snapshot.ts" --root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR" \
             . "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare

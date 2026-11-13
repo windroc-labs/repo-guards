@@ -567,7 +567,7 @@ class SnapshotJobTest(unittest.TestCase):
         steps = self.steps("typescript")
         self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
         self.assertNotIn("API_SNAPSHOT_SCOPE", steps["Generate"])
-        self.assertIn('--root "$GITHUB_WORKSPACE/repo" --working-directory "$PROJECT_DIR"', steps["Generate"])
+        self.assertIn('--root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR"', steps["Generate"])
 
 
 class ScopeDocsTest(unittest.TestCase):

@@ -613,6 +613,19 @@ describe("freeze scope from repo-guards.toml", () => {
     );
   });
 
+  it("takes a working directory that starts with - in the --flag=value form", () => {
+    const root = repo('[project."-pkg"]\napi-snapshot-scope.typescript = ["./driver"]\n');
+    cpSync(path.join(root, "pkg"), path.join(root, "-pkg"), { recursive: true });
+    const out = path.join(root, "entries.json");
+    const flags = [`--root=${root}`, "--working-directory=-pkg"];
+    const result = run(path.join(root, "-pkg"), out, flags);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(readFileSync(out, "utf8")),
+      generate(path.join(TESTDATA, "scoped"), ["./driver"]),
+    );
+  });
+
   it("exits 2 on an invalid scope and writes no entry file", () => {
     const root = repo('[project."pkg"]\napi-snapshot-scope.typescript = ["./a/*"]\n');
     const out = path.join(root, "entries.json");

@@ -232,7 +232,9 @@ jobs:
         id: layer-rules
         if: ${{ !cancelled() }}
         working-directory: repo/ci-checks/layer-rules
-        run: python3 -m unittest layer_rules_test
+        run: |
+          npm ci --prefix ../typescript/layer-rules --no-audit --no-fund --ignore-scripts
+          python3 -m unittest layer_rules_test
       - name: github-dir-pr tests
         id: github-dir-pr
         if: ${{ !cancelled() }}

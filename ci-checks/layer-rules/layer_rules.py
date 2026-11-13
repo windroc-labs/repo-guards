@@ -47,6 +47,10 @@ def python_scanner(side_root: Path) -> list[str]:
     return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py"), str(side_root)]
 
 
+def typescript_scanner(side_root: Path) -> list[str]:
+    return ["node", str(CI_CHECKS / "typescript/layer-rules/imports.ts"), str(side_root)]
+
+
 @dataclass(frozen=True)
 class Language:
     suffixes: tuple[str, ...]
@@ -63,7 +67,9 @@ class Language:
 LANGUAGES = {
     "python": Language((".py", ".pyi"), marker="__init__.py", recursive=True, scanner=python_scanner),
     "typescript": Language(
-        (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"), context=("**/tsconfig*.json", "**/package.json")
+        (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"),
+        context=("**/tsconfig*.json", "**/package.json"),
+        scanner=typescript_scanner,
     ),
     "rust": Language((".rs",), context=("**/Cargo.toml",)),
     "go": Language((".go",), package_unit=True, context=("**/go.mod",)),

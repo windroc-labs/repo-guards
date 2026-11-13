@@ -462,6 +462,143 @@ class Check(Helpers, unittest.TestCase):
         self.assertIn("--base", repo.output)
 
 
+TS_LAYERS = """
+[project."{wd}"]
+{extra}
+layers = [
+  {{ name = "api", paths = ["src/api/**"], exit = "src/api/index.ts" }},
+  {{ name = "core", paths = ["src/core/**"], exit = "src/core/index.ts" }},
+  {{ name = "store", paths = ["src/store/**"], exit = "src/store/index.ts" }},
+]
+"""
+TS_BASE = {
+    "src/api/index.ts": "",
+    "src/api/a.ts": "",
+    "src/core/index.ts": "",
+    "src/core/inner.ts": "",
+    "src/store/index.ts": "",
+    "src/store/inner.ts": "",
+    "src/util.ts": "",
+}
+
+
+class TypeScript(Helpers, unittest.TestCase):
+    def ts_repo(self, head=None, base=None, extra="", wd="."):
+        prefix = "" if wd == "." else f"{wd}/"
+        files = {f"{prefix}{p}": t for p, t in {**TS_BASE, **(base or {})}.items()}
+        repo = Repo(self, files, TS_LAYERS.format(wd=wd, extra=extra))
+        if head is not None:
+            repo.commit({f"{prefix}{p}": t for p, t in head.items()})
+        return repo
+
+    def assert_ts(self, repo, code, wd="."):
+        self.assert_exit(repo, code, language="typescript", wd=wd)
+
+    def test_s2_import_of_the_next_layers_exit_passes(self):
+        text = 'import { x } from "../core/index";\nimport "../core";\nimport "../core/index.js";\n'
+        repo = self.ts_repo(head={"src/api/a.ts": text}, wd="svc")
+        self.assert_ts(repo, 0, wd="svc")
+
+    def test_s3_test_paths_are_not_checked(self):
+        repo = self.ts_repo(head={"src/api/a.test.ts": 'import "../core/inner";\n'}, extra='test-paths = ["**/*.test.ts"]')
+        self.assert_ts(repo, 0)
+        repo = self.ts_repo(head={"src/api/a.test.ts": 'import "../core/inner";\n'})
+        self.assert_ts(repo, 1)
+
+    def test_s7_new_cycle_in_a_layer(self):
+        repo = self.ts_repo(base={"src/core/a.ts": 'import "./b";\n', "src/core/b.ts": ""})
+        repo.commit({"src/core/b.ts": 'import "./a";\n'})
+        self.assert_ts(repo, 1)
+        self.assertIn("循环", repo.errors()[0])
+
+    def test_s9_static_references_count(self):
+        for text in [
+            'import type { T } from "../core/inner";\n',
+            'export { x } from "../core/inner";\n',
+            'const m = require("../core/inner");\n',
+        ]:
+            with self.subTest(text=text):
+                repo = self.ts_repo(head={"src/api/a.ts": text})
+                self.assert_ts(repo, 1)
+                self.assertIn("绕开出口", repo.errors()[0])
+
+    def test_dynamic_import_does_not_count(self):
+        repo = self.ts_repo(head={"src/api/a.ts": 'const m = await import("../store/inner");\n'})
+        self.assert_ts(repo, 0)
+        self.assertEqual(repo.errors(), [])
+
+    def test_s11_tsconfig_paths(self):
+        for options in ['{"paths": {"@core/*": ["src/core/*"]}}', '{"baseUrl": "src", "paths": {"@core/*": ["core/*"]}}']:
+            with self.subTest(options=options):
+                tsconfig = '{"compilerOptions": ' + options + "}"
+                repo = self.ts_repo(base={"tsconfig.json": tsconfig}, head={"src/api/a.ts": 'import { x } from "@core/inner";\n'})
+                self.assert_ts(repo, 1)
+                self.assertIn("绕开出口", repo.errors()[0])
+
+    def test_s29_one_reference_counts_once(self):
+        repo = self.ts_repo(
+            base={"src/api/a.ts": 'import { a } from "../store/inner";\n'},
+            head={"src/api/a.ts": 'import { a, b } from "../store/inner";\n'},
+        )
+        self.assert_ts(repo, 0)
+
+    def test_s23_python_and_typescript_in_one_directory(self):
+        toml = """
+[project."."]
+layers = [
+  { name = "api", paths = ["src/api/**"], exit = "src/api/__init__.py" },
+  { name = "core", paths = ["src/core/**"], exit = "src/core/__init__.py" },
+  { name = "ui", paths = ["web/ui/**"], exit = "web/ui/index.ts" },
+  { name = "client", paths = ["web/client/**"], exit = "web/client/index.ts" },
+]
+"""
+        files = {
+            "src/api/__init__.py": "",
+            "src/api/a.py": "import core\n",
+            "src/core/__init__.py": "",
+            "src/core/inner.py": "",
+            "web/ui/index.ts": "",
+            "web/ui/a.ts": "",
+            "web/client/index.ts": "",
+            "web/client/inner.ts": "",
+        }
+        repo = Repo(self, files, toml)
+        repo.commit({"web/ui/a.ts": 'import "../client/inner";\n'})
+        self.assert_exit(repo, 0, language="python")
+        self.assert_ts(repo, 1)
+
+    def test_s19_s20_broken_files(self):
+        repo = self.ts_repo(head={"src/core/bad.ts": "const = ;\n"})
+        self.assert_ts(repo, 2)
+        self.assertIn('"src/core/bad.ts"', repo.output)
+        repo = self.ts_repo(base={"src/core/bad.ts": "const = ;\n"}, head={"src/core/bad.ts": 'import "./index";\n'})
+        self.assert_ts(repo, 0)
+        self.assertIn('merge-base 上 "src/core/bad.ts" 解析不了', repo.output)
+
+    def test_s12_code_and_plugins_are_never_run(self):
+        payload = 'import { writeFileSync } from "node:fs";\nwriteFileSync("pwned.txt", "x");\n'
+        tsconfig = '{"extends": "@tsconfig/node22/tsconfig.json", "compilerOptions": {"plugins": [{"name": "evil"}]}}'
+        repo = self.ts_repo(head={"src/api/a.ts": payload, "src/core/inner.ts": payload, "tsconfig.json": tsconfig})
+        before = set(Path(tempfile.gettempdir()).glob("**/pwned.txt"))
+        self.assert_ts(repo, 0)
+        self.assertEqual(list(repo.root.rglob("pwned.txt")), [])
+        self.assertEqual(set(Path(tempfile.gettempdir()).glob("**/pwned.txt")), before)
+
+    def test_command_line(self):
+        repo = self.ts_repo(head={"src/api/a.ts": 'import "../store/inner";\n'})
+        repo.run(language="typescript")
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", str(Path(lr.__file__)), "typescript", "--base", "main"],
+            cwd=repo.root,
+            capture_output=True,
+            text=True,
+            env={k: v for k, v in os.environ.items() if k != "GITHUB_STEP_SUMMARY"},
+        )
+        self.assertEqual(repo.code, 1, repo.output)
+        self.assertEqual((result.returncode, result.stdout), (repo.code, repo.output))
+        self.assertIn("::error file=src/api/a.ts,line=1,", result.stdout)
+
+
 class MoreChecks(Helpers, unittest.TestCase):
     def test_other_languages_layers_are_not_checked(self):
         files = {**BASE, "web/index.ts": "", "web/inner.ts": ""}

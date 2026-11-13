@@ -115,7 +115,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 | 构建 | `go list -export -deps ./...`：编译模块里每个包和它的依赖，从编译器写出的 export data（编译后的类型信息）读接口，不读源码。编译不过就退出 2，编译器的报错原样输出 |
 | 单元 | `go list ./...` 找到的包，名字不是 `main`，且有非测试的 Go 文件；`internal/` 下的包也算。`unit` 是包的完整 import path |
 | 条目 | 包里导出的 `const`、`var`、`func`、`type`。导出的类型下还有 `method`（`*T` 方法集里导出的方法，含嵌入带来的）和 `field`（在 `T` 上能选到的导出字段，含嵌入带来的，按 Go 的选择规则），`parent` 是类型名；接口下是它方法集里导出的方法。测试文件、文档注释、文件位置、非导出的名字都不进 |
-| 签名 | 见下表。不写参数名和返回值名，调用方用不到它们；别名都换成它指向的类型，`interface{}` 写成 `any`；别的包的类型名带完整 import path，本包的不带；union 的各项排序；`[T ~int]` 和 `[T interface{~int}]` 写法相同 |
+| 签名 | 见下表。不写参数名和返回值名，调用方用不到它们；别名都换成它指向的类型，`interface{}` 写成 `any`，`byte`、`rune` 写成 `uint8`、`int32`；别的包的类型名带完整 import path，本包的不带；union 的各项和接口里方法以外的元素都排序；只嵌一个元素的约束写成那个元素，`[T ~int]` 和 `[T interface{~int}]`、`[T comparable]` 和 `[T interface{comparable}]` 写法相同 |
 | 退出码 | 0 写出条目（没有条目时是 `[]`）；2 跑不了：不在模块里、编译不过、export data 读不了、多给了参数 |
 | 测试 | 在该目录跑 `go test ./...`；fixture 在 `testdata/` |
 

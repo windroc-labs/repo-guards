@@ -3,7 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -80,7 +80,8 @@ func TestPublicFuncEntry(t *testing.T) {
 func TestSortedByKey(t *testing.T) {
 	entries := entriesOf(t, fixture(t, "basic"))
 	sorted := slices.IsSortedFunc(entries, func(a, b entry) int {
-		return slices.Compare([]string{a.Unit, a.Parent, a.Kind, a.Name}, []string{b.Unit, b.Parent, b.Kind, b.Name})
+		ka, kb := a.key(), b.key()
+		return slices.Compare(ka[:], kb[:])
 	})
 	if !sorted || len(entries) < 2 {
 		t.Errorf("entries not sorted by (unit, parent, kind, name): %+v", entries)
@@ -155,9 +156,13 @@ func TestDeterministic(t *testing.T) {
 	if first.code != 0 || first.stdout != second.stdout {
 		t.Errorf("two runs differ (exit %d):\n%s\n---\n%s", first.code, first.stdout, second.stdout)
 	}
-	for _, path := range []string{dir, os.Getenv("GOCACHE"), os.Getenv("GOMODCACHE"), os.TempDir()} {
-		if path != "" && strings.Contains(first.stdout, path) {
-			t.Errorf("output contains the absolute path %s", path)
+	if strings.Contains(first.stdout, dir) {
+		t.Errorf("output contains the fixture's absolute path %s", dir)
+	}
+	for _, v := range []string{"GOCACHE", "GOMODCACHE", "GOROOT"} {
+		out, err := exec.Command("go", "env", v).Output()
+		if path := strings.TrimSpace(string(out)); err != nil || path == "" || strings.Contains(first.stdout, path) {
+			t.Errorf("go env %s = %q (%v); the output must not contain it", v, path, err)
 		}
 	}
 }
@@ -166,16 +171,22 @@ func TestSignatures(t *testing.T) {
 	entries := entriesOf(t, fixture(t, "basic"))
 	const unit = "example.com/basic"
 	want := []entry{
+		{unit, "", "func", "Open", "func Open(string) (*File, error)"},
 		{unit, "", "const", "Version", "const Version untyped string"},
 		{unit, "", "const", "Mode", "const Mode Kind"},
-		{unit, "", "type", "Kind", "type Kind int"},
+		{unit, "", "type", "Kind", "type Kind int; implements example.com/basic/internal/store.Sizer"},
+		{unit, "Kind", "method", "Len", "func (Kind) Len() int"},
 		{unit, "", "var", "Default", "var Default *File"},
 		{unit, "", "func", "Join", "func Join(string, ...string) string"},
 		{unit, "", "func", "Map", "func Map[T any, U any]([]T, func(T) U) []U"},
 		{unit, "", "func", "Sum", "func Sum[N ~float64 | ~int](...N) N"},
 		{unit, "", "func", "Max", "func Max[N ~float64 | ~int](N, N) N"},
 		{unit, "", "func", "Any", "func Any(any, any, func(string) string) func(string) string"},
+		{unit, "", "func", "Lookup", "func Lookup(io.Reader) (example.com/basic/internal/store.Item, error)"},
+		{unit, "", "func", "Bytes", "func Bytes([]uint8) int32"},
+		{unit, "", "func", "Use", "func Use(interface{Close() error; Len() int}) error"},
 		{unit, "", "type", "Number", "type Number interface{~float64 | ~int}"},
+		{unit, "", "type", "Key", "type Key interface{comparable; ~string}"},
 		{unit, "", "type", "Closer", "type Closer interface"},
 		{unit, "Closer", "method", "Close", "func (Closer) Close() error"},
 		{unit, "Closer", "method", "Flush", "func (Closer) Flush() error"},
@@ -183,8 +194,13 @@ func TestSignatures(t *testing.T) {
 		{unit, "Sealed", "method", "Name", "func (Sealed) Name() string"},
 		{unit, "", "type", "Callback", "type Callback struct; not comparable"},
 		{unit, "Callback", "field", "Fn", "Fn func()"},
+		{unit, "", "type", "GenFn", "type GenFn[T any] struct"},
+		{unit, "GenFn", "field", "Fn", "Fn func(T)"},
+		{unit, "", "type", "Cmp", "type Cmp[T comparable] struct"},
+		{unit, "", "type", "Str", "type Str[T fmt.Stringer] struct"},
 		{unit, "", "type", "Getter", "type Getter = func(string) string"},
 		{unit, "", "type", "Pair", "type Pair[K comparable, V any] = map[K]V"},
+		{unit, "", "type", "Public", "type Public = hidden"},
 		{unit, "", "type", "List", "type List[E any] struct"},
 		{unit, "List", "method", "Push", "func (*List[E]) Push(E)"},
 		{unit, "List", "method", "Len", "func (List[E]) Len() int"},
@@ -203,18 +219,57 @@ func TestSignatures(t *testing.T) {
 		{unit, "Chans", "field", "In", "In <-chan int"},
 		{unit, "Chans", "field", "Both", "Both chan (<-chan int)"},
 		{unit, "Chans", "field", "Tag", `Tag struct{A int "json:\"a\""}`},
+		{unit, "", "type", "Left", "type Left struct"},
+		{unit, "Left", "field", "X", "X int"},
+		{unit, "Left", "method", "M", "func (Left) M()"},
+		{unit, "", "type", "Right", "type Right struct"},
+		{unit, "Right", "field", "X", "X int"},
+		{unit, "Right", "method", "M", "func (Right) M()"},
+		{unit, "", "type", "Amb", "type Amb struct"},
+		{unit, "Amb", "field", "Left", "embedded Left"},
+		{unit, "Amb", "field", "Right", "embedded Right"},
+		{unit, "", "type", "Shadow", "type Shadow struct"},
+		{unit, "Shadow", "field", "Left", "embedded Left"},
+		{unit, "Shadow", "field", "X", "X string"},
+		{unit, "Shadow", "method", "M", "func (Shadow) M()"},
+		{unit, "", "type", "Box", "type Box[T any] struct"},
+		{unit, "Box", "field", "V", "V T"},
+		{unit, "", "type", "Boxed", "type Boxed struct"},
+		{unit, "Boxed", "field", "Box", "embedded Box[int]"},
+		{unit, "Boxed", "field", "V", "V int"},
 	}
-	for _, w := range want {
-		got, ok := find(entries, w.Unit, w.Parent, w.Kind, w.Name)
-		if !ok {
-			t.Errorf("missing %s %s.%s", w.Kind, w.Parent, w.Name)
-		} else if got.Signature != w.Signature {
-			t.Errorf("%s %s.%s signature\n got %q\nwant %q", w.Kind, w.Parent, w.Name, got.Signature, w.Signature)
+	var got []entry
+	for _, e := range entries {
+		if e.Unit == unit {
+			got = append(got, e)
 		}
 	}
-	for _, name := range []string{"path", "meta", "seal", "items"} {
-		if slices.Contains(names(entries), name) {
-			t.Errorf("unexported %s is an entry", name)
+	for _, w := range want {
+		g, ok := find(got, w.Unit, w.Parent, w.Kind, w.Name)
+		if !ok {
+			t.Errorf("missing %s %s.%s", w.Kind, w.Parent, w.Name)
+		} else if g.Signature != w.Signature {
+			t.Errorf("%s %s.%s signature\n got %q\nwant %q", w.Kind, w.Parent, w.Name, g.Signature, w.Signature)
+		}
+	}
+	for _, g := range got {
+		if _, ok := find(want, g.Unit, g.Parent, g.Kind, g.Name); !ok {
+			t.Errorf("unexpected entry %+v", g)
+		}
+	}
+}
+
+func TestForeignUnitEntries(t *testing.T) {
+	entries := entriesOf(t, fixture(t, "basic"))
+	const unit = "example.com/basic/internal/store"
+	for _, w := range []entry{
+		{unit, "", "type", "Item", "type Item struct"},
+		{unit, "Item", "field", "Key", "Key string"},
+		{unit, "", "type", "Sizer", "type Sizer interface"},
+		{unit, "Sizer", "method", "Len", "func (Sizer) Len() int"},
+	} {
+		if g, ok := find(entries, w.Unit, w.Parent, w.Kind, w.Name); !ok || g != w {
+			t.Errorf("entry %+v (found %v), want %+v", g, ok, w)
 		}
 	}
 }
@@ -222,7 +277,7 @@ func TestSignatures(t *testing.T) {
 func TestUniqueKeys(t *testing.T) {
 	seen := map[[4]string]bool{}
 	for _, e := range entriesOf(t, fixture(t, "basic")) {
-		key := [4]string{e.Unit, e.Parent, e.Kind, e.Name}
+		key := e.key()
 		if seen[key] {
 			t.Errorf("duplicate key %v", key)
 		}

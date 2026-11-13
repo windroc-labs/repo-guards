@@ -386,3 +386,39 @@ fn a_dependency_on_the_parent_directory_is_outside() {
         ]
     );
 }
+
+#[test]
+fn cfg_test_on_macros_arms_fields_and_variants_is_skipped() {
+    let text = "\
+fn w(x: u8) {
+    #[cfg(test)]
+    crate::store::inner::m!();
+    match x {
+        #[cfg(test)]
+        0 => crate::store::inner::f(),
+        _ => (),
+    }
+    let _ = S {
+        #[cfg(test)]
+        a: crate::store::inner::f(),
+    };
+}
+struct S {
+    #[cfg(test)]
+    a: crate::store::inner::T,
+}
+enum E {
+    #[cfg(test)]
+    V(crate::store::inner::T),
+}
+extern \"C\" {
+    #[cfg(test)]
+    fn g(t: crate::store::inner::T);
+}
+fn z() { crate::store::other::f(); }
+";
+    assert_eq!(
+        scan("cfg-more", &app(&[(API, text)]), &[API]),
+        [site(API, 26, &[OTHER])]
+    );
+}

@@ -743,10 +743,48 @@ impl<'ast> Visit<'ast> for Walker<'_> {
         let skip = match stmt {
             syn::Stmt::Local(local) => is_test(&local.attrs),
             syn::Stmt::Expr(expr, _) => expr_attrs(expr).is_some_and(|attrs| is_test(attrs)),
+            syn::Stmt::Macro(m) => is_test(&m.attrs),
             _ => false,
         };
         if !skip {
             visit::visit_stmt(self, stmt);
+        }
+    }
+
+    fn visit_arm(&mut self, arm: &'ast syn::Arm) {
+        if !is_test(&arm.attrs) {
+            visit::visit_arm(self, arm);
+        }
+    }
+
+    fn visit_field(&mut self, field: &'ast syn::Field) {
+        if !is_test(&field.attrs) {
+            visit::visit_field(self, field);
+        }
+    }
+
+    fn visit_field_value(&mut self, field: &'ast syn::FieldValue) {
+        if !is_test(&field.attrs) {
+            visit::visit_field_value(self, field);
+        }
+    }
+
+    fn visit_variant(&mut self, variant: &'ast syn::Variant) {
+        if !is_test(&variant.attrs) {
+            visit::visit_variant(self, variant);
+        }
+    }
+
+    fn visit_foreign_item(&mut self, item: &'ast syn::ForeignItem) {
+        let attrs = match item {
+            syn::ForeignItem::Fn(f) => &f.attrs,
+            syn::ForeignItem::Static(s) => &s.attrs,
+            syn::ForeignItem::Type(t) => &t.attrs,
+            syn::ForeignItem::Macro(m) => &m.attrs,
+            _ => return visit::visit_foreign_item(self, item),
+        };
+        if !is_test(attrs) {
+            visit::visit_foreign_item(self, item);
         }
     }
 

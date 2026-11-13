@@ -64,7 +64,7 @@ layers = [
   - 每个 `use`（含 `pub use`）、`extern crate` 算 1 条，一个 `use` 的分组指向几个文件时每个文件各 1 条。
   - 不经 `use` 的完整路径每处算 1 条，如 `crate::core::inner::f()`：两段以上，以 `crate`、`self`、`super`、`::`、子模块名或依赖的 crate 名开头。以 `use` 引入的名字开头的路径，走到 `use` 指向的文件之外才算，如 `use crate::core;` 之后的 `core::inner::f()`。
   - 不算：`mod x;` 声明，属性（`#[…]`）和可见性（`pub(crate)`）里的路径，宏里的代码。
-  - `#[cfg(test)]`（含 `cfg(all(test, …))`）的项和语句、`#![cfg(test)]` 的文件是测试代码，不查。`#[cfg(test)] mod x;` 指向的文件只在声明它的文件在层里时才算测试代码。
+  - `#[cfg(test)]`（含 `cfg(all(test, …))`）的项、语句、match 分支、字段和枚举成员，`#![cfg(test)]` 的文件，是测试代码，不查。`#[cfg(test)] mod x;` 指向的文件只在声明它的文件在层里时才算测试代码。
   - 路径按 Cargo 的布局解析到模块文件：`crate::a::b` 是 crate 根文件所在目录下的 `a/b.rs` 或 `a/b/mod.rs`，没有就往短里找；行内模块算所在文件，`#[path]` 不看。
   - 别的 crate 按 `Cargo.toml` 里带 `path` 的依赖解析，含 `workspace = true` 和 `package` 改名。`working-directory` 之外的 crate 算未归层，标准库和 registry 上的 crate 不管。
   - 只用 `syn` 解析，不构建、不运行项目代码。扫描器是 repo-guards 自己的 crate，`cargo run --release` 在 `/` 下构建并运行它；工具链用这个 job 的 `RUSTUP_TOOLCHAIN`，没设时用 repo-guards 固定的版本。

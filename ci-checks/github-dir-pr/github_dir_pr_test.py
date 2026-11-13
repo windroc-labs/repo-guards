@@ -1,4 +1,5 @@
 import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -29,7 +30,7 @@ def git(root, *args):
     return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True).stdout
 
 
-class Pr(unittest.TestCase):
+class Repo(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -58,6 +59,8 @@ class Pr(unittest.TestCase):
             code = github_dir_pr.check(self.root, "main")
         return code, out.getvalue()
 
+
+class Pr(Repo):
     def test_only_code(self):
         self.assertEqual(self.pr({"a.py": "x\n"}, {"a.py": "y\n"})[0], 0)
 
@@ -109,6 +112,137 @@ class Pr(unittest.TestCase):
 
     def test_deleting_overrides_with_code_fails(self):
         self.assertEqual(self.pr({OVERRIDES: BASE_TOML, "a.py": "x\n"}, {OVERRIDES: None, "a.py": "y\n"})[0], 1)
+
+
+RUST_SNAPSHOT = ".github/checks/api-rust.json"
+
+
+def snapshot_toml(**paths):
+    """BASE_TOML plus [project."."] api-snapshot paths, e.g. rust=".github/checks/api-rust.json"."""
+    lines = [f'{language} = "{path}"' for language, path in paths.items()]
+    return BASE_TOML + '\n[project."."."api-snapshot"]\n' + "\n".join(lines) + "\n"
+
+
+class Snapshot(Repo):
+    """Item 21 lets the snapshot files the merge-base configures change beside other files."""
+
+    def base(self, toml, **extra):
+        return {OVERRIDES: toml, "src/lib.rs": "pub fn a() {}\n", **extra}
+
+    def test_s18_snapshot_and_code_pass(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        code, out = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", RUST_SNAPSHOT: '["b"]\n'},
+        )
+        self.assertEqual((code, out), (0, ""))
+
+    def test_new_snapshot_file_with_code_passes(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        code, _ = self.pr(self.base(toml), {"src/lib.rs": "pub fn b() {}\n", RUST_SNAPSHOT: "[]\n"})
+        self.assertEqual(code, 0)
+
+    def test_s19_snapshot_exemption_and_code_pass(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        code, _ = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {
+                "src/lib.rs": "pub fn b() {}\n",
+                RUST_SNAPSHOT: '["b"]\n',
+                OVERRIDES: toml.replace("count = 1", "count = 2"),
+            },
+        )
+        self.assertEqual(code, 0)
+
+    def test_s20_changing_the_snapshot_path_with_code_fails(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        moved = ".github/api/rust.json"
+        code, out = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", OVERRIDES: toml.replace(RUST_SNAPSHOT, moved), moved: "[]\n"},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(f"  {json.dumps(OVERRIDES)}", out)
+
+    def test_setting_a_snapshot_path_with_code_fails(self):
+        code, _ = self.pr(
+            self.base(BASE_TOML),
+            {"src/lib.rs": "pub fn b() {}\n", OVERRIDES: snapshot_toml(rust=RUST_SNAPSHOT), RUST_SNAPSHOT: "[]\n"},
+        )
+        self.assertEqual(code, 1)
+
+    def test_s26_workflow_path_is_not_exempt(self):
+        workflow = ".github/workflows/ci.yml"
+        code, out = self.pr(
+            self.base(snapshot_toml(rust=workflow), **{workflow: "on: push\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", workflow: "on: pull_request\n"},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(f"  {json.dumps(workflow)}", out)
+
+    def test_overrides_path_is_not_exempt(self):
+        toml = snapshot_toml(rust=OVERRIDES)
+        head = {"src/lib.rs": "pub fn b() {}\n", OVERRIDES: toml.replace("minLines = 9", "minLines = 90")}
+        self.assertEqual(self.pr(self.base(toml), head)[0], 1)
+
+    def test_other_working_directories_and_languages_pass(self):
+        go = ".github/api/go.json"
+        toml = snapshot_toml(rust=RUST_SNAPSHOT) + f'\n[project."svc"."api-snapshot"]\ngo = "{go}"\n'
+        code, _ = self.pr(
+            self.base(toml, **{go: "[]\n"}),
+            {"svc/main.go": "package main\n", go: '["Open"]\n'},
+        )
+        self.assertEqual(code, 0)
+
+    def test_snapshot_beside_another_github_file_fails_and_lists_only_the_other(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        code, out = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", RUST_SNAPSHOT: '["b"]\n', ".github/CODEOWNERS": "* @o\n"},
+        )
+        self.assertEqual(code, 1)
+        self.assertIn('  ".github/CODEOWNERS"', out)
+        self.assertNotIn(json.dumps(RUST_SNAPSHOT), out)
+
+    def test_failure_names_the_snapshot_exception(self):
+        _, out = self.pr({"a.py": "x\n"}, {".github/x.yml": "a\n", "a.py": "y\n"})
+        self.assertIn('[project."<working-directory>"] api-snapshot', out)
+
+    def test_snapshot_made_a_symlink_fails(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        self.write(self.base(toml, **{RUST_SNAPSHOT: "[]\n"}))
+        git(self.root, "checkout", "-q", "-b", "pr")
+        (self.root / RUST_SNAPSHOT).unlink()
+        (self.root / RUST_SNAPSHOT).symlink_to("../../src/lib.rs")
+        self.write({"src/lib.rs": "pub fn b() {}\n"})
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(github_dir_pr.check(self.root, "main"), 1)
+
+    def test_snapshot_under_a_symlinked_directory_is_not_exempt(self):
+        self.write(self.base(snapshot_toml(rust=".github/api/rust.json"), **{"api/rust.json": "[]\n"}))
+        (self.root / ".github/api").symlink_to("../api")
+        self.write({})
+        self.assertEqual(github_dir_pr.snapshot_files(self.root, git(self.root, "rev-parse", "HEAD").strip()), set())
+
+    def test_unparsable_overrides_at_merge_base_exempt_nothing(self):
+        code, _ = self.pr(
+            {OVERRIDES: "[[", RUST_SNAPSHOT: "[]\n", "src/lib.rs": "x\n"},
+            {"src/lib.rs": "y\n", RUST_SNAPSHOT: '["b"]\n'},
+        )
+        self.assertEqual(code, 1)
+
+    def test_invalid_snapshot_settings_at_merge_base_exempt_nothing(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT, cobol=".github/api/cobol.json")
+        code, _ = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", RUST_SNAPSHOT: '["b"]\n'},
+        )
+        self.assertEqual(code, 1)
+
+    def test_no_overrides_at_merge_base_exempts_nothing(self):
+        code, _ = self.pr({"src/lib.rs": "x\n"}, {"src/lib.rs": "y\n", RUST_SNAPSHOT: "[]\n"})
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,8 @@ def compare(snapshot: Path, entries: Path, tmp: Path) -> subprocess.CompletedPro
     )
 
 
+STUB_OVERLOADS = "from typing import overload\n@overload\ndef g(x: int) -> int: ...\n@overload\ndef g(x: bytes) -> bytes: ...\n"
+BOTH = "(x: int) -> int\n(x: bytes) -> bytes"
 RICH = {
     "demo/__init__.py": '''\
         """Demo package."""
@@ -323,6 +325,33 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(
             entries[("demo", "g")], python_api.Entry("demo", "demo", "function", "g", "(x: int) -> int\n(x: bytes) -> bytes")
         )
+
+    def test_stub_only_overloads_star_export(self):
+        entries = generate({"demo/__init__.pyi": "from ._impl import *\n", "demo/_impl.pyi": STUB_OVERLOADS})
+        self.assertEqual(entries[("demo", "g")], python_api.Entry("demo", "demo", "function", "g", BOTH))
+
+    def test_stub_only_overloads_merged_with_source(self):
+        entries = generate(
+            {
+                "demo/__init__.py": "class C:\n    pass\n",
+                "demo/__init__.pyi": STUB_OVERLOADS
+                + "class C:\n"
+                + "    @overload\n    def g(self, x: int) -> int: ...\n"
+                + "    @overload\n    def g(self, x: bytes) -> bytes: ...\n",
+                "demo/sub.py": "",
+                "demo/sub.pyi": STUB_OVERLOADS,
+                "demo/attr.py": "g = len\n",
+                "demo/attr.pyi": STUB_OVERLOADS,
+            }
+        )
+        self.assertEqual(entries[("demo", "g")], python_api.Entry("demo", "demo", "function", "g", BOTH))
+        self.assertEqual(entries[("demo.C", "g")].signature, "(self, x: int) -> int\n(self, x: bytes) -> bytes")
+        self.assertEqual(entries[("demo.sub", "g")], python_api.Entry("demo", "demo.sub", "function", "g", BOTH))
+        self.assertEqual(entries[("demo.attr", "g")], python_api.Entry("demo", "demo.attr", "function", "g", BOTH))
+
+    def test_stub_overloads_attach_to_source_implementation(self):
+        entries = generate({"demo/__init__.py": "def g(x):\n    return x\n", "demo/__init__.pyi": STUB_OVERLOADS})
+        self.assertEqual(entries[("demo", "g")], python_api.Entry("demo", "demo", "function", "g", BOTH))
 
     def test_labels_sorted(self):
         entries = generate(

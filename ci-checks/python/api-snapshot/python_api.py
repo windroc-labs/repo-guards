@@ -224,20 +224,19 @@ def is_dunder(name: str) -> bool:
     return len(name) > 4 and name.startswith("__") and name.endswith("__")
 
 
-def promote_overloads(obj: Any) -> None:
+class PromoteOverloads(griffe.Extension):
     """Make each @overload-only function (as in .pyi stubs) a member, as griffe does once an implementation follows.
 
-    Griffe keeps such declarations apart from the members, so without this they would not be inherited,
-    resolve as export targets, or override a base class method.
+    Griffe keeps such declarations apart from the members, where stub merging and `import *` expansion miss them,
+    so this runs per module and class as soon as its body is visited, before either step. The overloads stay in
+    `obj.overloads` too: merging a .pyi into its .py reads them there to attach them to the .py's implementation.
     """
-    for name, overloads in list(obj.overloads.items()):
-        if overloads and name not in obj.members:
-            overloads[0].overloads = overloads
-            obj.set_member(name, overloads[0])
-            del obj.overloads[name]
-    for member in obj.members.values():
-        if not member.is_alias and (member.is_module or member.is_class):
-            promote_overloads(member)
+
+    def on_members(self, *, obj: Any, **kwargs: Any) -> None:
+        for name, overloads in obj.overloads.items():
+            if overloads and name not in obj.members:
+                overloads[0].overloads = overloads
+                obj.set_member(name, overloads[0])
 
 
 def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[Entry]) -> None:
@@ -261,15 +260,15 @@ def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[E
 
 
 def generate(site: Path, names: list[str]) -> list[Entry]:
-    loader = griffe.GriffeLoader(search_paths=[site], allow_inspection=False)
+    loader = griffe.GriffeLoader(
+        extensions=griffe.load_extensions(PromoteOverloads()), search_paths=[site], allow_inspection=False
+    )
     modules = []
     for unit in names:
         try:
             modules.append(loader.load(unit, try_relative_path=False))
         except (griffe.GriffeError, ImportError) as error:
             raise Error(f"cannot load {quote(unit)}: {type(error).__name__}: {quote(str(error))}") from error
-    for module in modules:
-        promote_overloads(module)
     entries: list[Entry] = []
     for unit, module in zip(names, modules, strict=True):
         entries.append(Entry(unit, "", "module", unit, ""))

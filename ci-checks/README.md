@@ -484,3 +484,17 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 转义：条目来自 PR 的代码，快照文件的内容也当作不可信。log 里的名字、签名、路径都写成 JSON 字符串，`#` 也转义成 `\u0023`，所以 log 里没有以 `::` 开头的行（workflow 命令），也没有 runner 在行中也认的旧命令格式 `##[`。summary 里它们放在代码块里，显示原文，不渲染成链接、表格或其他 Markdown；代码块的围栏比内容里最长的一串反引号多一个，内容关不掉它。
 - 四个语言 workflow 的 API snapshot job 用它：比对后不一致或快照文件不存在（退出 1）时，把新快照作为 artifact 上传，名字由 [`api-snapshot/snapshot_artifact.py`](api-snapshot/snapshot_artifact.py) 生成：`<语言>-api-snapshot-<working-directory 的 sha256 前 16 位>`，理由同覆盖率分片的 artifact（见[覆盖率](#覆盖率)）。artifact 里的文件和配置的快照文件同名。
 - 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test snapshot_artifact_test`。
+
+### 接口快照：TypeScript 生成
+
+`typescript.yml` 的 API snapshot job 在 Generate 步跑 [`typescript/api-snapshot/api-snapshot.ts`](typescript/api-snapshot/api-snapshot.ts)，写出给[接口快照比对](#接口快照比对)的条目文件。Generate 步先按 [`typescript/.npmrc`](typescript/.npmrc)（`ignore-scripts`）`npm ci` 装生成器和项目的依赖，不跑任何 install 脚本。
+
+- 构建：每个有入口的 `package.json`，用从它所在目录往上、到 `working-directory` 为止最近的 `tsconfig.json`，以 TypeScript 6.0.3 的编译器 API 构建，同一个 `tsconfig.json` 只建一次。构建在内存里进行：加上 `declaration`，emit 只交给内存里的回调，编译器 host 的写文件一调用就出错，所以 `tsconfig.json` 里的 `outDir`、`declarationDir`、`tsBuildInfoFile`、`generateTrace` 等设置都写不出任何文件。`references` 里引用的项目不单独构建，用它们的源码代替还没构建的 `.d.ts`。tsc 不执行项目代码，这一步也就不执行 PR 的代码。
+- 范围：`working-directory` 下每个 `package.json`（不进 `node_modules` 和以 `.` 开头的目录）的 `exports`，没有 `exports` 时用 `types` 或 `typings`。每个子路径一个单元，名字是包名加子路径（`.` 就是包名，如 `pkg`、`pkg/extra`）；没有 `name` 的包用它相对 `working-directory` 的目录代替包名。条件对象按写的顺序取第一个 `types`、`import`、`require`、`node` 或 `default`；`null` 的子路径不算；`*` 子路径展开成构建出的每个匹配的 `.d.ts`。入口是 `.js` 时读同名的 `.d.ts`，是源码 `.ts` 时读它构建出的 `.d.ts`，手写的 `.d.ts` 直接读。两个包给出同名的单元时退出 2。没有入口的包（app、脚本）没有条目。
+- 条目：从入口 `.d.ts` 导出的每个名字（含 `export *`、`export * as ns`、改名导出），按导出的名字记 `name`；顶层的 `parent` 为 `""`，类、interface、namespace 的成员以导出的点分路径为 `parent`（如 `Box`、`util.Shapes`）。`kind`：`function`、`class`、`interface`、`type`、`enum`、`const`、`let`、`var`、`namespace`；成员是 `constructor`、`method`、`property`、`get`、`set`、`call`、`construct`、`index`，静态成员加 `static ` 前缀。`private` 和 `#` 私有成员不算，`protected` 算。
+- 签名：照 `.d.ts` 里的声明打印，去掉 `export`、`declare`、`default` 和所有注释，一行。类和 interface 的签名是不含成员的头（类型参数、`extends`、`implements`），成员各自一个条目；枚举成员和值写在枚举的签名里。同名的重载、同一 interface 的几个调用或索引签名合成一个条目，按声明顺序每个一行。默认值从同一次构建、同一个源文件输出的 `.js` 读：只有一个签名的顶层函数、顶层类的构造函数和方法、值是箭头函数或函数表达式的顶层 `const`，参数写成 `x: number = 5`。
+- 不进条目：文档注释、源文件位置、非公开的声明。所以只改文档注释，或把函数挪到同一单元的另一个文件、再从入口导出，条目不变。签名里没有绝对路径，同一份代码两次生成逐字节相同。
+- 退出码：0 写出了条目文件；2 跑不了：`npm ci` 失败，`package.json` 或 `tsconfig.json` 读不懂，包上面找不到 `tsconfig.json`，构建有错误（类型错误也算，输出里带相对路径和 `TS` 错误码），入口既没构建出来也不在磁盘上，`*` 子路径一个也没匹配上，单元重名，或别的意外错误。出错时不写条目文件，Compare 不跑，job 失败。
+- 限制：用 6.0.3 构建，不是 Checks 做类型检查用的 7.0.2（7.x 的 JS API 还是 unstable），两者行为不同的项目可能在这里构建失败。重载的实现签名不在 `.d.ts` 里，重载的参数没有默认值；namespace 里的函数、对象字面量里的方法也不读默认值。继承来的成员只记在定义它的类型下，没导出的基类只出现在子类的签名里。`outFile` 被忽略，按文件构建。
+- 版本：`typescript` 6.0.3 连同依赖由 [`typescript/api-snapshot/package-lock.json`](typescript/api-snapshot/package-lock.json) 固定，装在 repo-guards 自己的目录里，不和项目的依赖混装。
+- 测试：在 `typescript/api-snapshot/` 跑 `npm ci --ignore-scripts && npm test`。

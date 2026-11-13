@@ -479,3 +479,17 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 - 转义：条目来自 PR 的代码，快照文件的内容也当作不可信。log 里的名字、签名、路径都写成 JSON 字符串，`#` 也转义成 `\u0023`，所以 log 里没有以 `::` 开头的行（workflow 命令），也没有 runner 在行中也认的旧命令格式 `##[`。summary 里它们放在代码块里，显示原文，不渲染成链接、表格或其他 Markdown；代码块的围栏比内容里最长的一串反引号多一个，内容关不掉它。
 - 四个语言 workflow 的 API snapshot job 用它：比对后不一致或快照文件不存在（退出 1）时，把新快照作为 artifact 上传，名字由 [`api-snapshot/snapshot_artifact.py`](api-snapshot/snapshot_artifact.py) 生成：`<语言>-api-snapshot-<working-directory 的 sha256 前 16 位>`，理由同覆盖率分片的 artifact（见[覆盖率](#覆盖率)）。artifact 里的文件和配置的快照文件同名。
 - 测试：在 `api-snapshot/` 跑 `python3 -m unittest api_snapshot_test snapshot_artifact_test`。
+
+### 接口快照：Python 生成
+
+`python.yml` 的 API snapshot job 在 Generate 步跑 [`python/api-snapshot/python_api.py`](python/api-snapshot/python_api.py)，写出给[接口快照比对](#接口快照比对)的条目文件。
+
+- 构建：在 `working-directory` 跑 `uv build --wheel`；`pyproject.toml` 里有 `[tool.uv.workspace]` 时加 `--all-packages`，每个成员各出一个 wheel。这一步读项目自己的 uv 配置，会执行项目的构建后端（PR 的代码），所以只在这个 job 里跑。各 wheel 按文件名顺序解压到同一个临时目录，像装进同一个 site-packages。
+- 范围：解压目录顶层每个包或模块算一个单元：名字是合法的 Python 标识符、不以 `_` 开头；`*.dist-info`、`*.data` 不算。用 [griffe](https://mkdocstrings.github.io/griffe/) 静态读源码和 `.pyi`，不 import 项目代码。条目是从单元一路公开可达的对象：公开与否照 griffe 的判断（模块有 `__all__` 时只认 `__all__`；名字以 `_` 开头的不算；import 进来的名字不在 `__all__` 里就不算；不以 `_` 开头的子模块算）。公开类的成员（含从同一批 wheel 里的基类继承的）、嵌套类、公开子模块都往下走；`_impl` 这类私有模块不走，但它定义、由公开模块在 `__all__` 里导出的名字，按导出的路径算条目。
+- 条目：`unit` 是单元名；`parent` 是上级模块或类的完整点分路径（如 `mypkg.sub.Klass`），单元自己那一条为 `""`；`name` 是成员名；`kind` 是 griffe 报的种类：`module`、`class`、`function`、`attribute`、`type alias`，导出的名字指向这批 wheel 以外（如 `from os import path`）时是 `alias`，签名写目标路径。
+- 签名：函数是 `[标签 ][类型参数](参数) -> 返回类型`，参数照 Python 写法带种类（`/`、`*`、`*args`、`**kw`）、注解和默认值，如 `classmethod (cls, n: int = 2) -> Box`；用 `@overload` 声明的函数只有一个条目，签名是各个重载按声明顺序、每个一行，不含实现本身。类是 `[标签 ]class[类型参数](基类)`。属性是 `标签: 注解 = 值`，模块级和类里的属性带值（常量、枚举成员、dataclass 字段默认值），只在方法里赋值的不带。`type X[T] = …` 是 `type[T] = …`。标签照 griffe（`async`、`classmethod`、`property`、`dataclass` 等），按字母排序。
+- 不进条目：文档注释、源文件位置、非公开对象、名字前后都是 `__` 的属性（`__all__`、`__version__`、`__slots__` 等；`__init__`、`__eq__` 这类方法照常算）。所以只改文档注释，或把函数从一个私有模块挪到另一个、仍由同一个公开模块在 `__all__` 里导出，条目不变。两次生成逐字节相同。
+- 退出码：0 写出了条目文件；2 跑不了：项目没有 `pyproject.toml` 或 `setup.py`（如只有 `requirements.txt`），`uv build` 失败或没出 wheel，wheel 解不开，单元里某个 `.py` 或 `.pyi` 解析不了（文件路径写在输出里），griffe 出错，或别的意外错误。出错时不写条目文件，Compare 不跑，job 失败。
+- 限制：构建不出 wheel 的项目查不到，启用后 job 退出 2。编译扩展模块只看得到它的 `.pyi`，没有 `.pyi` 的看不到。没写进 `__all__` 的 import（如公开模块里 `from ._impl import open` 而没有 `__all__`）griffe 算私有，不进条目，要导出就写进 `__all__`。
+- 版本：griffe 用只含库的 `griffelib`，连同依赖带 hash 固定在 [`python/api-snapshot/requirements.txt`](python/api-snapshot/requirements.txt)（由 `requirements.in` 用 `uv pip compile --generate-hashes --universal --python-version 3.14` 生成），装进单独的 venv，不和项目的依赖混装。跑在 Python 3.14 上，项目用新语法也解析得了。
+- 测试：在 `python/api-snapshot/` 用装了 `requirements.txt` 的 Python 3.14 跑 `python -m unittest python_api_test`（要 `uv` 在 `PATH` 上：测试会构建 fixture 项目）。

@@ -202,12 +202,10 @@ def snapshot_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], str]:
             if not isinstance(path, str):
                 raise Error(f"{section_header(working_directory)} {API_SNAPSHOT}.{language} is not a string")
             settings[working_directory, language] = path
-        # Each generator reads and checks its own scope; a misspelt language belongs to none of them.
-        language_table(section, API_SNAPSHOT_SCOPE, working_directory)
     return settings
 
 
-def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
+def read_overrides(root: Path) -> dict[str, Any]:
     path = root / OVERRIDES
     try:
         text = path.read_text(encoding="utf-8")
@@ -215,7 +213,11 @@ def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
         return {}
     except (OSError, UnicodeDecodeError) as error:
         raise Error(f"{OVERRIDES}: {error}") from error
-    return snapshot_settings(parse_overrides(text))
+    return parse_overrides(text)
+
+
+def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
+    return snapshot_settings(read_overrides(root))
 
 
 def checkout_mode(root: Path) -> Mode:
@@ -253,7 +255,11 @@ def snapshot_path_error(path: str, mode: Mode) -> str | None:
 
 
 def snapshot_path(root: Path, working_directory: str, language: str) -> str | None:
-    path = read_snapshot_settings(root).get((working_directory, language))
+    overrides = read_overrides(root)
+    path = snapshot_settings(overrides).get((working_directory, language))
+    # Each generator reads and checks its own scope; a misspelt language belongs to none of them.
+    for section_directory, section in project_sections(overrides).items():
+        language_table(section, API_SNAPSHOT_SCOPE, section_directory)
     if path is None:
         return None
     error = snapshot_path_error(path, checkout_mode(root))

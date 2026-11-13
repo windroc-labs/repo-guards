@@ -361,6 +361,11 @@ class SnapshotPathTest(unittest.TestCase):
                 for needle in needles:
                     self.assertIn(needle, err)
 
+    def test_snapshot_settings_ignore_the_scope(self) -> None:
+        # The Changes job's language gate and github-dir-pr read these; a scope typo is the API snapshot job's.
+        text = setting("go", ".github/api/go.json") + 'api-snapshot-scope.typscript = ["./driver"]\n'
+        self.assertEqual(snapshot_settings(tomllib.loads(text)), {(".", "go"): ".github/api/go.json"})
+
     def test_scope_values_are_left_to_the_generators(self) -> None:
         for value in ('["pkg.sub"]', "[]", "1", '["not a prefix"]'):
             with self.subTest(value=value):

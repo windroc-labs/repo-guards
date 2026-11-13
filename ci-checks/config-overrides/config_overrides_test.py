@@ -235,9 +235,121 @@ class Repo:
     def snapshot_path(self, working_directory: str, language: str) -> tuple[int, str, str]:
         return run("snapshot-path", str(self.root), working_directory, language)
 
+    def snapshot_scope(self, working_directory: str, language: str) -> tuple[int, str, str]:
+        return run("snapshot-scope", str(self.root), working_directory, language)
+
 
 def setting(language: str, path: str, working_directory: str = ".") -> str:
     return f"[project.{json.dumps(working_directory)}]\napi-snapshot.{language} = {json.dumps(path)}\n"
+
+
+def scope(language: str, prefixes: object, working_directory: str = ".") -> str:
+    return f"[project.{json.dumps(working_directory)}]\napi-snapshot-scope.{language} = {json.dumps(prefixes)}\n"
+
+
+class SnapshotScopeTest(unittest.TestCase):
+    VALID = {
+        "rust": ["kvm_op::driver", "kvm_op", "crate_b::a::b"],
+        "python": ["pkg.sub", "pkg", "_pkg.a1"],
+        "go": ["example.com/kvm/driver", "golang.org/x/net/http2", "a/b-c/v2", "mod~1/x+y"],
+        "typescript": ["./driver", ".", "./a/b", "./x.js"],
+    }
+    INVALID = {
+        "rust": ["kvm-op::driver", "kvm_op::", "::driver", "kvm_op:driver", "kvm_op::driver::*", "kvm_op.driver", ""],
+        "python": ["pkg/sub", "pkg.", ".pkg", "pkg..sub", "pkg-sub", "1pkg", ""],
+        "go": ["/abs/pkg", "a//b", "a/./b", "a/../b", "a/", "a b", "a/*", ""],
+        "typescript": ["driver", "./", "./driver/", "./a//b", "./../x", "./a/./b", "./*", "./a/*.js", "/driver", ""],
+    }
+
+    def test_unset_prints_nothing(self) -> None:
+        cases = {
+            "no file": None,
+            "no section": '[project."other"]\nsource-dirs = ["src"]\n',
+            "path only": setting("go", ".github/api/go.json"),
+            "other language only": scope("rust", ["kvm_op::driver"]),
+            "other working directory": scope("go", ["a/b"], "sub"),
+        }
+        for name, text in cases.items():
+            with self.subTest(name):
+                self.assertEqual(Repo(self, text).snapshot_scope(".", "go"), (0, "", ""))
+
+    def test_valid_prefixes_print_one_json_line_in_order(self) -> None:
+        for language, prefixes in self.VALID.items():
+            with self.subTest(language):
+                code, out, err = Repo(self, scope(language, prefixes)).snapshot_scope(".", language)
+                self.assertEqual((code, err), (0, ""))
+                self.assertEqual(out.count("\n"), 1)
+                self.assertEqual(json.loads(out), prefixes)
+
+    def test_non_ascii_prefix_is_printed_verbatim(self) -> None:
+        code, out, _ = Repo(self, scope("python", ["paquet.módulo"])).snapshot_scope(".", "python")
+        self.assertEqual((code, out), (0, '["paquet.módulo"]\n'))
+
+    def test_invalid_prefixes_exit_2_naming_key_and_value(self) -> None:
+        for language, prefixes in self.INVALID.items():
+            for prefix in prefixes:
+                with self.subTest(language=language, prefix=prefix):
+                    text = scope(language, [self.VALID[language][0], prefix])
+                    code, out, err = Repo(self, text).snapshot_scope(".", language)
+                    self.assertEqual((code, out), (2, ""))
+                    self.assertIn(f'[project."."] api-snapshot-scope.{language}', err)
+                    self.assertIn(json.dumps(prefix), err)
+
+    def test_control_characters_are_rejected(self) -> None:
+        for language, prefix in [("typescript", "./a\nb"), ("go", "a\x7fb"), ("rust", "a\tb"), ("python", "a\x00")]:
+            with self.subTest(language=language):
+                code, out, err = Repo(self, scope(language, [prefix])).snapshot_scope(".", language)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("control characters", err)
+
+    def test_empty_list_is_rejected(self) -> None:
+        code, out, err = Repo(self, scope("go", [])).snapshot_scope(".", "go")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("api-snapshot-scope.go", err)
+        self.assertIn("at least one", err)
+
+    def test_bad_setting_types_exit_2(self) -> None:
+        cases = [
+            '[project."."]\napi-snapshot-scope = ["a"]\n',
+            '[project."."]\napi-snapshot-scope.go = "a/b"\n',
+            '[project."."]\napi-snapshot-scope.go = [1]\n',
+            '[project."."]\napi-snapshot-scope.go = [["a"]]\n',
+            '[project."."]\napi-snapshot-scope.go = { a = "b" }\n',
+        ]
+        for text in cases:
+            with self.subTest(text=text):
+                code, out, err = Repo(self, text).snapshot_scope(".", "go")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn('[project."."] api-snapshot-scope', err)
+
+    def test_unknown_language_or_bad_table_anywhere_exits_2(self) -> None:
+        for text, needle in [
+            (scope("rsut", ["a"], "other"), "rsut"),
+            ('[project."other"]\napi-snapshot-scope = 1\n', "not a table"),
+            ('project = "x"\n', "project"),
+            ("[project\n", "repo-guards.toml"),
+        ]:
+            with self.subTest(text=text):
+                code, out, err = Repo(self, text).snapshot_scope(".", "rust")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn(needle, err)
+
+    def test_snapshot_path_ignores_the_scope(self) -> None:
+        text = setting("go", ".github/api/go.json") + 'api-snapshot-scope.go = ["a/b"]\n'
+        self.assertEqual(Repo(self, text).snapshot_path(".", "go"), (0, ".github/api/go.json\n", ""))
+        bad = setting("go", ".github/api/go.json") + "api-snapshot-scope.go = []\n"
+        self.assertEqual(Repo(self, bad).snapshot_path(".", "go"), (0, ".github/api/go.json\n", ""))
+
+    def test_scope_ignores_the_snapshot_path(self) -> None:
+        text = setting("go", "not/under/github.json") + 'api-snapshot-scope.go = ["a/b"]\n'
+        self.assertEqual(Repo(self, text).snapshot_scope(".", "go"), (0, '["a/b"]\n', ""))
+
+    def test_bad_arguments_exit_2(self) -> None:
+        root = str(Repo(self).root)
+        self.assertEqual(run("snapshot-scope", root, ".")[0], 2)
+        self.assertEqual(run("snapshot-scope", root, ".", "java")[0], 2)
+        self.assertEqual(run("snapshot-scope", root, ".", "go", "x")[0], 2)
+        self.assertIn("snapshot-scope REPO_ROOT WORKING_DIRECTORY", run()[2])
 
 
 class SnapshotPathTest(unittest.TestCase):

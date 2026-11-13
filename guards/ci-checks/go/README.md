@@ -149,7 +149,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 | 结果 | 对 `./...` 跑一次 `golangci-lint run`：有违规退出 1；配置读不懂、被 golangci-lint 拒绝（如不认识的 `list-mode`）或工具跑不起来，退出 2 |
 | 豁免已有违规 | 写在同一个文件里：规则的 `files` 加 `!` 开头的排除，或写 `linters.exclusions`（路径相对 `working-directory`）。行内的 `//nolint:depguard` 按[行内豁免](../README.md#行内豁免)登记 |
 | 安装 | golangci-lint 用 Install Go tools 装的 v2.15.0。读 YAML 的 PyYAML 版本和 hash 写在 [`requirements.txt`](layer-rules/requirements.txt)（由 `requirements.in` 经 `uv pip compile --generate-hashes` 生成），装进 `$RUNNER_TEMP` 下的 venv，不和项目的依赖混装 |
-| 测试 | 在该目录用装了 `requirements.txt` 的 Python 跑 `python -m unittest layer_rules_test`；设了 `GOLANGCI_LINT`（golangci-lint 的路径）时，还对 [`testdata/layers`](layer-rules/testdata/layers) 跑真的 golangci-lint |
+| 测试 | 在该目录用装了 `requirements.txt` 的 Python 跑 `python -m unittest layer_rules_test`；设了 `GOLANGCI_LINT`（golangci-lint 的路径）时，还对 [`tests/ci-checks/go/layer-rules/testdata/layers`](../../../tests/ci-checks/go/layer-rules/testdata/layers) 跑真的 golangci-lint |
 
 repo-guards 自己的 [`golangci.toml`](golangci.toml) 也开 depguard（Lint 步，禁用的包），和这里的分层规则互不相干。
 

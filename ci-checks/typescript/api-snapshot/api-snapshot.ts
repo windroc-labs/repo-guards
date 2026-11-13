@@ -528,31 +528,38 @@ function read(
     host: virtualHost(options, outputs, resolutions),
   });
   const checker = program.getTypeChecker();
-  // An import is unresolved exactly when tsc has no module for it: no resolution and no ambient module.
-  // Only files the units reach can drop entries, so only those are checked.
+  // The one rule for every import: what tsc made of it in this build.
+  const classify = (file: ts.SourceFile, specifier: ts.StringLiteralLike): Imported => {
+    const mode = program.getModeForUsageLocation(file, specifier);
+    const found = resolutions.get(file.fileName)?.get(resolutionKey(specifier, mode));
+    if (found?.resolvedModule !== undefined) {
+      const target = program.getSourceFile(found.resolvedModule.resolvedFileName);
+      return target === undefined ? { kind: "untyped" } : { kind: "file", nodes: [target] };
+    }
+    const ambient = checker.getSymbolAtLocation(specifier);
+    if (ambient === undefined) return { kind: "unresolved" };
+    return { kind: "ambient", nodes: (ambient.declarations ?? []).filter(ts.isModuleDeclaration) };
+  };
+  // Unresolved imports would silently drop what they re-export. Only what the units reach can drop entries:
+  // the files they import and the ambient module blocks they import from.
   const unresolved: { file: string; specifier: string }[] = [];
-  const seen = new Set<string>();
-  const queue = units.map((u) => program.getSourceFile(u.declaration));
-  while (queue.length > 0) {
-    const file = queue.shift();
-    if (file === undefined || seen.has(file.fileName)) continue;
-    seen.add(file.fileName);
-    if (file.fileName.split("/").includes("node_modules")) continue;
-    const current = file;
+  const seen = new Set<ts.Node>();
+  const queue: ts.Node[] = units.flatMap((u) => program.getSourceFile(u.declaration) ?? []);
+  for (let reached = queue.shift(); reached !== undefined; reached = queue.shift()) {
+    const file = reached.getSourceFile();
+    if (seen.has(reached) || file.fileName.split("/").includes("node_modules")) continue;
+    seen.add(reached);
     const visit = (node: ts.Node): void => {
       const specifier = moduleSpecifier(node);
-      if (specifier !== undefined) {
-        const mode = program.getModeForUsageLocation(current, specifier);
-        const found = resolutions.get(current.fileName)?.get(resolutionKey(specifier, mode));
-        if (found?.resolvedModule !== undefined) {
-          queue.push(program.getSourceFile(found.resolvedModule.resolvedFileName));
-        } else if (checker.getSymbolAtLocation(specifier) === undefined) {
-          unresolved.push({ file: current.fileName, specifier: specifier.text });
-        }
+      const imported = specifier === undefined ? undefined : classify(file, specifier);
+      if (specifier !== undefined && imported?.kind === "unresolved") {
+        unresolved.push({ file: file.fileName, specifier: specifier.text });
+      } else if (imported?.kind === "file" || imported?.kind === "ambient") {
+        queue.push(...imported.nodes);
       }
       ts.forEachChild(node, visit);
     };
-    visit(current);
+    visit(reached);
   }
   if (unresolved.length > 0) {
     const lines = unresolved.map(
@@ -565,17 +572,40 @@ function read(
     if (file === undefined) fail(`cannot load ${quote(unit.declaration)}`);
     const module = checker.getSymbolAtLocation(file);
     if (module === undefined) continue;
-    new Reader(unit.name, checker, outputs, entries).walk(module, "");
+    new Reader(unit.name, checker, outputs, entries, classify).walk(module, "");
   }
 }
 
-function untypedSource(exported: ts.Symbol): string | undefined {
-  for (const declaration of exported.declarations ?? []) {
-    for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
-      if ((ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier) {
-        return ts.isStringLiteral(node.moduleSpecifier) ? node.moduleSpecifier.text : undefined;
+type Imported =
+  { kind: "file" | "ambient"; nodes: ts.Node[] } | { kind: "untyped" } | { kind: "unresolved" };
+
+// The import a name came from, following local aliases (import { x } from "m"; export { x }).
+function importOrigin(
+  exported: ts.Symbol,
+  checker: ts.TypeChecker,
+): { file: ts.SourceFile; specifier: ts.StringLiteral } | undefined {
+  const visited = new Set<ts.Symbol>();
+  for (
+    let symbol: ts.Symbol | undefined = exported;
+    symbol !== undefined && !visited.has(symbol);
+  ) {
+    visited.add(symbol);
+    for (const declaration of symbol.declarations ?? []) {
+      for (let node: ts.Node | undefined = declaration; node !== undefined; node = node.parent) {
+        const specifier =
+          (ts.isExportDeclaration(node) || ts.isImportDeclaration(node)) && node.moduleSpecifier
+            ? node.moduleSpecifier
+            : ts.isImportEqualsDeclaration(node) &&
+                ts.isExternalModuleReference(node.moduleReference)
+              ? node.moduleReference.expression
+              : undefined;
+        if (specifier !== undefined && ts.isStringLiteral(specifier)) {
+          return { file: declaration.getSourceFile(), specifier };
+        }
       }
     }
+    symbol =
+      symbol.flags & ts.SymbolFlags.Alias ? checker.getImmediateAliasedSymbol(symbol) : undefined;
   }
   return undefined;
 }
@@ -597,6 +627,7 @@ class Reader {
   private readonly checker: ts.TypeChecker;
   private readonly outputs: Outputs;
   private readonly entries: Map<string, Entry>;
+  private readonly classify: (file: ts.SourceFile, specifier: ts.StringLiteralLike) => Imported;
   private readonly js = new Map<string, ts.SourceFile>();
 
   constructor(
@@ -604,22 +635,32 @@ class Reader {
     checker: ts.TypeChecker,
     outputs: Outputs,
     entries: Map<string, Entry>,
+    classify: (file: ts.SourceFile, specifier: ts.StringLiteralLike) => Imported,
   ) {
     this.unit = unit;
     this.checker = checker;
     this.outputs = outputs;
     this.entries = entries;
+    this.classify = classify;
   }
 
   walk(container: ts.Symbol, parent: string): void {
     for (const exported of this.checker.getExportsOfModule(container)) {
       const target =
         exported.flags & ts.SymbolFlags.Alias ? this.checker.getAliasedSymbol(exported) : exported;
-      // tsc types a name re-exported from an untyped JS module as any; it has no declaration to print.
-      const from = (target.declarations ?? []).length === 0 ? untypedSource(exported) : undefined;
-      if (from !== undefined)
-        this.add(parent, "alias", exported.getName(), `any from ${JSON.stringify(from)}`);
-      else this.symbol(target, exported.getName(), parent);
+      // tsc types a name from an untyped JS module as any; it has no declaration to print.
+      const origin =
+        (target.declarations ?? []).length === 0 ? importOrigin(exported, this.checker) : undefined;
+      if (origin !== undefined && this.classify(origin.file, origin.specifier).kind === "untyped") {
+        this.add(
+          parent,
+          "alias",
+          exported.getName(),
+          `any from ${JSON.stringify(origin.specifier.text)}`,
+        );
+      } else {
+        this.symbol(target, exported.getName(), parent);
+      }
     }
   }
 

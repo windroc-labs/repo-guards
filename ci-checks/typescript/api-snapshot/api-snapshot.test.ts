@@ -230,11 +230,13 @@ describe("exports forms", () => {
     );
   });
 
-  it("a name re-exported from an untyped JS module is an any alias, as tsc types it", () => {
+  it("names from an untyped JS module, re-exported directly or imported then exported, are any aliases, as tsc types them", () => {
     const entries = generate(path.join(TESTDATA, "untyped"));
     assert.deepEqual(
       entries.map((e) => [e.kind, e.name, e.signature]),
       [
+        ["alias", "bar", 'any from "untyped"'],
+        ["alias", "default", 'any from "untyped"'],
         ["alias", "foo", 'any from "untyped"'],
         ["const", "own", "const own = 1"],
       ],
@@ -407,6 +409,16 @@ describe("command line", () => {
     const result = run(dir, path.join(scratch, "unresolved.json"));
     assert.equal(result.status, 2, result.stderr);
     assert.match(result.stderr, /"lib\/hand\.d\.ts": cannot resolve "\.\/missing\.js"/);
+  });
+
+  it("exits 2 on an unresolvable import inside a reached ambient module, and checks only the reached one", () => {
+    const result = run(
+      path.join(TESTDATA, "ambientmissing"),
+      path.join(scratch, "ambientmissing.json"),
+    );
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /"src\/env\.d\.ts": cannot resolve "nope-missing"/);
+    assert.ok(!result.stderr.includes("also-missing"), result.stderr);
   });
 
   it("exits 2 with usage on a wrong argument count", () => {

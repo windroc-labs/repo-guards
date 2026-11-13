@@ -4,7 +4,7 @@
 
 Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。`go.mod` 的 `ignore` 指令（Go 1.25 起）让 `./...` 跳过目录，`go.yml` 各步就都不查那里，所以算行内豁免，`go.mod` 进 CODEOWNERS（见 [CODEOWNERS](../README.md#codeowners)）。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
 
-工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译；接口快照的生成器 [`api-snapshot/`](api-snapshot/) 由 API snapshot job 的 Generate 步同样编译（见[接口快照生成](#接口快照生成api-snapshot)）；分层规则的扫描器 [`layer-rules/`](layer-rules/) 由 Layer rules 步用 `go build` 编译（见[分层规则扫描器](#分层规则扫描器layer-rules)）。
+工具由 Install Go tools 步用 `go install <包>@<版本>` 装，模块的 hash 由 Go 的 checksum 数据库校验：golangci-lint v2.15.0、govulncheck v1.9.0（`golang.org/x/vuln`）、deadcode（`golang.org/x/tools` v0.52.0）；Coverage job 另装 gocover-cobertura v1.5.0。本目录的两个检查器 [`comment-budget/`](comment-budget/)、[`license-check/`](license-check/) 各有自己的 `go.mod` 和 `go.sum`，同一步用 `go build` 编译；接口快照的生成器 [`api-snapshot/`](api-snapshot/) 由 API snapshot job 的 Generate 步同样编译（见[接口快照生成](#接口快照生成api-snapshot)）。
 
 ## formatter（gofmt）
 
@@ -136,14 +136,3 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 - 只读 runner 平台（GOOS、GOARCH）上编进来的文件：只在别的平台或别的 build tag 下编译的接口查不到。
 - 非导出类型的成员不进：经由别名（`type P = hidden`）或返回值（`func New() *hidden`）能用到的方法和字段改了，查不到。
 - 用 cgo 的包要 runner 上有 C 编译器，没有就编译不过，退出 2。
-
-## 分层规则扫描器（layer-rules）
-
-[`layer-rules/`](layer-rules/) 是[第 4 层](../../architecture/README.md#第-2-项分层规则)第 2 项分层规则的 Go 扫描器：一个 Go 小程序，只用标准库，`go.mod` 没有 `require`。Checks job 的 Layer rules 步跑共用的 [`layer_rules.py`](../layer-rules/layer_rules.py)，它先用 `go build` 编译这个扫描器（带 `GOWORK=off`、`GOFLAGS=`、`GOENV=off`），再对 HEAD 和 merge-base 各跑一次，按协议交给它要扫的文件和 `go.mod`，收回每个 import 项解析到的包目录。规则、配置和输出见第 2 项。
-
-| 项 | 内容 |
-|---|---|
-| 解析 | `go/parser` 只读 import，不构建、不执行项目代码；读不懂的文件报出来，HEAD 上的让这一步退出 2 |
-| 解析到哪 | 按各个 `go.mod` 的 `module` 取最长匹配的模块路径，剩下的部分是包目录；目录里没有 Go 文件、或属于嵌套在里面的另一个模块的，不算 |
-| 共用部分先筛掉的 | `_test.go` 总是测试代码：不交给扫描器扫，也不拿它判目标包的层。Go 工具跳过的文件（`testdata/`、`vendor/` 下的，以 `_` 或 `.` 开头的目录和文件）不算 Go 源码，那里的 `go.mod` 也不交给扫描器 |
-| 测试 | 在该目录跑 `go test ./...` |

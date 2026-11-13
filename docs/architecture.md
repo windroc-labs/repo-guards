@@ -16,7 +16,7 @@
 
 ## 检查
 
-和第 3 层的检查一起在 repo 的 `.github/workflows/ci.yml` 里跑。比对方式、"频率"一列和"按项目需要"的含义同[第 3 层](../guards/ci-checks/README.md)。
+和第 3 层的检查一起在 repo 的 `.github/workflows/ci.yml` 里跑。比对方式、"频率"一列和"按项目需要"的含义同[第 3 层](ci-checks/README.md)。
 
 状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
 
@@ -35,13 +35,13 @@
 
 ### 第 1 项接口快照
 
-由四个语言 workflow（[`guards/ci-checks/`](../guards/ci-checks/README.md#每个-repo-自己要做的)）的 API snapshot job 跑，`ci.yml` 不用改。比对规则和输出见 [接口快照比对](../guards/ci-checks/README.md#接口快照比对)。
+由四个语言 workflow（[`docs/ci-checks/README.md`](ci-checks/README.md#每个-repo-自己要做的)）的 API snapshot job 跑，`ci.yml` 不用改。比对规则和输出见 [接口快照比对](ci-checks/README.md#接口快照比对)。
 
-- 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设快照路径，如 `api-snapshot.rust = ".github/checks/api-rust.json"`。路径相对 repo 根目录，要放在 `.github/` 下（已由 CODEOWNERS 锁住），每种语言、每个 `working-directory` 各一份；路径的规定见[覆盖默认配置](../guards/ci-checks/README.md#覆盖默认配置)。没设就不启用。改这个设置按第 21 项单独提一个只改 `.github/` 的 PR。
-- 只冻结一部分：在同一节设 `api-snapshot-scope.<语言>`，列出要冻结的模块前缀，如 `api-snapshot-scope.rust = ["kvm_op::driver"]`，项目自己的代码不用改。范围内仍是多、少、变都失败，范围外的条目不进快照。没设就冻结整个项目的公开接口。写法和生成器的约定见[冻结范围](../guards/ci-checks/README.md#冻结范围)；改它也按第 21 项单独提 PR。
+- 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设快照路径，如 `api-snapshot.rust = ".github/checks/api-rust.json"`。路径相对 repo 根目录，要放在 `.github/` 下（已由 CODEOWNERS 锁住），每种语言、每个 `working-directory` 各一份；路径的规定见[覆盖默认配置](ci-checks/README.md#覆盖默认配置)。没设就不启用。改这个设置按第 21 项单独提一个只改 `.github/` 的 PR。
+- 只冻结一部分：在同一节设 `api-snapshot-scope.<语言>`，列出要冻结的模块前缀，如 `api-snapshot-scope.rust = ["kvm_op::driver"]`，项目自己的代码不用改。范围内仍是多、少、变都失败，范围外的条目不进快照。没设就冻结整个项目的公开接口。写法和生成器的约定见[冻结范围](ci-checks/README.md#冻结范围)；改它也按第 21 项单独提 PR。
 - 第一次：文件还不存在，job 失败，并把完整快照作为 artifact 上传。把它原样放到配置的路径，提交进同一个 PR。
 - 改接口时：生成结果和快照对不上，job 失败，job summary 列出多、少、变的条目，并写明 artifact 名字和该放的路径。接口改动是有意的，就从这次运行的 artifact 下载新快照，原样放到配置的路径，和代码在同一个 PR 里提交；快照在 `.github/` 下，owner 审 PR 时逐条看快照的 diff。不是有意的，就改回代码。
-- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](../guards/ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](../guards/ci-checks/go/README.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](../guards/ci-checks/rust/README.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](../guards/ci-checks/README.md#接口快照typescript-生成)。冻结范围四种语言的生成器都已接上，各自读这个设置。
+- 现状：Python 从构建出的 wheel 生成，见 [接口快照：Python 生成](ci-checks/README.md#接口快照python-生成)，构建不出 wheel 的项目查不到；Go 的生成已接上（见[接口快照生成](ci-checks/go.md#接口快照生成api-snapshot)）；Rust 的也已接上（规则和限制见 [Rust 模板](ci-checks/rust.md#接口快照)）；TypeScript 从内存里的 tsc 构建输出生成，见[接口快照：TypeScript 生成](ci-checks/README.md#接口快照typescript-生成)。冻结范围四种语言的生成器都已接上，各自读这个设置。
 
 ### 第 2 项分层规则
 
@@ -50,21 +50,21 @@
 | 语言 | 工具 | 规则写在 |
 |---|---|---|
 | Python | import-linter | `pyproject.toml` 的 `[tool.importlinter]`，或 `.importlinter` |
-| TypeScript | dependency-cruiser | 项目自己的 dependency-cruiser 配置文件（`.dependency-cruiser.*`，见 [TypeScript 模板](../guards/ci-checks/typescript/README.md#分层规则dependency-cruiser)） |
+| TypeScript | dependency-cruiser | 项目自己的 dependency-cruiser 配置文件（`.dependency-cruiser.*`，见 [TypeScript 模板](ci-checks/typescript.md#分层规则dependency-cruiser)） |
 | Go | depguard，经 golangci-lint 跑 | `.golangci.yml`（或 `.golangci.yaml`、`.golangci.toml`、`.golangci.json`）的 `linters.settings.depguard` |
 | Rust | 不另外检查 | 各 crate 的 `Cargo.toml` |
 
 - 规则：写"哪层可以 import 哪层"，不是从上到下排好的层序，用工具自己的写法。
 - 全量检查：每次运行查整个项目，不只挡新增。已有的违规在工具自己的配置里豁免，或者不写那条规则。
 - Rust：一层是一个 crate。哪层可以用哪层，就是各 crate 的 `Cargo.toml` 里的 `[dependencies]`、`[dev-dependencies]`、`[build-dependencies]`；cargo 只让 crate 用它声明过的 crate。把各 crate 的 `Cargo.toml` 放进 CODEOWNERS（写 `Cargo.toml`，不带 `/`，任何深度都匹配），改层之间的依赖就要 owner 批准。cargo 挡不住的：`#[path = "…"]` 指向别的 crate 的源码文件、`include!`、指向别的 crate 的符号链接，这些靠 owner 审 PR 时看出来。
-- 锁住规则：工具的配置文件都进 CODEOWNERS，文件名见[各语言的配置文件名](../guards/ci-checks/README.md#codeowners)（`Cargo.toml`、`pyproject.toml`、`.importlinter`、`.dependency-cruiser*`、`.golangci.yml` 都在里面）。豁免只写在锁住的文件里；工具另有基线文件的（如 dependency-cruiser 的 `.dependency-cruiser-known-violations.json`），基线文件也要锁住。
+- 锁住规则：工具的配置文件都进 CODEOWNERS，文件名见[各语言的配置文件名](ci-checks/README.md#codeowners)（`Cargo.toml`、`pyproject.toml`、`.importlinter`、`.dependency-cruiser*`、`.golangci.yml` 都在里面）。豁免只写在锁住的文件里；工具另有基线文件的（如 dependency-cruiser 的 `.dependency-cruiser-known-violations.json`），基线文件也要锁住。
 - Layer rules 步的约定（Python、TypeScript、Go 共用，各语言接入工具时照做）：
   - 位置：Checks job 里紧跟 Inline exemptions，和后面的步一样带 `if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}`；失败不挡同一 job 后面的步。
   - 找配置：只在 `working-directory` 里找本语言工具的配置，不往上级、下级目录找。
   - 没有配置：打印一行提示，写明工具名和找过的文件，然后通过。不要求项目加配置。
   - 有配置：用这份配置对整个项目跑一次工具；工具的退出码不是 0 就失败，配置被工具拒绝也失败。
-  - 工具版本：由 repo-guards 写死，和项目的依赖分开装（[第 3 层](../guards/ci-checks/README.md#流程级)第 17 项）。
+  - 工具版本：由 repo-guards 写死，和项目的依赖分开装（[第 3 层](ci-checks/README.md#流程级)第 17 项）。
   - 不执行项目代码，没有例外：Checks job 后面的步信任 repo-guards 的文件和工具，先跑的项目代码能改掉它们。工具要执行项目代码才能跑的（如要 import 项目的包），不能放进 Checks job，要单独一个 job，像 API snapshot 一样只有 `contents: read`、不用 secrets。用 JavaScript 写的配置（如 `.dependency-cruiser.js`）加载时就会运行，所以它和它加载的每个文件都算项目代码，除非都是锁住的文件名。
   - 只改规则也要跑：这一步和工具读的每个文件（如 `.importlinter`、`.golangci.yml`、`.golangci.yaml`）都加进 [`language_gate.py`](../guards/ci-checks/language-gate/language_gate.py) 里本语言的 `PATTERNS`，`language_gate_test` 里加一条对应的测试。
   - 各语言接入时自己定：怎样算有配置（如 `.golangci.yml` 要配了 depguard 才算）、怎样装工具；并把本语言加进 [`inline_exemptions_test.py`](../tests/ci-checks/inline-exemptions/inline_exemptions_test.py) 的 `LAYER_RULES`。
-- 现状：Python 已接上 import-linter，配置放哪、怎样算有配置见 [Python 模板的分层规则](../guards/ci-checks/python/README.md#分层规则import-linter)；TypeScript 已接上 dependency-cruiser（见 [TypeScript 模板](../guards/ci-checks/typescript/README.md#分层规则dependency-cruiser)），Go 已接上 depguard（见[分层规则（depguard）](../guards/ci-checks/go/README.md#分层规则depguard)）；Rust 不需要这一步。
+- 现状：Python 已接上 import-linter，配置放哪、怎样算有配置见 [Python 模板的分层规则](ci-checks/python.md#分层规则import-linter)；TypeScript 已接上 dependency-cruiser（见 [TypeScript 模板](ci-checks/typescript.md#分层规则dependency-cruiser)），Go 已接上 depguard（见[分层规则（depguard）](ci-checks/go.md#分层规则depguard)）；Rust 不需要这一步。

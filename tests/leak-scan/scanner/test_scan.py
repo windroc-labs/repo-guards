@@ -585,8 +585,8 @@ class Links(unittest.TestCase):
         ).stdout.decode().split("\0")
         tree = {p: (REPO_ROOT / p).read_bytes() for p in listed if p and (REPO_ROOT / p).is_file()}
         for link, fails in (
-            ("guards/ci-checks/README.md#流程级", False),
-            ("guards/ci-checks/README.md#没有这个", True),
+            ("docs/ci-checks/README.md#流程级", False),
+            ("docs/ci-checks/README.md#没有这个", True),
             ("missing/README.md", True),
         ):
             with self.subTest(link=link):

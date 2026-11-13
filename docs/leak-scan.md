@@ -1,21 +1,25 @@
 # pre-push 泄漏扫描
 
-push 到 public repo 之前，在本地拦下泄漏。CI 在 push 之后才跑，那时内容已经公开。hook 只调用 [`scanner/scan.py`](../scanner/scan.py) 的 `--pre-push`，和 CI 用同一个 scanner。
+push 到 public repo 之前，在本地拦下泄漏。CI 在 push 之后才跑，那时内容已经公开。hook 只调用 [`guards/leak-scan/scanner/scan.py`](../guards/leak-scan/scanner/scan.py) 的 `--pre-push`，和 CI 用同一个 scanner。
 
 ## 启用
 
 git clone 不会启用 repo 里的 hook，每个 public repo 的 clone 要自己开一次。在这个 clone 里运行：
 
 ```
-git config core.hooksPath <repo-guards checkout 的绝对路径>/hooks
+git config core.hooksPath <repo-guards checkout 的绝对路径>/guards/leak-scan/hooks
 ```
 
-在 repo-guards 自己的 clone 里是 `git config core.hooksPath hooks`。
+在 repo-guards 自己的 clone 里是 `git config core.hooksPath guards/leak-scan/hooks`。
 
 - 只写这个 clone 的 `.git/config`，不加 `--global`。
 - 设了 `core.hooksPath` 以后，git 不再跑这个 clone 的 `.git/hooks/` 里的 hook。
 - 规则跟着 repo-guards checkout 的 commit 走；更新 checkout 就更新规则。
 - 需要 `git` 和 `python3`（3.10 起）。
+
+## 从旧路径迁移
+
+hook 从 `hooks/` 移到了 `guards/leak-scan/hooks/`。之前按旧路径启用过的 clone，要在每个 clone 里手动改一次，用上面[启用](#启用)的命令。旧目录没了，不改的话 git 找不到 hook，push 就不扫了。用 `git config core.hooksPath` 看现在的值。
 
 ## 名单
 
@@ -28,7 +32,7 @@ private-name 名单从环境变量 `REPO_GUARDS_PRIVATE_NAMES` 读，每行一�
 - 检查项：`scan.py` 的 leak 类检查（private-name、local-path、email），即 `--pre-push` 的默认检查。
 - 不查 tracker ID：public repo 里允许出现。也不扫 tag 的名字、message、tagger 和 ref 名。
 - 每个启用了 hook 的 clone 的每次 push 都扫，不查目标 repo 是否 public。
-- 不代替 [AGENTS.md](../../../AGENTS.md) 要求的 push 前检查：hygiene 类检查（em-dash、link）和 PR 标题、正文还是由 `scan.py` 和 CI 查。CI 的 private-names 检查继续作为后备。
+- 不代替 [AGENTS.md](../AGENTS.md) 要求的 push 前检查：hygiene 类检查（em-dash、link）和 PR 标题、正文还是由 `scan.py` 和 CI 查。CI 的 private-names 检查继续作为后备。
 
 ## 被拒时
 

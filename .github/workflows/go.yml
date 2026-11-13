@@ -131,9 +131,8 @@ jobs:
         run: uv run --no-project --python 3.14 "$RG/inline-exemptions/inline_exemptions.py" go
       - name: Layer rules
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
-        # The step parses the project's code and never builds or runs it: go run builds only repo-guards' scanner, and the
-        # job's GOWORK=off keeps the PR's go.work out. uv looks the interpreter up from /: from the checkout, a cold lookup
-        # runs a .venv python the PR commits, and its .pth files with it. -I -S keeps site-packages out.
+        # Parses the project's code, never builds or runs it. uv looks the interpreter up from /: from the checkout, a cold
+        # lookup runs a .venv python the PR commits.
         working-directory: repo
         env:
           UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python

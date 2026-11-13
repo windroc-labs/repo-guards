@@ -13,6 +13,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -123,12 +124,16 @@ func scanFile(name string, data []byte, modules []module, packages map[string]bo
 	return records
 }
 
-// resolve maps an import path to its package directory: under the module with the longest matching path, kept only
-// when that directory holds Go files and belongs to that module, not to a module nested inside it.
+// resolve maps an import path to its package directory: under the module with the longest matching path (the
+// shallowest go.mod on a tie), kept only when that directory holds Go files and belongs to that module, not to a
+// module nested inside it.
 func resolve(importPath string, modules []module, packages map[string]bool) (string, bool) {
 	var owner *module
 	for i, m := range modules {
-		if (importPath == m.path || strings.HasPrefix(importPath, m.path+"/")) && (owner == nil || len(m.path) > len(owner.path)) {
+		if importPath != m.path && !strings.HasPrefix(importPath, m.path+"/") {
+			continue
+		}
+		if owner == nil || len(m.path) > len(owner.path) || len(m.path) == len(owner.path) && depth(m.dir) < depth(owner.dir) {
 			owner = &modules[i]
 		}
 	}
@@ -175,6 +180,13 @@ func modulePath(text string) string {
 	return ""
 }
 
+func depth(directory string) int {
+	if directory == "" {
+		return 0
+	}
+	return strings.Count(directory, "/") + 1
+}
+
 func dir(name string) string {
 	d := path.Dir(name)
 	if d == "." {
@@ -184,8 +196,7 @@ func dir(name string) string {
 }
 
 func relative(name string) error {
-	clean := path.Clean(name)
-	if name == "" || path.IsAbs(name) || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains("/"+name+"/", "/../") {
+	if name == "" || path.IsAbs(name) || slices.Contains(strings.Split(name, "/"), "..") {
 		return fmt.Errorf("bad path %q", name)
 	}
 	return nil

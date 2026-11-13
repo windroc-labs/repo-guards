@@ -520,7 +520,7 @@ class MoreChecks(Helpers, unittest.TestCase):
 
 
 class PackageUnits(unittest.TestCase):
-    """Go's unit is the package directory: pairs and edges name it, and its exit is the directory."""
+    """Go's unit is the package directory: pairs name it, and its exit is the directory. Go records no cycle edges."""
 
     def config(self):
         layers = (
@@ -534,7 +534,7 @@ class PackageUnits(unittest.TestCase):
         lr.add(side, config, spec, "api/a.go", 3, ["core/x.go", "core/inner/y.go", "api/b.go"])
         lr.add(side, config, spec, "core/inner/y.go", 4, ["core/x.go"])
         self.assertEqual(dict(side.pairs), {("api/a.go", "core/inner"): [3]})
-        self.assertEqual(dict(side.edges), {("core/inner", "core"): [("core/inner/y.go", 4)]})
+        self.assertEqual(dict(side.edges), {})
         report = lr.judge(config, "", side, lr.Side())
         self.assertIn("绕开出口", report.lines[0])
         self.assertIn("api/a.go 引用 core/inner", report.lines[0])
@@ -561,7 +561,7 @@ class GoProtocol(unittest.TestCase):
 
         repo = Repo(self, self.FILES, self.LAYERS)
         repo.commit({"api/a.go": 'import "m/store"\n'})
-        go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda root: ["scanner", str(root)])
+        go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda tools: ["scanner"], build=None)
         out = io.StringIO()
         with unittest.mock.patch.dict(lr.LANGUAGES, {"go": go}):
             code = lr.check(repo.root, "go", ".", "main", out, None, runner)
@@ -637,23 +637,65 @@ class GoScanner(unittest.TestCase):
         self.assertEqual(repo.run("go"), 2, repo.output)
         self.assertIn("core/bad.go", repo.output)
 
+    def test_each_import_spec_is_one_reference(self):
+        spec = '\t{} "example.com/m/core/inner"\n'
+        base = {"api/a.go": "package api\n\nimport (\n" + spec.format("x") + ")\n"}
+        repo = Repo(self, {**GO_BASE, **base}, GO_LAYERS.format(wd=".", extra=""))
+        repo.commit({"api/a.go": "package api\n\nimport (\n" + spec.format("x") + spec.format("y") + ")\n"})
+        self.assertEqual(repo.run("go"), 1, repo.output)
+        self.assertEqual([re.search(r",line=(\d+),", e).group(1) for e in repo.errors()], ["4", "5"])
+        self.assertIn("merge-base 1 处，head 2 处", repo.errors()[0])
+
+    def test_no_cycle_for_go_even_across_build_constraints(self):
+        head = {
+            "core/a/x_windows.go": 'package a\n\nimport "example.com/m/core/b"\n',
+            "core/b/y_linux.go": 'package b\n\nimport "example.com/m/core/a"\n',
+        }
+        repo = self.repo(head)
+        self.assertEqual(repo.run("go"), 0, repo.output)
+        self.assertNotIn("循环：", repo.output)
+
+    def test_files_the_go_tool_skips_are_not_read(self):
+        bad = "this is not go\n"
+        head = {
+            "core/testdata/bad.go": bad,
+            "core/testdata/go.mod": "go 1.27\n",
+            "core/_scratch/bad.go": bad,
+            "core/.hidden/bad.go": bad,
+            "core/_bad.go": bad,
+            "core/vendor/v/bad.go": bad,
+        }
+        repo = self.repo(head)
+        self.assertEqual(repo.run("go"), 0, repo.output)
+
+    def test_scanner_errors_reach_the_output(self):
+        repo = self.repo({"lib/go.mod": "go 1.27\n", "api/a.go": 'package api\n\nimport "example.com/m/core"\n'})
+        self.assertEqual(repo.run("go"), 2, repo.output)
+        self.assertIn("lib/go.mod has no module directive", repo.output)
+
 
 class GoRunner(Helpers, unittest.TestCase):
     def go_repo(self):
         files = {**GO_BASE, "api/a.go": 'package api\n\nimport "example.com/m/core"\n'}
         return Repo(self, files, GO_LAYERS.format(wd=".", extra=""))
 
-    def test_scanner_runs_with_gowork_off(self):
-        seen = {}
+    def test_scanner_is_built_once_without_the_callers_go_settings(self):
+        calls = []
 
         def runner(argv, **kwargs):
-            seen.update(argv=argv, env=kwargs.get("env"))
+            calls.append((argv, kwargs["env"], kwargs["cwd"]))
             return subprocess.CompletedProcess(argv, 0, "", "")
 
         out = io.StringIO()
         self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 0, out.getvalue())
-        self.assertEqual(seen["argv"][:4], ["go", "run", "-C", str(lr.CI_CHECKS / "go/layer-rules")])
-        self.assertEqual(seen["env"]["GOWORK"], "off")
+        build, *scans = calls
+        self.assertEqual(build[0][:5], ["go", "build", "-C", str(lr.CI_CHECKS / "go/layer-rules"), "-o"])
+        binary = build[0][5]
+        self.assertEqual(len(scans), 2)
+        for argv, env, cwd in calls:
+            self.assertEqual((env["GOWORK"], env["GOFLAGS"], env["GOENV"], cwd), ("off", "", "off", "/"))
+        for argv, _, _ in scans:
+            self.assertEqual(argv[0], binary)
 
     def test_missing_go_exits_2(self):
         def runner(argv, **kwargs):
@@ -662,7 +704,7 @@ class GoRunner(Helpers, unittest.TestCase):
         out = io.StringIO()
         self.assertEqual(lr.check(self.go_repo().root, "go", ".", "main", out, None, runner), 2)
         self.assertIn("error: ", out.getvalue())
-        self.assertIn("go scanner", out.getvalue())
+        self.assertIn("go scanner could not be built", out.getvalue())
 
     def test_go_test_files_are_always_test_code(self):
         files = frozenset({"api/a.go", "core/c.go", "core/c_test.go"})
@@ -670,6 +712,12 @@ class GoRunner(Helpers, unittest.TestCase):
         self.assertTrue(lr.load_config(data, ".", "go", files).is_test("core/c_test.go"))
         self.assertFalse(lr.load_config(data, ".", "go", files).is_test("core/c.go"))
         self.assertFalse(lr.load_config(overrides(API, CORE), ".", "python", FILES).is_test("x_test.go"))
+
+    def test_files_the_go_tool_skips_are_not_go(self):
+        for path in ("testdata/a.go", "core/testdata/x/a.go", "vendor/v/a.go", "_x/a.go", "core/_a.go", "core/.h/a.go"):
+            self.assertIsNone(lr.language_of(path), path)
+        for path in ("core/a.go", "core/a_test.go", "core/my_testdata/a.go", "core/x_y.go"):
+            self.assertEqual(lr.language_of(path), "go", path)
 
 
 class Workflow(unittest.TestCase):

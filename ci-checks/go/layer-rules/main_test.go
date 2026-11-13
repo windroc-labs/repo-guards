@@ -117,6 +117,7 @@ func TestNestedModules(t *testing.T) {
 		"lib/x/x.go":   "package x\n",
 		"other/go.mod": "module example.com/other\n",
 		"other/y/y.go": "package y\n",
+		"a/go.mod":     "module example.com/m\n", // same path as the root module: the shallower go.mod wins
 		"api/a.go":     "package api\n\nimport (\n\t\"example.com/m/lib/x\"\n\t\"example.com/m/other/y\"\n\t\"example.com/other/y\"\n)\n",
 	}
 	got := ok(t, scan(t, files, "api/a.go"))
@@ -174,6 +175,10 @@ func TestBadRequests(t *testing.T) {
 		"absolute path":        {"files": []string{"/a.go"}, "scan": []string{}, "context": []string{}, "settings": map[string]any{}},
 		"dot dot":              {"files": []string{}, "scan": []string{"../a.go"}, "context": []string{}, "settings": map[string]any{}},
 		"missing scan":         {"files": []string{}, "context": []string{}, "settings": map[string]any{}},
+		"inner dot dot":        {"files": []string{}, "scan": []string{"a/../../b.go"}, "context": []string{}, "settings": map[string]any{}},
+		"dot dot in files":     {"files": []string{"a/../b.go"}, "scan": []string{}, "context": []string{}, "settings": map[string]any{}},
+		"dot dot in context":   {"files": []string{}, "scan": []string{}, "context": []string{"../go.mod"}, "settings": map[string]any{}},
+		"missing go.mod":       {"files": []string{}, "scan": []string{}, "context": []string{"x/go.mod"}, "settings": map[string]any{}},
 		"go.mod no module":     {"files": []string{}, "scan": []string{}, "context": []string{"go.mod"}, "settings": map[string]any{}},
 		"unreadable scan file": {"files": []string{"a.go"}, "scan": []string{"a.go"}, "context": []string{}, "settings": map[string]any{}},
 	}

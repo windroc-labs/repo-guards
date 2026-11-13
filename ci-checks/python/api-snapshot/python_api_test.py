@@ -461,6 +461,14 @@ class PinTest(unittest.TestCase):
             self.assertRegex(name, r"^[A-Za-z0-9_.-]+==[A-Za-z0-9_.+!-]+$")
         self.assertIn("griffelib==2.4.1", [name for name, _ in blocks])
 
+    def test_workflow_installs_with_hashes(self):
+        workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+        step = workflow.split("      - name: Generate\n", 1)[1].split("      - name: Compare\n", 1)[0]
+        self.assertIn('--require-hashes -r "$api/requirements.txt"', step)
+        self.assertIn('env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" .', step)
+        self.assertIn('"$RUNNER_TEMP/api-entries.json"', step)
+        self.assertNotIn("not wired up", step)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -33,7 +33,7 @@
 |---|---|
 | `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
 | `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
-| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
+| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 | `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 
 PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Changes job，用 [`language-gate/language_gate.py`](language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件：检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage、Coverage shard 和 API snapshot 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。

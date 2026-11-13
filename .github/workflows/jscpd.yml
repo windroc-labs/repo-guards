@@ -17,7 +17,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 20
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       GOTOOLCHAIN: local
       # uv runs inside the caller checkout: never read its uv.toml or pyproject.toml [tool.uv].
       UV_NO_CONFIG: "1"
@@ -45,7 +45,7 @@ jobs:
           version: "0.13.7"
           enable-cache: false
       - name: Apply caller overrides
-        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       # jscpd:ignore-start is a comment in any of the four languages: each language's scanner finds its own.
       - name: Find languages
         id: languages
@@ -65,7 +65,7 @@ jobs:
         if: steps.languages.outputs.go == 'true'
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: repo-guards/ci-checks/go/.go-version
+          go-version-file: repo-guards/guards/ci-checks/go/.go-version
           cache: false
       - name: Install Node
         if: steps.languages.outputs.typescript == 'true'

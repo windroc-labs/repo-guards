@@ -35,9 +35,9 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
         run: |
-          scanner=default/scanner/scan.py
-          # The PR that adds this workflow lands before the default branch has a scanner.
-          [[ -f $scanner ]] || scanner=repo/scanner/scan.py
+          scanner=default/guards/leak-scan/scanner/scan.py
+          # A PR that adds or moves the scanner lands before the default branch has it at this path.
+          [[ -f $scanner ]] || scanner=repo/guards/leak-scan/scanner/scan.py
           args=()
           if [[ $EVENT == pull_request ]]; then
             # Read from the event file: the log echoes a step's env: block, which would publish hits in the title or body.
@@ -120,7 +120,7 @@ jobs:
               exit 1
             fi
           done
-          python3 "$GITHUB_WORKSPACE/tree/repo/scanner/gitleaks_report.py" "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP"
+          python3 "$GITHUB_WORKSPACE/tree/repo/guards/leak-scan/scanner/gitleaks_report.py" "$GITHUB_WORKSPACE/tree/repo" "$RUNNER_TEMP"
       - name: actionlint
         id: actionlint
         if: ${{ !cancelled() && steps.install.outcome == 'success' }}
@@ -170,13 +170,13 @@ jobs:
           package-manager-cache: false
       - name: Install Rust from the shared rust-toolchain.toml
         run: |
-          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' ci-checks/rust/rust-toolchain.toml)
+          channel=$(sed -n 's/^channel = "\(.*\)"$/\1/p' guards/ci-checks/rust/rust-toolchain.toml)
           rustup toolchain install "$channel" --profile minimal
           echo "RUSTUP_TOOLCHAIN=$channel" >> "$GITHUB_ENV"
       - name: Install Go from the shared .go-version
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: repo/ci-checks/go/.go-version
+          go-version-file: repo/guards/ci-checks/go/.go-version
           cache: false
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
@@ -186,166 +186,191 @@ jobs:
       - name: Scanner tests
         id: scanner
         if: ${{ !cancelled() }}
-        run: python3 -m unittest discover -s scanner -p 'test_*.py'
+        run: python3 -m unittest discover -s tests/leak-scan/scanner -p 'test_*.py'
       - name: Python comment budget tests
         id: python
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/comment-budget
+        working-directory: repo/tests/ci-checks/python/comment-budget
         run: python3 -m unittest comment_budget_test
       - name: Python pyproject config tests
         id: pyproject-config
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/pyproject-config
+        working-directory: repo/tests/ci-checks/python/pyproject-config
         run: python3 -m unittest pyproject_config_test
       - name: TypeScript comment budget tests
         id: typescript
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/typescript/comment-budget
+        working-directory: repo/guards/ci-checks/typescript/comment-budget
         run: |
           npm ci --no-audit --no-fund --ignore-scripts
           npm test
       - name: TypeScript workflow config tests
         id: workflow-config
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/typescript/workflow-config
+        working-directory: repo/guards/ci-checks/typescript/workflow-config
         run: node --test workflow-config.test.ts
       - name: Dependency allowlist tests
         id: dependency-allowlist
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/dependency-allowlist
+        working-directory: repo/tests/ci-checks/dependency-allowlist
         run: python3 -m unittest dependency_allowlist_test
       - name: config-overrides tests
         id: config-overrides
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/config-overrides
+        working-directory: repo/tests/ci-checks/config-overrides
         run: python3 -m unittest config_overrides_test
       - name: fetch-ci-checks tests
         id: fetch-ci-checks
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/fetch-ci-checks
+        working-directory: repo/tests/ci-checks/fetch-ci-checks
         run: python3 -m unittest fetch_ci_checks_test
       - name: inline-exemptions tests
         id: inline-exemptions
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/inline-exemptions
+        working-directory: repo/tests/ci-checks/inline-exemptions
         run: python3 -m unittest inline_exemptions_test
       - name: github-dir-pr tests
         id: github-dir-pr
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/github-dir-pr
+        working-directory: repo/tests/ci-checks/github-dir-pr
         run: python3 -m unittest github_dir_pr_test
       - name: deny-merge tests
         id: deny-merge
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/deny-merge
+        working-directory: repo/tests/ci-checks/rust/deny-merge
         run: python3 -m unittest deny_merge_test
       - name: language-gate tests
         id: language-gate
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/language-gate
+        working-directory: repo/tests/ci-checks/language-gate
         run: python3 -m unittest language_gate_test
       - name: api-snapshot tests
         id: api-snapshot
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/api-snapshot
+        working-directory: repo/tests/ci-checks/api-snapshot
         run: python3 -m unittest api_snapshot_test snapshot_artifact_test
       - name: Python API snapshot tests
         id: python-api-snapshot
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/api-snapshot
+        working-directory: repo/tests/ci-checks/python/api-snapshot
         run: |
           uv venv -q --python 3.14 "$RUNNER_TEMP/python-api-venv"
-          uv pip install -q --python "$RUNNER_TEMP/python-api-venv/bin/python" --require-hashes -r requirements.txt
+          uv pip install -q --python "$RUNNER_TEMP/python-api-venv/bin/python" --require-hashes -r "$GITHUB_WORKSPACE/repo/guards/ci-checks/python/api-snapshot/requirements.txt"
           "$RUNNER_TEMP/python-api-venv/bin/python" -m unittest python_api_test
       - name: Python layer rules tests
         id: python-layer-rules
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/layer-rules
+        working-directory: repo/tests/ci-checks/python/layer-rules
         run: |
           uv venv -q --python 3.14 "$RUNNER_TEMP/python-layer-rules-venv"
-          uv pip install -q --python "$RUNNER_TEMP/python-layer-rules-venv/bin/python" --require-hashes -r requirements.txt
+          uv pip install -q --python "$RUNNER_TEMP/python-layer-rules-venv/bin/python" --require-hashes -r "$GITHUB_WORKSPACE/repo/guards/ci-checks/python/layer-rules/requirements.txt"
           "$RUNNER_TEMP/python-layer-rules-venv/bin/python" -m unittest layer_rules_test
       - name: TypeScript API snapshot tests
         id: typescript-api-snapshot
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/typescript/api-snapshot
+        working-directory: repo/guards/ci-checks/typescript/api-snapshot
         run: |
           npm ci --no-audit --no-fund --ignore-scripts
           npm test
       - name: shard-artifact tests
         id: shard-artifact
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/coverage
+        working-directory: repo/tests/ci-checks/coverage
         run: python3 -m unittest shard_artifact_test
+      - name: coverage-gate tests
+        id: coverage-gate
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/coverage
+        run: python3 -m unittest coverage_gate_test
+      - name: crap-report tests
+        id: crap-report
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/crap
+        run: python3 -m unittest crap_report_test
+      - name: diff-filter tests
+        id: diff-filter
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/diff-filter
+        run: python3 -m unittest diff_filter_test
+      - name: Rust shard-targets tests
+        id: rust-shard-targets
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/rust/shard-targets
+        run: python3 -m unittest shard_targets_test
+      - name: Python license check tests
+        id: python-license-check
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/python/license-check
+        run: python3 -m unittest license_check_test
       - name: Rust coverage LCOV tests
         id: rust-coverage-lcov
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/coverage-lcov
+        working-directory: repo/tests/ci-checks/rust/coverage-lcov
         run: python3 -m unittest coverage_lcov_test
       - name: Rust comment budget tests
         id: rust
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/comment-budget
+        working-directory: repo/guards/ci-checks/rust/comment-budget
         run: cargo test --locked
       - name: Go comment budget tests
         id: go-comment-budget
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/comment-budget
+        working-directory: repo/guards/ci-checks/go/comment-budget
         run: go test ./...
       - name: Go coverage profile tests
         id: go-coverage-profile
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/coverage-profile
+        working-directory: repo/tests/ci-checks/go/coverage-profile
         run: python3 -m unittest coverage_profile_test
       - name: Go license check tests
         id: go-license-check
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/license-check
+        working-directory: repo/guards/ci-checks/go/license-check
         run: go test ./...
       - name: Go API snapshot tests
         id: go-api-snapshot
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/api-snapshot
+        working-directory: repo/guards/ci-checks/go/api-snapshot
         run: go test ./...
       - name: Python inline exemptions tests
         id: python-inline-exemptions
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/python/inline-exemptions
+        working-directory: repo/tests/ci-checks/python/inline-exemptions
         run: python3 -m unittest exemptions_test
       - name: Go layer rules tests
         id: go-layer-rules
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/layer-rules
+        working-directory: repo/tests/ci-checks/go/layer-rules
         # The golangci-lint go.yml installs, for the end-to-end cases.
         run: |
           (cd "$RUNNER_TEMP" && GOBIN=$RUNNER_TEMP/go-tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0)
           (cd "$RUNNER_TEMP" && uv venv -q --python 3.12 layer-rules-venv)
-          uv pip install -q --python "$RUNNER_TEMP/layer-rules-venv/bin/python" --require-hashes -r requirements.txt
+          uv pip install -q --python "$RUNNER_TEMP/layer-rules-venv/bin/python" --require-hashes -r "$GITHUB_WORKSPACE/repo/guards/ci-checks/go/layer-rules/requirements.txt"
           GOLANGCI_LINT=$RUNNER_TEMP/go-tools/golangci-lint "$RUNNER_TEMP/layer-rules-venv/bin/python" -m unittest layer_rules_test
       - name: Go inline exemptions tests
         id: go-inline-exemptions
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/go/inline-exemptions
+        working-directory: repo/guards/ci-checks/go/inline-exemptions
         run: go test ./...
       - name: TypeScript inline exemptions tests
         id: typescript-inline-exemptions
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/typescript/inline-exemptions
+        working-directory: repo/guards/ci-checks/typescript/inline-exemptions
         run: npm ci --no-audit --no-fund --ignore-scripts && npm test
       - name: TypeScript layer rules tests
         id: typescript-layer-rules
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/typescript/layer-rules
+        working-directory: repo/guards/ci-checks/typescript/layer-rules
         run: npm ci --no-audit --no-fund --ignore-scripts && npm test && npx tsc
       - name: Rust inline exemptions tests
         id: rust-inline-exemptions
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/inline-exemptions
+        working-directory: repo/guards/ci-checks/rust/inline-exemptions
         run: cargo test --locked
       - name: Rust API snapshot tests
         id: rust-api-snapshot
         if: ${{ !cancelled() }}
-        working-directory: repo/ci-checks/rust/api-snapshot
+        working-directory: repo/guards/ci-checks/rust/api-snapshot
         # rustdoc JSON needs the nightly the API snapshot job pins.
         run: |
           toolchain=$(sed -n 's/^toolchain = "\(.*\)"$/\1/p' ../api-snapshot.toml)
@@ -384,9 +409,14 @@ jobs:
           RUST_INLINE_EXEMPTIONS: ${{ steps.rust-inline-exemptions.outcome }}
           RUST_API_SNAPSHOT: ${{ steps.rust-api-snapshot.outcome }}
           GO_LAYER_RULES: ${{ steps.go-layer-rules.outcome }}
+          COVERAGE_GATE: ${{ steps.coverage-gate.outcome }}
+          CRAP_REPORT: ${{ steps.crap-report.outcome }}
+          DIFF_FILTER: ${{ steps.diff-filter.outcome }}
+          RUST_SHARD_TARGETS: ${{ steps.rust-shard-targets.outcome }}
+          PYTHON_LICENSE_CHECK: ${{ steps.python-license-check.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES COVERAGE_GATE CRAP_REPORT DIFF_FILTER RUST_SHARD_TARGETS PYTHON_LICENSE_CHECK; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

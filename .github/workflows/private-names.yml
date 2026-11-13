@@ -80,7 +80,7 @@ jobs:
           fi
           git checkout -q --detach refs/scan/tree
           mkdir "$RUNNER_TEMP/main"
-          git archive refs/scan/main scanner | tar -x -C "$RUNNER_TEMP/main"
+          git archive refs/scan/main guards/leak-scan/scanner | tar -x -C "$RUNNER_TEMP/main"
           echo "SCAN_RANGE=$range" >> "$GITHUB_ENV"
       - name: Private names
         env:
@@ -91,4 +91,4 @@ jobs:
             # The scanner reads the title and body from the event file, not env:, which the log prints.
             args+=(--pr-event "$GITHUB_EVENT_PATH")
           fi
-          python3 -I "$RUNNER_TEMP/main/scanner/scan.py" "${args[@]}"
+          python3 -I "$RUNNER_TEMP/main/guards/leak-scan/scanner/scan.py" "${args[@]}"

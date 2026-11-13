@@ -287,6 +287,43 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual(entries[("demo.C", "m")].signature, "(self, x: int) -> int\n(self, x: str) -> str")
         self.assertNotIn(("demo", "_hidden"), entries)
 
+    def test_stub_only_overloads_inherited_overridden_exported(self):
+        entries = generate(
+            {
+                "demo/__init__.pyi": """\
+                    from typing import overload
+                    from ._impl import g
+                    __all__ = ["Base", "Sub", "Over", "g"]
+                    class Base:
+                        @overload
+                        def m(self, x: int) -> int: ...
+                        @overload
+                        def m(self, x: str) -> str: ...
+                        def n(self) -> None: ...
+                    class Sub(Base): ...
+                    class Over(Base):
+                        @overload
+                        def n(self, x: int) -> int: ...
+                        @overload
+                        def n(self, x: str) -> str: ...
+                    """,
+                "demo/_impl.pyi": """\
+                    from typing import overload
+                    @overload
+                    def g(x: int) -> int: ...
+                    @overload
+                    def g(x: bytes) -> bytes: ...
+                    """,
+            }
+        )
+        both = "(self, x: int) -> int\n(self, x: str) -> str"
+        self.assertEqual(entries[("demo.Sub", "m")].signature, both)
+        self.assertEqual(entries[("demo.Over", "n")].signature, both)
+        self.assertEqual(entries[("demo.Base", "n")].signature, "(self) -> None")
+        self.assertEqual(
+            entries[("demo", "g")], python_api.Entry("demo", "demo", "function", "g", "(x: int) -> int\n(x: bytes) -> bytes")
+        )
+
     def test_labels_sorted(self):
         entries = generate(
             {

@@ -224,6 +224,22 @@ def is_dunder(name: str) -> bool:
     return len(name) > 4 and name.startswith("__") and name.endswith("__")
 
 
+def promote_overloads(obj: Any) -> None:
+    """Make each @overload-only function (as in .pyi stubs) a member, as griffe does once an implementation follows.
+
+    Griffe keeps such declarations apart from the members, so without this they would not be inherited,
+    resolve as export targets, or override a base class method.
+    """
+    for name, overloads in list(obj.overloads.items()):
+        if overloads and name not in obj.members:
+            overloads[0].overloads = overloads
+            obj.set_member(name, overloads[0])
+            del obj.overloads[name]
+    for member in obj.members.values():
+        if not member.is_alias and (member.is_module or member.is_class):
+            promote_overloads(member)
+
+
 def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[Entry]) -> None:
     members = obj.all_members if obj.is_class else obj.members
     for name, member in sorted(members.items()):
@@ -242,10 +258,6 @@ def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[E
         entries.append(Entry(unit, path, target.kind.value, name, FORMATTERS[target.kind](target)))
         if (target.is_class and target.path not in stack) or target.is_module:
             walk(target, f"{path}.{name}", unit, (*stack, target.path), entries)
-    # Griffe keeps @overload declarations with no implementation (as in .pyi stubs) apart from the members.
-    for name, overloads in sorted(obj.overloads.items()):
-        if overloads and name not in members and overloads[0].is_public:
-            entries.append(Entry(unit, path, "function", name, "\n".join(map(one_function, overloads))))
 
 
 def generate(site: Path, names: list[str]) -> list[Entry]:
@@ -256,6 +268,8 @@ def generate(site: Path, names: list[str]) -> list[Entry]:
             modules.append(loader.load(unit, try_relative_path=False))
         except (griffe.GriffeError, ImportError) as error:
             raise Error(f"cannot load {quote(unit)}: {type(error).__name__}: {quote(str(error))}") from error
+    for module in modules:
+        promote_overloads(module)
     entries: list[Entry] = []
     for unit, module in zip(names, modules, strict=True):
         entries.append(Entry(unit, "", "module", unit, ""))

@@ -1,12 +1,15 @@
 //! Writes the public API of every library crate in a Cargo workspace as API snapshot entries, from rustdoc JSON.
 //! Usage: api-snapshot --project <dir> --output <file>. Exit 0 on success, 2 on any error.
+//! `API_SNAPSHOT_SCOPE` (see scope.rs) limits the entries to the modules it names.
 
 mod cargo;
 mod render;
 mod rustdoc;
+mod scope;
 mod signature;
 mod walk;
 
+use scope::Scope;
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -30,10 +33,15 @@ fn parse_args(args: Vec<OsString>) -> Result<(PathBuf, PathBuf), String> {
 
 fn run(args: Vec<OsString>) -> Result<(), String> {
     let (project, output) = parse_args(args)?;
+    let scope = Scope::parse(std::env::var_os(scope::VAR))?;
     let mut entries = Vec::new();
     for krate in cargo::lib_crates(&project)? {
         let json = cargo::rustdoc_json(&project, &krate)?;
-        entries.extend(render::entries(&krate.package, &rustdoc::load(&json)?)?);
+        entries.extend(render::entries(
+            &krate.package,
+            &rustdoc::load(&json)?,
+            &scope,
+        )?);
     }
     let mut text = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
     text.push('\n');

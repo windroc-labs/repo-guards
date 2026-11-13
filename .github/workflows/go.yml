@@ -38,7 +38,7 @@ jobs:
     outputs:
       run: ${{ steps.gate.outputs.run }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
     steps:
       - name: Check out the merge ref and its parents
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,7 +75,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       # The pinned Go only, never the PR's go.work or a runner's user go env.
       GOTOOLCHAIN: local
@@ -97,12 +97,12 @@ jobs:
       - *install-uv
       - &apply-overrides
         name: Apply caller overrides
-        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       - &install-go
         name: Install Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: repo-guards/ci-checks/go/.go-version
+          go-version-file: repo-guards/guards/ci-checks/go/.go-version
           cache: false
       # Fresh caches, so no module, build or lint result left on a self-hosted runner is trusted;
       # job env cannot name the runner's temp directory.
@@ -213,7 +213,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: *base-ref
       GOTOOLCHAIN: local
       GOWORK: "off"
@@ -311,7 +311,7 @@ jobs:
       matrix:
         unit-tests: ${{ fromJSON(inputs.coverage-shards) }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       GOTOOLCHAIN: local
       GOWORK: "off"
       GOENV: "off"
@@ -346,7 +346,7 @@ jobs:
     permissions:
       contents: read
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       PROJECT_DIR: ${{ inputs.working-directory }}
       LANGUAGE: go
       # Keeps a uv.toml or [tool.uv] in the PR from choosing the Python that reads the setting.
@@ -374,7 +374,7 @@ jobs:
         if: ${{ steps.setting.outputs.path != '' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: repo-guards/ci-checks/go/.go-version
+          go-version-file: repo-guards/guards/ci-checks/go/.go-version
           cache: false
       - *go-caches
       # api-snapshot builds the module and its dependencies (go list -export) and writes the public API entries

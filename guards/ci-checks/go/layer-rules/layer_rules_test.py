@@ -280,7 +280,7 @@ class Main(unittest.TestCase):
 class Pin(unittest.TestCase):
     def test_tests_use_the_golangci_lint_go_yml_installs(self):
         pin = re.compile(r"golangci-lint/v2/cmd/golangci-lint@(v[0-9.]+)")
-        workflows = HERE.parents[2] / ".github/workflows"
+        workflows = HERE.parents[3] / ".github/workflows"
         versions = {name: pin.findall((workflows / name).read_text()) for name in ("go.yml", "ci.yml")}
         self.assertEqual(len(versions["go.yml"]), 1, versions)
         self.assertEqual(versions["ci.yml"], versions["go.yml"], versions)

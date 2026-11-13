@@ -45,4 +45,4 @@ jobs:
         working-directory: repo
         env:
           BASE_REF: origin/${{ github.base_ref }}
-        run: uv run --no-project --python 3.12 "$GITHUB_WORKSPACE/repo-guards/ci-checks/github-dir-pr/github_dir_pr.py" "$BASE_REF"
+        run: uv run --no-project --python 3.12 "$GITHUB_WORKSPACE/repo-guards/guards/ci-checks/github-dir-pr/github_dir_pr.py" "$BASE_REF"

@@ -1,6 +1,6 @@
 # Go 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Go 配置，由 reusable workflow [`go.yml`](../../.github/workflows/go.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 Go 配置，由 reusable workflow [`go.yml`](../../../.github/workflows/go.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它装 Go，各 job 设 `GOTOOLCHAIN=local`：不按项目 `go.mod` 的 `go`、`toolchain` 行换版本。下面的工具都由这个版本编译，读不懂更新的语言版本，所以 `go.mod` 要更新 Go 的项目，等 `.go-version` 升级。`go.mod` 的 `ignore` 指令（Go 1.25 起）让 `./...` 跳过目录，`go.yml` 各步就都不查那里，所以算行内豁免，`go.mod` 进 CODEOWNERS（见 [CODEOWNERS](../README.md#codeowners)）。各 job 还设 `GOWORK=off`（不读 PR 的 `go.work`）和 `GOENV=off`（不读 runner 上的用户 Go 配置），模块缓存、编译缓存和 golangci-lint 的缓存都放在 `$RUNNER_TEMP`。
 
@@ -108,7 +108,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 ## 接口快照生成（api-snapshot）
 
-[`api-snapshot/`](api-snapshot/) 是[第 4 层](../../architecture/README.md#第-1-项接口快照)第 1 项接口快照的 Go 生成器：一个 Go 小程序，在自己的模块里，`go.mod` 只固定 `github.com/BurntSushi/toml` v1.6.0（读冻结范围）。工具的版本就是本目录的源码、`go.mod` 加 [`.go-version`](.go-version) 的 Go。`go.yml` 的 API snapshot job 只在设了 `api-snapshot.go` 时装 Go，Generate 步用 `go build` 编译它，在项目目录里跑 `api-snapshot <repo 根目录> <working-directory>`，把条目写进 `$RUNNER_TEMP/api-entries.json`，交给[接口快照比对](../README.md#接口快照比对)。
+[`api-snapshot/`](api-snapshot/) 是[第 4 层](../../../architecture/README.md#第-1-项接口快照)第 1 项接口快照的 Go 生成器：一个 Go 小程序，在自己的模块里，`go.mod` 只固定 `github.com/BurntSushi/toml` v1.6.0（读冻结范围）。工具的版本就是本目录的源码、`go.mod` 加 [`.go-version`](.go-version) 的 Go。`go.yml` 的 API snapshot job 只在设了 `api-snapshot.go` 时装 Go，Generate 步用 `go build` 编译它，在项目目录里跑 `api-snapshot <repo 根目录> <working-directory>`，把条目写进 `$RUNNER_TEMP/api-entries.json`，交给[接口快照比对](../README.md#接口快照比对)。
 
 | 项 | 内容 |
 |---|---|
@@ -139,7 +139,7 @@ Go 的版本固定在 [`.go-version`](.go-version)（1.27.4），`go.yml` 按它
 
 ## 分层规则（depguard）
 
-[第 4 层](../../architecture/README.md#第-2-项分层规则)第 2 项的 Go 部分：规则写在项目自己的 golangci-lint 配置里，Checks job 的 Layer rules 步跑 [`layer-rules/layer_rules.py`](layer-rules/layer_rules.py)，用 depguard 查整个项目。
+[第 4 层](../../../architecture/README.md#第-2-项分层规则)第 2 项的 Go 部分：规则写在项目自己的 golangci-lint 配置里，Checks job 的 Layer rules 步跑 [`layer-rules/layer_rules.py`](layer-rules/layer_rules.py)，用 depguard 查整个项目。
 
 | 项 | 内容 |
 |---|---|

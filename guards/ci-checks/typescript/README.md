@@ -1,6 +1,6 @@
 # TypeScript 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置，由 reusable workflow [`typescript.yml`](../../.github/workflows/typescript.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`typescript.yml` 按 [`package.json`](package.json) 把工具装在 repo 之外，再用 `npm ci` 装 repo 自己的依赖，npm 设置取 [`.npmrc`](.npmrc)（见[依赖检查规则](../README.md#依赖检查规则)）。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 TypeScript 配置，由 reusable workflow [`typescript.yml`](../../../.github/workflows/typescript.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`typescript.yml` 按 [`package.json`](package.json) 把工具装在 repo 之外，再用 `npm ci` 装 repo 自己的依赖，npm 设置取 [`.npmrc`](.npmrc)（见[依赖检查规则](../README.md#依赖检查规则)）。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（prettier）
 
@@ -71,7 +71,7 @@ repo 用 vitest 跑测试，`devDependencies` 里要有 `vitest` 和同版本的
 
 ## 分层规则（dependency-cruiser）
 
-[`layer-rules/`](layer-rules/) 是[第 2 项分层规则](../../architecture/README.md#第-2-项分层规则)的 TypeScript 实现：`typescript.yml` 的 Layer rules 步在 `working-directory` 里跑 `node layer-rules.ts`，用 Node 自带的类型剥离直接运行。依赖在它自己的 `package.json` 里固定版本，和项目的依赖分开装：dependency-cruiser 18.7.2、`typescript` 6.0.3（dependency-cruiser 用它解析 TypeScript，只支持到 6.x）。
+[`layer-rules/`](layer-rules/) 是[第 2 项分层规则](../../../architecture/README.md#第-2-项分层规则)的 TypeScript 实现：`typescript.yml` 的 Layer rules 步在 `working-directory` 里跑 `node layer-rules.ts`，用 Node 自带的类型剥离直接运行。依赖在它自己的 `package.json` 里固定版本，和项目的依赖分开装：dependency-cruiser 18.7.2、`typescript` 6.0.3（dependency-cruiser 用它解析 TypeScript，只支持到 6.x）。
 
 | 项 | 内容 |
 |---|---|

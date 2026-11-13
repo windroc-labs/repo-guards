@@ -1,6 +1,6 @@
 # Rust 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（rustfmt）
 
@@ -90,7 +90,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 
 ## 接口快照
 
-[第 1 项接口快照](../../architecture/README.md#第-1-项接口快照)的 Rust 生成器：[`api-snapshot/`](api-snapshot/)，一个带 `Cargo.lock` 的 cargo 小程序，读 rustdoc JSON，用 `rustdoc-types` 0.61.0（写死 `=`）解析。比对和输出见[接口快照比对](../README.md#接口快照比对)。
+[第 1 项接口快照](../../../architecture/README.md#第-1-项接口快照)的 Rust 生成器：[`api-snapshot/`](api-snapshot/)，一个带 `Cargo.lock` 的 cargo 小程序，读 rustdoc JSON，用 `rustdoc-types` 0.61.0（写死 `=`）解析。比对和输出见[接口快照比对](../README.md#接口快照比对)。
 
 | 文件 | 作用 |
 |---|---|

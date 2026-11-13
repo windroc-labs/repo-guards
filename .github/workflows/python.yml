@@ -34,7 +34,7 @@ jobs:
     outputs:
       run: ${{ steps.gate.outputs.run }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
     steps:
       - name: Check out the merge ref and its parents
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -71,7 +71,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
@@ -94,7 +94,7 @@ jobs:
         name: Apply caller overrides
         run: |
           overrides() { uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" "$@"; }
-          overrides apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+          overrides apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
           dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" "$PROJECT_DIR")
           echo "SOURCE_DIRS=$dirs" >> "$GITHUB_ENV"
       - name: Install the shared dev group
@@ -199,7 +199,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 40
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: *base-ref
       PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
@@ -301,7 +301,7 @@ jobs:
       matrix:
         tests: ${{ fromJSON(inputs.coverage-shards) }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       PROJECT_DIR: ${{ inputs.working-directory }}
       UV_NO_BUILD: "1"
       MODE: shard
@@ -333,7 +333,7 @@ jobs:
     permissions:
       contents: read
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       PROJECT_DIR: ${{ inputs.working-directory }}
       LANGUAGE: python
       # Keeps a uv.toml or [tool.uv] in the PR from choosing the Python that reads the setting.

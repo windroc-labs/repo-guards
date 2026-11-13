@@ -285,7 +285,7 @@ class Requirements(unittest.TestCase):
 
 class Workflow(unittest.TestCase):
     def test_step_runs_the_wrapper_isolated_from_the_project(self):
-        workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+        workflow = (HERE.parents[3] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
         step = workflow.split("      - name: Layer rules\n", 1)[1].split("      - name: ", 1)[0]
         self.assertIn('UV_NO_CONFIG: "1"', step)
         self.assertIn('--require-hashes -r "$rules/requirements.txt"', step)

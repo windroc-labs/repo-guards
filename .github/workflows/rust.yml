@@ -38,7 +38,7 @@ jobs:
     outputs:
       run: ${{ steps.gate.outputs.run }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
     steps:
       - name: Check out the merge ref and its parents
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -75,7 +75,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: &base-ref ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.merge_group.base_sha || (github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || format('origin/{0}', github.event.repository.default_branch) }}
       CARGO_TERM_COLOR: always
       TOOLCHAIN: rust-toolchain.toml
@@ -97,7 +97,7 @@ jobs:
       - *install-uv
       - &apply-overrides
         name: Apply caller overrides
-        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
+        run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain at TOOLCHAIN_KEY; COMPONENTS adds to it.
       # The Coverage job builds nothing in merge mode, so it skips the Rust steps; MODE is unset in Checks.
       - &install-rust
@@ -167,7 +167,7 @@ jobs:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     timeout-minutes: 60
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       BASE_REF: *base-ref
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
@@ -263,7 +263,7 @@ jobs:
       matrix:
         unit-tests: ${{ fromJSON(inputs.coverage-shards) }}
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       CARGO_TERM_COLOR: always
       TOOLCHAIN: coverage.toml
       TOOLCHAIN_KEY: toolchain
@@ -300,7 +300,7 @@ jobs:
     permissions:
       contents: read
     env:
-      RG: ${{ github.workspace }}/repo-guards/ci-checks
+      RG: ${{ github.workspace }}/repo-guards/guards/ci-checks
       PROJECT_DIR: ${{ inputs.working-directory }}
       LANGUAGE: rust
       # Keeps a uv.toml or [tool.uv] in the PR from choosing the Python that reads the setting.

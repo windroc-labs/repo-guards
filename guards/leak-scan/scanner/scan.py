@@ -3,14 +3,14 @@
 
 Local run, from the repo root, with the private-name list kept outside the checkout:
 
-    python3 scanner/scan.py --names-file <path to your private-name list>
+    python3 guards/leak-scan/scanner/scan.py --names-file <path to your private-name list>
 
 The list may come from the environment variable REPO_GUARDS_PRIVATE_NAMES instead.
 It scans the tracked files and the messages and author and committer emails of the
 commits in `--commits` (default origin/main..HEAD); `--pr-from-env` adds the PR title
 and body from PR_TITLE and PR_BODY, `--pr-event FILE` from a GitHub event payload's
 `pull_request`.
-`--pre-push REMOTE` (the git pre-push hook, hooks/pre-push) reads git's pre-push input from
+`--pre-push REMOTE` (the git pre-push hook, guards/leak-scan/hooks/pre-push) reads git's pre-push input from
 stdin and scans instead each pushed commit's message, emails and added or changed files,
 leaving out commits REMOTE's remote-tracking refs or the input's remote shas reach. Its
 checks default to the leak class. A hit in a pushed file is `commit <sha> file #k`, k its

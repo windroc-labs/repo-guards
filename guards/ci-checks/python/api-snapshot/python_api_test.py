@@ -802,7 +802,7 @@ class PinTest(unittest.TestCase):
 
 
 def generate_step() -> str:
-    workflow = (HERE.parents[2] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
+    workflow = (HERE.parents[3] / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
     return workflow.split("      - name: Generate\n", 1)[1].split("      - name: Compare\n", 1)[0]
 
 

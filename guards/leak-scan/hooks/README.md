@@ -28,7 +28,7 @@ private-name 名单从环境变量 `REPO_GUARDS_PRIVATE_NAMES` 读，每行一�
 - 检查项：`scan.py` 的 leak 类检查（private-name、local-path、email），即 `--pre-push` 的默认检查。
 - 不查 tracker ID：public repo 里允许出现。也不扫 tag 的名字、message、tagger 和 ref 名。
 - 每个启用了 hook 的 clone 的每次 push 都扫，不查目标 repo 是否 public。
-- 不代替 [AGENTS.md](../AGENTS.md) 要求的 push 前检查：hygiene 类检查（em-dash、link）和 PR 标题、正文还是由 `scan.py` 和 CI 查。CI 的 private-names 检查继续作为后备。
+- 不代替 [AGENTS.md](../../../AGENTS.md) 要求的 push 前检查：hygiene 类检查（em-dash、link）和 PR 标题、正文还是由 `scan.py` 和 CI 查。CI 的 private-names 检查继续作为后备。
 
 ## 被拒时
 

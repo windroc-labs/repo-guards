@@ -1,6 +1,6 @@
 # Python 模板
 
-[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境。项目有 `uv.lock` 就用 `uv sync --locked` 装；没有就用 `uv venv` 建 `.venv`，再 `uv pip install -r requirements.txt`，不要求项目有 `pyproject.toml`。之后各步都用这个 `.venv`。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
+[`ci-checks`](../README.md) 语言级各工具的 Python 配置，由 reusable workflow [`python.yml`](../../../.github/workflows/python.yml) 从 repo-guards 读取，不用合并进 repo 的 `pyproject.toml`；接入见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)。`python.yml` 把 [`pyproject.toml`](pyproject.toml) 的 `dev` 组装进单独的环境。项目有 `uv.lock` 就用 `uv sync --locked` 装；没有就用 `uv venv` 建 `.venv`，再 `uv pip install -r requirements.txt`，不要求项目有 `pyproject.toml`。之后各步都用这个 `.venv`。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](../README.md#每个-repo-自己要做的)下的 job 表。
 
 ## formatter（ruff format）
 
@@ -82,7 +82,7 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 
 ## 分层规则（import-linter）
 
-[架构第 2 项](../../architecture/README.md#第-2-项分层规则)的 Python 实现。规则用 [import-linter](https://import-linter.readthedocs.io/) 自己的写法，写在项目目录（`working-directory`）里：
+[架构第 2 项](../../../architecture/README.md#第-2-项分层规则)的 Python 实现。规则用 [import-linter](https://import-linter.readthedocs.io/) 自己的写法，写在项目目录（`working-directory`）里：
 
 | 配置放哪 | 写法 |
 |---|---|

@@ -509,7 +509,7 @@ class EndToEnd(unittest.TestCase):
 class Workflows(unittest.TestCase):
     """The check is a step of each language workflow's Checks job and of jscpd.yml; callers add nothing."""
 
-    WORKFLOWS = ie.CI_CHECKS.parent / ".github/workflows"
+    WORKFLOWS = ie.CI_CHECKS.parents[1] / ".github/workflows"
     GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}"
     # Languages whose Checks job runs a Layer rules step, right after Inline exemptions.
     LAYER_RULES = frozenset({"go", "python", "typescript"})

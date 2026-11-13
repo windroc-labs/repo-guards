@@ -11,8 +11,9 @@ from pathlib import Path
 
 USES = re.compile(r"uses:\s*([\w.-]+/repo-guards)/\.github/workflows/[\w.-]+@(\S+)")
 SHA = re.compile(r"[0-9a-f]{40}")
-SUBDIR = "ci-checks"
-APPLY = f"{SUBDIR}/config-overrides/config_overrides.py"
+SOURCE = ("guards", "ci-checks")
+LOCAL = "ci-checks"
+APPLY = f"{LOCAL}/config-overrides/config_overrides.py"
 REF = "main"
 
 
@@ -58,11 +59,11 @@ def extract(archive: bytes, out: Path, overrides: Path) -> str:
     staging = out.with_name(out.name + ".partial")
     shutil.rmtree(staging, ignore_errors=True)
     with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
-        members = [m for m in tar.getmembers() if m.name.split("/")[1:2] == [SUBDIR]]
+        members = [m for m in tar.getmembers() if tuple(m.name.split("/")[1:3]) == SOURCE]
         if not members:
-            raise Error(f"archive has no {SUBDIR}/ directory")
+            raise Error(f"archive has no {'/'.join(SOURCE)}/ directory")
         for member in members:
-            member.name = "/".join(member.name.split("/")[1:])
+            member.name = "/".join([LOCAL, *member.name.split("/")[3:]])
         tar.extractall(staging, members=members, filter="data")
         commit = tar.pax_headers.get("comment", "")
     if not SHA.fullmatch(commit):
@@ -82,7 +83,7 @@ def extract(archive: bytes, out: Path, overrides: Path) -> str:
 
 def run(argv: list[str], fetch: Callable[[str, str], bytes] = download) -> int:
     parser = argparse.ArgumentParser(
-        description="Download repo-guards' ci-checks/ (configs, checker sources, scripts) the caller CI uses, from main, and apply the caller's overrides."
+        description="Download repo-guards' guards/ci-checks/ (configs, checker sources, scripts) the caller CI uses, from main, into ci-checks/ and apply the caller's overrides."
     )
     parser.add_argument("--workflow", default=".github/workflows/ci.yml", type=Path)
     parser.add_argument("--out", default=".repo-guards", type=Path)
@@ -94,7 +95,7 @@ def run(argv: list[str], fetch: Callable[[str, str], bytes] = download) -> int:
     except (OSError, tarfile.TarError, Error) as error:
         print(f"fetch_ci_checks: {error}", file=sys.stderr)
         return 2
-    print(f"{repo}@{REF} ({commit}) {SUBDIR}/ -> {args.out / SUBDIR}")
+    print(f"{repo}@{REF} ({commit}) {'/'.join(SOURCE)}/ -> {args.out / LOCAL}")
     return 0
 
 

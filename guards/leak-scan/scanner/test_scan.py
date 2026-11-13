@@ -11,7 +11,7 @@ import unittest
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parent / "scan.py"
-REPO_ROOT = SCRIPT.parent.parent
+REPO_ROOT = SCRIPT.parents[3]
 
 EM = chr(0x2014)
 NAME = "acme" + "-x"
@@ -585,8 +585,8 @@ class Links(unittest.TestCase):
         ).stdout.decode().split("\0")
         tree = {p: (REPO_ROOT / p).read_bytes() for p in listed if p and (REPO_ROOT / p).is_file()}
         for link, fails in (
-            ("ci-checks/README.md#流程级", False),
-            ("ci-checks/README.md#没有这个", True),
+            ("guards/ci-checks/README.md#流程级", False),
+            ("guards/ci-checks/README.md#没有这个", True),
             ("missing/README.md", True),
         ):
             with self.subTest(link=link):

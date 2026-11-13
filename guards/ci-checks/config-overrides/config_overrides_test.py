@@ -444,7 +444,7 @@ class SnapshotPathErrorTest(unittest.TestCase):
 class SnapshotJobTest(unittest.TestCase):
     """Each language's API snapshot job reads only the path; a generator reads its own scope."""
 
-    WORKFLOWS = CI_CHECKS.parent / ".github/workflows"
+    WORKFLOWS = CI_CHECKS.parents[1] / ".github/workflows"
 
     def steps(self, language: str) -> dict[str, str]:
         text = (self.WORKFLOWS / f"{language}.yml").read_text(encoding="utf-8")
@@ -503,13 +503,13 @@ class SnapshotJobTest(unittest.TestCase):
 class ScopeDocsTest(unittest.TestCase):
     """The README is the contract the four language generators implement."""
 
-    ROOT = CI_CHECKS.parent
+    ROOT = CI_CHECKS.parents[1]
 
     def section(self, text: str, heading: str) -> str:
         return text.split(f"\n{heading}\n", 1)[1].split("\n### ", 1)[0]
 
     def test_setting_is_documented_with_the_path(self) -> None:
-        ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
+        ci = (self.ROOT / "guards/ci-checks/README.md").read_text(encoding="utf-8")
         overrides = self.section(ci, "### 覆盖默认配置")
         self.assertIn("  - `api-snapshot-scope.<语言>`：", overrides)
         self.assertIn('api-snapshot-scope.rust = ["kvm_op::driver"]', overrides)
@@ -520,7 +520,7 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertNotIn("Read the snapshot path", ci)
 
     def test_generator_contract(self) -> None:
-        ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
+        ci = (self.ROOT / "guards/ci-checks/README.md").read_text(encoding="utf-8")
         contract = self.section(ci, "#### 冻结范围")
         self.assertNotIn("API_SNAPSHOT_SCOPE", ci)
         self.assertIn("各语言的生成器自己读", contract)
@@ -530,7 +530,7 @@ class ScopeDocsTest(unittest.TestCase):
             self.assertIn(f"  - {language}：", contract)
 
     def test_rust_impl_rules(self) -> None:
-        contract = self.section((self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8"), "#### 冻结范围")
+        contract = self.section((self.ROOT / "guards/ci-checks/README.md").read_text(encoding="utf-8"), "#### 冻结范围")
         rust = next(line for line in contract.splitlines() if line.startswith("  - Rust："))
         # Blocker 1: a foreign trait on &LocalType belongs to LocalType's module.
         self.assertIn("`impl core::fmt::Display for &kvm_op::driver::Id`", rust)
@@ -539,14 +539,14 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertIn("`impl core::convert::From<kvm_op::driver::Id> for u32`", rust)
         self.assertIn("头里一个本地路径都没有的 impl 总在范围内", rust)
         self.assertIn("(rust/README.md#接口快照)", rust)
-        rust_readme = (self.ROOT / "ci-checks/rust/README.md").read_text(encoding="utf-8")
+        rust_readme = (self.ROOT / "guards/ci-checks/rust/README.md").read_text(encoding="utf-8")
         self.assertIn("(../README.md#冻结范围)", self.section(rust_readme, "## 接口快照"))
 
     def test_architecture_item_points_at_the_setting(self) -> None:
         arch = (self.ROOT / "architecture/README.md").read_text(encoding="utf-8")
         item = self.section(arch, "### 第 1 项接口快照")
         self.assertIn("`api-snapshot-scope.<语言>`", item)
-        self.assertIn("(../ci-checks/README.md#冻结范围)", item)
+        self.assertIn("(../guards/ci-checks/README.md#冻结范围)", item)
 
 
 class GetTest(unittest.TestCase):

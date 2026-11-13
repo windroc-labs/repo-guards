@@ -38,4 +38,4 @@
 - 启用：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设快照路径，如 `api-snapshot.rust = ".github/checks/api-rust.json"`。路径相对 repo 根目录，要放在 `.github/` 下（已由 CODEOWNERS 锁住），每种语言、每个 `working-directory` 各一份；路径的规定见[覆盖默认配置](../ci-checks/README.md#覆盖默认配置)。没设就不启用。改这个设置按第 21 项单独提一个只改 `.github/` 的 PR。
 - 第一次：文件还不存在，job 失败，并把完整快照作为 artifact 上传。把它原样放到配置的路径，提交进同一个 PR。
 - 改接口时：生成结果和快照对不上，job 失败，job summary 列出多、少、变的条目，并写明 artifact 名字和该放的路径。接口改动是有意的，就从这次运行的 artifact 下载新快照，原样放到配置的路径，和代码在同一个 PR 里提交；快照在 `.github/` 下，owner 审 PR 时逐条看快照的 diff。不是有意的，就改回代码。
-- 现状：Rust 已接上，规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)；Python、TypeScript、Go 的生成还没接上，设了路径时 job 在 Generate 步退出 2。
+- 现状：Go 的生成已接上（见[接口快照生成](../ci-checks/go/README.md#接口快照生成api-snapshot)），Rust 的也已接上（规则和限制见 [Rust 模板](../ci-checks/rust/README.md#接口快照)）；别的语言还没接上，设了路径时 job 在 Generate 步退出 2。

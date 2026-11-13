@@ -445,7 +445,7 @@ reason = "只在 feature full 下用到"
 
 例外：PR 在 `.github/` 下只改了下面两类文件时，可以同时改别的文件；两条可以同时成立。
 
-- 接口快照：merge-base 上 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里 `api-snapshot` 设的快照文件，所有语言、所有 `working-directory`。改接口的代码和新快照要一起合（见[接口快照比对](#接口快照比对)）。路径在 merge-base 和 PR 上都要过 API snapshot job 的路径校验（`.github/` 下的普通文件，不在 `.github/workflows/` 下，不是 `.github/checks/repo-guards.toml`，路径上没有符号链接），过不了的不放行。改快照路径设置本身仍要单独一个只改 `.github/` 的 PR：PR 里的新路径不算，`repo-guards.toml` 的改动也不属于下一条。
+- 接口快照：merge-base 上 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里 `api-snapshot` 设的快照文件，所有语言、所有 `working-directory`。改接口的代码和新快照要一起合（见[接口快照比对](#接口快照比对)）。路径在 merge-base 和 PR 上都要过 API snapshot job 的路径校验（`.github/` 下的普通文件，不在 `.github/workflows/` 下，不是 `.github/checks/repo-guards.toml`，路径上没有符号链接），过不了的不放行；merge-base 上的 `repo-guards.toml` 读不懂，或 `api-snapshot` 设置本身不对（语言名不认识、值不是字符串）时，一个快照文件也不放行。改快照路径设置本身仍要单独一个只改 `.github/` 的 PR：PR 里的新路径不算，`repo-guards.toml` 的改动也不属于下一条。
 - 豁免登记：`.github/checks/repo-guards.toml` 和 merge-base 比只差 `["ci-checks/inline-exemptions/settings.toml"]` 节的 `exemption`。加或删豁免的代码和它的登记要一起合（见[行内豁免](#行内豁免)）。
 
 测试：在 `github-dir-pr/` 跑 `python3 -m unittest github_dir_pr_test`。

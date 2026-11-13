@@ -22,13 +22,16 @@ def changed_files(root: Path, base_ref: str) -> list[str]:
     return [path for path in out.split("\0") if path]
 
 
+def overrides_text(root: Path, rev: str) -> str:
+    """The overrides file at rev; empty, like an empty file, when rev has none."""
+    shown = git(root, "show", f"{rev}:{OVERRIDES}", check=False)
+    return shown.stdout if shown.returncode == 0 else ""
+
+
 def without_allowlist(root: Path, rev: str) -> Any:
     """The overrides at rev minus the inline-exemptions allowlist; None when unreadable."""
-    shown = git(root, "show", f"{rev}:{OVERRIDES}", check=False)
-    if shown.returncode != 0:
-        return {}
     try:
-        data = tomllib.loads(shown.stdout)
+        data = tomllib.loads(overrides_text(root, rev))
     except tomllib.TOMLDecodeError:
         return None
     section = data.get(SECTION)
@@ -59,11 +62,9 @@ def tree_modes(root: Path, rev: str) -> dict[str, int]:
 def snapshot_files(root: Path, merge_base: str) -> set[str]:
     """The API snapshot paths the merge-base's overrides set, minus those the API snapshot job
     would reject at either end of the PR (so a PR cannot turn a snapshot into a symlink)."""
-    shown = git(root, "show", f"{merge_base}:{OVERRIDES}", check=False)
-    if shown.returncode != 0:
-        return set()
     try:
-        settings = config_overrides.snapshot_settings(config_overrides.parse_overrides(shown.stdout))
+        overrides = config_overrides.parse_overrides(overrides_text(root, merge_base))
+        settings = config_overrides.snapshot_settings(overrides)
     except config_overrides.Error:
         return set()
     trees = [tree_modes(root, merge_base), tree_modes(root, "HEAD")]

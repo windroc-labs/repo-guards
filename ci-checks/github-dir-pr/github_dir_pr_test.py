@@ -164,6 +164,20 @@ class Snapshot(Repo):
         self.assertEqual(code, 1)
         self.assertIn(f"  {json.dumps(OVERRIDES)}", out)
 
+    def test_s20_settings_change_alone_beside_snapshot_and_code_fails(self):
+        toml = snapshot_toml(rust=RUST_SNAPSHOT)
+        code, out = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n"}),
+            {
+                "src/lib.rs": "pub fn b() {}\n",
+                RUST_SNAPSHOT: '["b"]\n',
+                OVERRIDES: toml.replace(RUST_SNAPSHOT, ".github/api/rust.json"),
+            },
+        )
+        self.assertEqual(code, 1)
+        self.assertIn(f"  {json.dumps(OVERRIDES)}", out)
+        self.assertNotIn(json.dumps(RUST_SNAPSHOT), out)
+
     def test_setting_a_snapshot_path_with_code_fails(self):
         code, _ = self.pr(
             self.base(BASE_TOML),
@@ -224,6 +238,29 @@ class Snapshot(Repo):
         (self.root / ".github/api").symlink_to("../api")
         self.write({})
         self.assertEqual(github_dir_pr.snapshot_files(self.root, git(self.root, "rev-parse", "HEAD").strip()), set())
+
+    def test_snapshot_that_was_a_symlink_at_merge_base_fails(self):
+        self.write(self.base(snapshot_toml(rust=RUST_SNAPSHOT), **{"api.json": "[]\n"}))
+        (self.root / RUST_SNAPSHOT).symlink_to("../../api.json")
+        self.write({})
+        git(self.root, "checkout", "-q", "-b", "pr")
+        (self.root / RUST_SNAPSHOT).unlink()
+        self.write({RUST_SNAPSHOT: '["b"]\n', "src/lib.rs": "pub fn b() {}\n"})
+        out = io.StringIO()
+        with redirect_stdout(out):
+            self.assertEqual(github_dir_pr.check(self.root, "main"), 1)
+        self.assertIn(f"  {json.dumps(RUST_SNAPSHOT)}", out.getvalue())
+
+    def test_rejected_path_leaves_its_valid_sibling_exempt(self):
+        workflow = ".github/workflows/ci.yml"
+        toml = snapshot_toml(rust=RUST_SNAPSHOT, go=workflow)
+        code, _ = self.pr(
+            self.base(toml, **{RUST_SNAPSHOT: "[]\n", workflow: "on: push\n"}),
+            {"src/lib.rs": "pub fn b() {}\n", RUST_SNAPSHOT: '["b"]\n'},
+        )
+        self.assertEqual(code, 0)
+        merge_base = git(self.root, "rev-parse", "main").strip()
+        self.assertEqual(github_dir_pr.snapshot_files(self.root, merge_base), {RUST_SNAPSHOT})
 
     def test_unparsable_overrides_at_merge_base_exempt_nothing(self):
         code, _ = self.pr(

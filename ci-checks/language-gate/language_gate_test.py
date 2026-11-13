@@ -12,14 +12,13 @@ from language_gate import PATTERNS, main, touches
 INLINE_EXEMPTIONS = Path(__file__).resolve().parent.parent / "inline-exemptions/inline_exemptions.py"
 
 MATCHES = {
-    "python": ["a.py", "src/pkg/b.pyi", "pyproject.toml", "sub/uv.lock", "requirements-dev.txt", "sub/setup.cfg"],
+    "python": ["a.py", "src/b.pyi", "analysis/explore.ipynb", "pyproject.toml", "sub/uv.lock", "requirements-dev.txt"],
     "rust": ["src/main.rs", "Cargo.toml", "crates/a/Cargo.lock", ".cargo/config.toml", "a/clippy.toml"],
-    "typescript": ["web/a.tsx", "b.mjs", "package.json", "web/package-lock.json", "tsconfig.build.json", ".npmrc"],
-    "go": ["cmd/x/main.go", "go.mod", "sub/go.sum", "go.work", "pkg/testdata/input.txt"],
+    "typescript": ["web/a.tsx", "b.mjs", "package.json", "tsconfig.build.json", ".npmrc", "docs/guide.md", "a.scss"],
+    "go": ["main.go", "go.mod", "sub/go.sum", "pkg/testdata/in.txt", "x/sum_amd64.s", "cgo/a.c", "vendor/modules.txt"],
 }
 SHARED = [".github/workflows/ci.yml", ".github/checks/repo-guards.toml", ".github/checks/jscpd-baseline.json"]
-NEITHER = ["README.md", "docs/guide.md", "x/.github/workflows/ci.yml", "a.pyc", "Makefile"]
-
+NEITHER = ["Makefile", "LICENSE", "a.pyc", "image.png", "notes.txt", "x/.github/checks/a.toml"]
 
 def git(root: Path, *args: str) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
@@ -31,6 +30,13 @@ class Touches(unittest.TestCase):
             for path in paths:
                 with self.subTest(language=language, path=path):
                     self.assertEqual(touches(language, [path]), [path])
+
+    def test_every_glob_matches_a_file_of_its_shape(self):
+        for language, globs in PATTERNS.items():
+            for glob in globs:
+                sample = glob.replace("*", "x")
+                with self.subTest(language=language, glob=glob):
+                    self.assertEqual(touches(language, [sample, f"sub/{sample}"]), [sample, f"sub/{sample}"])
 
     def test_no_language_matches_another_languages_files(self):
         for language in PATTERNS:
@@ -44,7 +50,7 @@ class Touches(unittest.TestCase):
             with self.subTest(language=language):
                 self.assertEqual(touches(language, SHARED), SHARED)
 
-    def test_docs_and_nested_github_dirs_match_no_language(self):
+    def test_other_files_and_nested_github_dirs_match_no_language(self):
         for language in PATTERNS:
             with self.subTest(language=language):
                 self.assertEqual(touches(language, NEITHER), [])
@@ -116,12 +122,23 @@ class Cli(unittest.TestCase):
         self.commit()
         self.assertEqual(self.run_gate("python", "HEAD^")[:2], (0, "run=true\n"))
 
-    def test_docs_only_change_skips(self):
+    def test_markdown_only_change_runs_only_typescript(self):
+        # typescript.yml's Format runs prettier on the whole tree, and prettier formats Markdown.
         (self.root / "README.md").write_text("y\n")
         self.commit()
         for language in PATTERNS:
             with self.subTest(language=language):
-                self.assertEqual(self.run_gate(language, "HEAD^")[:2], (0, "run=false\n"))
+                expected = "run=true\n" if language == "typescript" else "run=false\n"
+                self.assertEqual(self.run_gate(language, "HEAD^")[:2], (0, expected))
+
+    def test_log_counts_every_hit_and_lists_the_first_ten(self):
+        for i in range(12):
+            (self.root / f"m{i:02}.py").write_text("x\n")
+        self.commit()
+        _, _, err = self.run_gate("python", "HEAD^")
+        self.assertIn("12 changed file(s)", err)
+        self.assertIn('"m09.py"', err)
+        self.assertNotIn('"m10.py"', err)
 
     def test_file_names_are_logged_quoted(self):
         (self.root / "a\n::error::x.py").write_text("y\n")

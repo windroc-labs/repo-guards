@@ -3,6 +3,7 @@ import subprocess
 import sys
 from fnmatch import fnmatchcase
 
+# Each list is the files the language workflow's tools read, not only its source.
 # A glob starting with / is rooted at the repo root; any other matches at any depth. fnmatch's * also matches /.
 # Over-matching only runs checks that could have been skipped; missing a file skips checks that should run.
 SHARED = ("/.github/workflows/*", "/.github/checks/*")
@@ -10,6 +11,7 @@ PATTERNS = {
     "python": (
         "*.py",
         "*.pyi",
+        "*.ipynb",  # in ruff's default include
         "pyproject.toml",
         "uv.lock",
         "uv.toml",
@@ -34,16 +36,26 @@ PATTERNS = {
     ),
     "typescript": (
         *("*.ts", "*.tsx", "*.mts", "*.cts", "*.js", "*.jsx", "*.mjs", "*.cjs"),
-        "package.json",
-        "package-lock.json",
-        "npm-shrinkwrap.json",
+        # Format runs prettier on the whole tree: every file type prettier 3 formats, its ignore file and .editorconfig.
+        *("*.json", "*.json5", "*.jsonc", "*.css", "*.scss", "*.less", "*.yml", "*.yaml"),
+        *("*.html", "*.htm", "*.vue", "*.hbs", "*.handlebars", "*.graphql", "*.gql"),
+        *("*.md", "*.markdown", "*.mdx", ".prettierignore", ".editorconfig"),
         ".npmrc",
-        "tsconfig*.json",
-        "jsconfig*.json",
         ".nvmrc",
         ".node-version",
     ),
-    "go": ("*.go", "go.mod", "go.sum", "go.work", "go.work.sum", "testdata/*"),
+    "go": (
+        "*.go",
+        # Non-Go files go build compiles or links into a package (cgo, assembly, SWIG, .syso).
+        *("*.c", "*.cc", "*.cpp", "*.cxx", "*.h", "*.hh", "*.hpp", "*.hxx", "*.m", "*.f", "*.F", "*.for", "*.f90"),
+        *("*.s", "*.S", "*.sx", "*.swig", "*.swigcxx", "*.syso"),
+        "go.mod",
+        "go.sum",
+        "go.work",
+        "go.work.sum",
+        "vendor/modules.txt",
+        "testdata/*",
+    ),
 }
 SHOWN = 10
 

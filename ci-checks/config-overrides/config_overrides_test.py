@@ -235,121 +235,9 @@ class Repo:
     def snapshot_path(self, working_directory: str, language: str) -> tuple[int, str, str]:
         return run("snapshot-path", str(self.root), working_directory, language)
 
-    def snapshot_scope(self, working_directory: str, language: str) -> tuple[int, str, str]:
-        return run("snapshot-scope", str(self.root), working_directory, language)
-
 
 def setting(language: str, path: str, working_directory: str = ".") -> str:
     return f"[project.{json.dumps(working_directory)}]\napi-snapshot.{language} = {json.dumps(path)}\n"
-
-
-def scope(language: str, prefixes: object, working_directory: str = ".") -> str:
-    return f"[project.{json.dumps(working_directory)}]\napi-snapshot-scope.{language} = {json.dumps(prefixes)}\n"
-
-
-class SnapshotScopeTest(unittest.TestCase):
-    VALID = {
-        "rust": ["kvm_op::driver", "kvm_op", "crate_b::a::b"],
-        "python": ["pkg.sub", "pkg", "_pkg.a1"],
-        "go": ["example.com/kvm/driver", "golang.org/x/net/http2", "a/b-c/v2", "mod~1/x+y"],
-        "typescript": ["./driver", ".", "./a/b", "./x.js"],
-    }
-    INVALID = {
-        "rust": ["kvm-op::driver", "kvm_op::", "::driver", "kvm_op:driver", "kvm_op::driver::*", "kvm_op.driver", ""],
-        "python": ["pkg/sub", "pkg.", ".pkg", "pkg..sub", "pkg-sub", "1pkg", ""],
-        "go": ["/abs/pkg", "a//b", "a/./b", "a/../b", "a/", "a b", "a/*", ""],
-        "typescript": ["driver", "./", "./driver/", "./a//b", "./../x", "./a/./b", "./*", "./a/*.js", "/driver", ""],
-    }
-
-    def test_unset_prints_nothing(self) -> None:
-        cases = {
-            "no file": None,
-            "no section": '[project."other"]\nsource-dirs = ["src"]\n',
-            "path only": setting("go", ".github/api/go.json"),
-            "other language only": scope("rust", ["kvm_op::driver"]),
-            "other working directory": scope("go", ["a/b"], "sub"),
-        }
-        for name, text in cases.items():
-            with self.subTest(name):
-                self.assertEqual(Repo(self, text).snapshot_scope(".", "go"), (0, "", ""))
-
-    def test_valid_prefixes_print_one_json_line_in_order(self) -> None:
-        for language, prefixes in self.VALID.items():
-            with self.subTest(language):
-                code, out, err = Repo(self, scope(language, prefixes)).snapshot_scope(".", language)
-                self.assertEqual((code, err), (0, ""))
-                self.assertEqual(out.count("\n"), 1)
-                self.assertEqual(json.loads(out), prefixes)
-
-    def test_non_ascii_prefix_is_printed_verbatim(self) -> None:
-        code, out, _ = Repo(self, scope("python", ["paquet.módulo"])).snapshot_scope(".", "python")
-        self.assertEqual((code, out), (0, '["paquet.módulo"]\n'))
-
-    def test_invalid_prefixes_exit_2_naming_key_and_value(self) -> None:
-        for language, prefixes in self.INVALID.items():
-            for prefix in prefixes:
-                with self.subTest(language=language, prefix=prefix):
-                    text = scope(language, [self.VALID[language][0], prefix])
-                    code, out, err = Repo(self, text).snapshot_scope(".", language)
-                    self.assertEqual((code, out), (2, ""))
-                    self.assertIn(f'[project."."] api-snapshot-scope.{language}', err)
-                    self.assertIn(json.dumps(prefix), err)
-
-    def test_control_characters_are_rejected(self) -> None:
-        for language, prefix in [("typescript", "./a\nb"), ("go", "a\x7fb"), ("rust", "a\tb"), ("python", "a\x00")]:
-            with self.subTest(language=language):
-                code, out, err = Repo(self, scope(language, [prefix])).snapshot_scope(".", language)
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn("control characters", err)
-
-    def test_empty_list_is_rejected(self) -> None:
-        code, out, err = Repo(self, scope("go", [])).snapshot_scope(".", "go")
-        self.assertEqual((code, out), (2, ""))
-        self.assertIn("api-snapshot-scope.go", err)
-        self.assertIn("at least one", err)
-
-    def test_bad_setting_types_exit_2(self) -> None:
-        cases = [
-            '[project."."]\napi-snapshot-scope = ["a"]\n',
-            '[project."."]\napi-snapshot-scope.go = "a/b"\n',
-            '[project."."]\napi-snapshot-scope.go = [1]\n',
-            '[project."."]\napi-snapshot-scope.go = [["a"]]\n',
-            '[project."."]\napi-snapshot-scope.go = { a = "b" }\n',
-        ]
-        for text in cases:
-            with self.subTest(text=text):
-                code, out, err = Repo(self, text).snapshot_scope(".", "go")
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn('[project."."] api-snapshot-scope', err)
-
-    def test_unknown_language_or_bad_table_anywhere_exits_2(self) -> None:
-        for text, needle in [
-            (scope("rsut", ["a"], "other"), "rsut"),
-            ('[project."other"]\napi-snapshot-scope = 1\n', "not a table"),
-            ('project = "x"\n', "project"),
-            ("[project\n", "repo-guards.toml"),
-        ]:
-            with self.subTest(text=text):
-                code, out, err = Repo(self, text).snapshot_scope(".", "rust")
-                self.assertEqual((code, out), (2, ""))
-                self.assertIn(needle, err)
-
-    def test_snapshot_path_ignores_the_scope(self) -> None:
-        text = setting("go", ".github/api/go.json") + 'api-snapshot-scope.go = ["a/b"]\n'
-        self.assertEqual(Repo(self, text).snapshot_path(".", "go"), (0, ".github/api/go.json\n", ""))
-        bad = setting("go", ".github/api/go.json") + "api-snapshot-scope.go = []\n"
-        self.assertEqual(Repo(self, bad).snapshot_path(".", "go"), (0, ".github/api/go.json\n", ""))
-
-    def test_scope_ignores_the_snapshot_path(self) -> None:
-        text = setting("go", "not/under/github.json") + 'api-snapshot-scope.go = ["a/b"]\n'
-        self.assertEqual(Repo(self, text).snapshot_scope(".", "go"), (0, '["a/b"]\n', ""))
-
-    def test_bad_arguments_exit_2(self) -> None:
-        root = str(Repo(self).root)
-        self.assertEqual(run("snapshot-scope", root, ".")[0], 2)
-        self.assertEqual(run("snapshot-scope", root, ".", "java")[0], 2)
-        self.assertEqual(run("snapshot-scope", root, ".", "go", "x")[0], 2)
-        self.assertIn("snapshot-scope REPO_ROOT WORKING_DIRECTORY", run()[2])
 
 
 class SnapshotPathTest(unittest.TestCase):
@@ -460,6 +348,30 @@ class SnapshotPathTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("rsut", err)
 
+    def test_unknown_scope_language_anywhere_exits_2(self) -> None:
+        # A misspelt language belongs to no generator, so the shared read step rejects it.
+        for text, needles in [
+            ('api-snapshot-scope.typscript = ["./driver"]\n', ['[project."."] api-snapshot-scope', "typscript"]),
+            ('[project."other"]\napi-snapshot-scope.pyhton = ["pkg"]\n', ['[project."other"] api-snapshot-scope', "pyhton"]),
+            ('api-snapshot-scope = ["pkg"]\n', ['[project."."] api-snapshot-scope is not a table']),
+        ]:
+            with self.subTest(text=text):
+                code, out, err = Repo(self, setting("go", ".github/api/go.json") + text).snapshot_path(".", "go")
+                self.assertEqual((code, out), (2, ""))
+                for needle in needles:
+                    self.assertIn(needle, err)
+
+    def test_snapshot_settings_ignore_the_scope(self) -> None:
+        # The Changes job's language gate and github-dir-pr read these; a scope typo is the API snapshot job's.
+        text = setting("go", ".github/api/go.json") + 'api-snapshot-scope.typscript = ["./driver"]\n'
+        self.assertEqual(snapshot_settings(tomllib.loads(text)), {(".", "go"): ".github/api/go.json"})
+
+    def test_scope_values_are_left_to_the_generators(self) -> None:
+        for value in ('["pkg.sub"]', "[]", "1", '["not a prefix"]'):
+            with self.subTest(value=value):
+                text = setting("python", ".github/api/py.json") + f"api-snapshot-scope.python = {value}\n"
+                self.assertEqual(Repo(self, text).snapshot_path(".", "python"), (0, ".github/api/py.json\n", ""))
+
     def test_invalid_toml_exits_2(self) -> None:
         code, out, err = Repo(self, "[project\n").snapshot_path(".", "go")
         self.assertEqual((code, out), (2, ""))
@@ -530,7 +442,7 @@ class SnapshotPathErrorTest(unittest.TestCase):
 
 
 class SnapshotJobTest(unittest.TestCase):
-    """Python, TypeScript and Go hand the scope to Generate; Rust's generator reads it from repo-guards.toml itself."""
+    """Each language's API snapshot job reads only the path; a generator reads its own scope."""
 
     WORKFLOWS = CI_CHECKS.parent / ".github/workflows"
 
@@ -543,25 +455,25 @@ class SnapshotJobTest(unittest.TestCase):
             steps[name.removeprefix("name: ")] = step
         return steps
 
-    def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("python",):
+    def test_read_step_reads_only_the_path(self) -> None:
+        for language in ("rust", "python", "typescript", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
-                self.assertIn(
-                    'scope=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" '
-                    'snapshot-scope "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")',
-                    step,
-                )
-                self.assertIn('echo "scope=$scope" >> "$GITHUB_OUTPUT"', step)
-                text = (self.WORKFLOWS / f"{language}.yml").read_text(encoding="utf-8")
-                self.assertNotIn("Read the snapshot path", text)
+                self.assertIn('snapshot-path "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")', step)
+                self.assertNotIn(" snapshot-scope ", step)
+                self.assertNotIn("scope=", step)
 
-    def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("python",):
+    def test_generate_gets_no_scope_variable(self) -> None:
+        for language in ("rust", "python", "typescript", "go"):
             with self.subTest(language):
-                step = self.steps(language)["Generate"]
-                self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
+                self.assertNotIn("API_SNAPSHOT_SCOPE", self.steps(language)["Generate"])
+
+    def test_scope_command_is_gone(self) -> None:
+        root = str(Repo(self, '[project."."]\napi-snapshot-scope.go = ["a/b"]\n').root)
+        code, out, err = run("snapshot-scope", root, ".", "go")
+        self.assertEqual((code, out), (2, ""))
+        self.assertNotIn("snapshot-scope", err)
 
     def test_typescript_generator_reads_the_scope_itself(self) -> None:
         steps = self.steps("typescript")
@@ -601,7 +513,7 @@ class ScopeDocsTest(unittest.TestCase):
         overrides = self.section(ci, "### 覆盖默认配置")
         self.assertIn("  - `api-snapshot-scope.<语言>`：", overrides)
         self.assertIn('api-snapshot-scope.rust = ["kvm_op::driver"]', overrides)
-        self.assertIn("`snapshot-scope ROOT WORKING_DIRECTORY 语言`", overrides)
+        self.assertNotIn("`snapshot-scope", ci)
         for workflow in ("rust.yml", "python.yml"):
             self.assertIn(f"| `{workflow}` |", ci)
         self.assertEqual(ci.count("API snapshot（Read the snapshot settings、"), 2)
@@ -610,13 +522,10 @@ class ScopeDocsTest(unittest.TestCase):
     def test_generator_contract(self) -> None:
         ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
         contract = self.section(ci, "#### 冻结范围")
-        self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
-        self.assertIn("- 没设：写整个项目的公开接口", contract)
-        self.assertIn("- 范围不合法时退出 2", contract)
-        self.assertIn("Rust 的生成器自己从 `.github/checks/repo-guards.toml`", contract)
-        self.assertIn("- 现状：Rust 的生成器已接上", contract)
-        self.assertIn("Go 的也已接上", contract)
-        self.assertIn("TypeScript 的也已接上", contract)
+        self.assertNotIn("API_SNAPSHOT_SCOPE", ci)
+        self.assertIn("各语言的生成器自己读", contract)
+        self.assertIn("- 没设：", contract)
+        self.assertIn("- 现状：", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

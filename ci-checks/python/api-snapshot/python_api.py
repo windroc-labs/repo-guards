@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 PREFIX = "api snapshot (python): "
+OVERRIDES = ".github/checks/repo-guards.toml"
+SCOPE_KEY = "api-snapshot-scope"
 
 try:
     import griffe
@@ -239,7 +241,47 @@ class PromoteOverloads(griffe.Extension):
                 obj.set_member(name, overloads[0])
 
 
-def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[Entry]) -> None:
+Scope = tuple[str, ...] | None
+
+
+def table(value: Any, where: str) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise Error(f"{where} is not a table")
+    return value
+
+
+def read_scope(root: Path, working_directory: str) -> Scope:
+    """The working directory's api-snapshot-scope.python in repo-guards.toml; None, the whole project, when unset."""
+    try:
+        overrides = tomllib.loads((root / OVERRIDES).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        raise Error(f"cannot read {OVERRIDES}: {quote(str(error))}") from error
+    section = f"[project.{quote(working_directory)}]"
+    project = table(overrides.get("project", {}), "[project]")
+    scopes = table(table(project.get(working_directory, {}), section).get(SCOPE_KEY, {}), f"{section} {SCOPE_KEY}")
+    if "python" not in scopes:
+        return None
+    prefixes, where = scopes["python"], f"{section} {SCOPE_KEY}.python"
+    if not isinstance(prefixes, list) or not all(isinstance(prefix, str) for prefix in prefixes):
+        raise Error(f"{where} is not an array of strings")
+    if not prefixes:
+        raise Error(f"{where} = []: must list at least one module prefix; leave it unset to freeze the whole project")
+    for prefix in prefixes:
+        if not all(part.isidentifier() for part in prefix.split(".")):
+            raise Error(f'{where}: {quote(prefix)}: must be a dotted module name such as "pkg.sub"')
+    return tuple(prefixes)
+
+
+def in_scope(module: str, scope: Scope) -> bool:
+    return scope is None or any(module == prefix or module.startswith(f"{prefix}.") for prefix in scope)
+
+
+def walk(
+    obj: Any, path: str, module: str, unit: str, stack: tuple[str, ...], scope: Scope, entries: list[Entry]
+) -> None:
+    """Append obj's public members; `module` is the public path of the module they live in, matched to scope."""
     members = obj.all_members if obj.is_class else obj.members
     for name, member in sorted(members.items()):
         if not member.is_public:
@@ -247,19 +289,24 @@ def walk(obj: Any, path: str, unit: str, stack: tuple[str, ...], entries: list[E
         try:
             target = member.final_target if member.is_alias else member
         except (griffe.AliasResolutionError, griffe.CyclicAliasError):
-            entries.append(Entry(unit, path, "alias", name, member.target_path))
+            if in_scope(module, scope):
+                entries.append(Entry(unit, path, "alias", name, member.target_path))
             continue
         if target.is_attribute and is_dunder(name):
             continue
+        # A module entry belongs to the module it names, so a scope of that module keeps it.
+        child = f"{path}.{name}"
+        owner = child if target.is_module else module
+        if in_scope(owner, scope):
+            signature = target.path if member.is_alias and target.is_module else FORMATTERS[target.kind](target)
+            entries.append(Entry(unit, path, target.kind.value, name, signature))
         if target.is_module and member.is_alias:
-            entries.append(Entry(unit, path, "module", name, target.path))
             continue
-        entries.append(Entry(unit, path, target.kind.value, name, FORMATTERS[target.kind](target)))
         if (target.is_class and target.path not in stack) or target.is_module:
-            walk(target, f"{path}.{name}", unit, (*stack, target.path), entries)
+            walk(target, child, owner, unit, (*stack, target.path), scope, entries)
 
 
-def generate(site: Path, names: list[str]) -> list[Entry]:
+def generate(site: Path, names: list[str], scope: Scope = None) -> list[Entry]:
     loader = griffe.GriffeLoader(
         extensions=griffe.load_extensions(PromoteOverloads()), search_paths=[site], allow_inspection=False
     )
@@ -271,8 +318,9 @@ def generate(site: Path, names: list[str]) -> list[Entry]:
             raise Error(f"cannot load {quote(unit)}: {type(error).__name__}: {quote(str(error))}") from error
     entries: list[Entry] = []
     for unit, module in zip(names, modules, strict=True):
-        entries.append(Entry(unit, "", "module", unit, ""))
-        walk(module, unit, unit, (), entries)
+        if in_scope(unit, scope):
+            entries.append(Entry(unit, "", "module", unit, ""))
+        walk(module, unit, unit, unit, (), scope, entries)
     return sorted(entries)
 
 
@@ -288,23 +336,27 @@ def write(path: str, content: str) -> None:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: python_api.py PROJECT_DIR OUTPUT", file=sys.stderr)
+    if len(argv) != 3:
+        print("usage: python_api.py REPO_ROOT WORKING_DIRECTORY OUTPUT", file=sys.stderr)
         return 2
-    project, output = Path(argv[0]), argv[1]
+    root, working_directory, output = Path(argv[0]), argv[1], argv[2]
     try:
+        # Read before the build: the build runs the PR's code, which could rewrite the setting file.
+        scope = read_scope(root, working_directory)
+        project = root / working_directory
         with tempfile.TemporaryDirectory() as tmp:
             wheels = build(project, Path(tmp) / "wheels")
             site = Path(tmp) / "site"
             extract(wheels, site)
             names = units(site)
             check_sources(site, names)
-            entries = generate(site, names)
+            entries = generate(site, names, scope)
         write(output, json.dumps([entry._asdict() for entry in entries], indent=2, ensure_ascii=False) + "\n")
     except Error as error:
         print(f"{PREFIX}{error}", file=sys.stderr)
         return 2
-    print(f"{PREFIX}{len(entries)} entries from {len(wheels)} wheel(s), units: {', '.join(map(quote, names))}")
+    scoped = f", scope: {', '.join(map(quote, scope))}" if scope else ""
+    print(f"{PREFIX}{len(entries)} entries from {len(wheels)} wheel(s), units: {', '.join(map(quote, names))}{scoped}")
     return 0
 
 

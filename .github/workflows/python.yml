@@ -347,7 +347,6 @@ jobs:
         id: setting
         run: |
           snapshot=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-path "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
-          scope=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-scope "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
           artifact=$(uv run --no-project --python 3.12 "$RG/api-snapshot/snapshot_artifact.py" "$LANGUAGE" "$PROJECT_DIR")
           # The summary line keeps the word the docs and the acceptance scenario look for: 未启用 (not enabled).
           if [[ -z $snapshot ]]; then
@@ -355,19 +354,16 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-          echo "scope=$scope" >> "$GITHUB_OUTPUT"
       # Builds the project's wheels and writes their public API entries to $RUNNER_TEMP/api-entries.json; exit 2 when it cannot.
       # griffe gets a venv of its own; env -u lets the build read the project's uv config, as the Checks job's install does.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
-        env:
-          API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}
         run: |
           api=$RG/python/api-snapshot
           uv venv -q --python 3.14 "$RUNNER_TEMP/api-venv" \
             && uv pip install -q --python "$RUNNER_TEMP/api-venv/bin/python" --require-hashes -r "$api/requirements.txt" \
             || { echo "::error::API snapshot: cannot install the Python API tool"; exit 2; }
-          env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" . "$RUNNER_TEMP/api-entries.json"
+          env -u UV_NO_CONFIG "$RUNNER_TEMP/api-venv/bin/python" -I "$api/python_api.py" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$RUNNER_TEMP/api-entries.json"
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

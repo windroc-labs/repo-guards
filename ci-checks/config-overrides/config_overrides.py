@@ -17,7 +17,6 @@ API_SNAPSHOT = "api-snapshot"
 API_SNAPSHOT_SCOPE = "api-snapshot-scope"
 LANGUAGES = ("rust", "python", "typescript", "go")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
-GO_SEGMENT = re.compile(r"[A-Za-z0-9._~+-]+")
 ESCAPES = {
     "\\": "\\\\",
     '"': '\\"',
@@ -30,7 +29,6 @@ ESCAPES = {
 USAGE = f"""usage: config_overrides.py apply ROOT OVERRIDES
        config_overrides.py source-dirs OVERRIDES WORKING_DIRECTORY
        config_overrides.py snapshot-path REPO_ROOT WORKING_DIRECTORY {{{'|'.join(LANGUAGES)}}}
-       config_overrides.py snapshot-scope REPO_ROOT WORKING_DIRECTORY {{{'|'.join(LANGUAGES)}}}
        config_overrides.py get FILE KEY..."""
 
 Mode = Callable[[str], int | None]
@@ -185,34 +183,26 @@ def source_dirs(overrides: Path, working_directory: str) -> list[str]:
     return project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
 
 
-def language_settings(
-    overrides: dict[str, Any], key: str, valid: Callable[[Any], bool], expected: str
-) -> dict[tuple[str, str], Any]:
-    """Every [project."<working-directory>"] <key>.<language> value, checked for language and type."""
-    settings: dict[tuple[str, str], Any] = {}
-    for working_directory, section in project_sections(overrides).items():
-        values = section.get(key, {})
-        where = f"{section_header(working_directory)} {key}"
-        if not isinstance(values, dict):
-            raise Error(f"{where} is not a table")
-        for language, value in values.items():
-            if language not in LANGUAGES:
-                raise Error(f"{where}: unknown language {json.dumps(language)}; expected one of {', '.join(LANGUAGES)}")
-            if not valid(value):
-                raise Error(f"{where}.{language} is not {expected}")
-            settings[working_directory, language] = value
-    return settings
+def language_table(section: dict[str, Any], key: str, working_directory: str) -> dict[str, Any]:
+    """A section's <key>.<language> table, its language names checked."""
+    table = section.get(key, {})
+    where = f"{section_header(working_directory)} {key}"
+    if not isinstance(table, dict):
+        raise Error(f"{where} is not a table")
+    for language in table:
+        if language not in LANGUAGES:
+            raise Error(f"{where}: unknown language {json.dumps(language)}; expected one of {', '.join(LANGUAGES)}")
+    return table
 
 
 def snapshot_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], str]:
-    return language_settings(overrides, API_SNAPSHOT, lambda value: isinstance(value, str), "a string")
-
-
-def scope_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], list[str]]:
-    def valid(value: Any) -> bool:
-        return isinstance(value, list) and all(isinstance(prefix, str) for prefix in value)
-
-    return language_settings(overrides, API_SNAPSHOT_SCOPE, valid, "an array of strings")
+    settings: dict[tuple[str, str], str] = {}
+    for working_directory, section in project_sections(overrides).items():
+        for language, path in language_table(section, API_SNAPSHOT, working_directory).items():
+            if not isinstance(path, str):
+                raise Error(f"{section_header(working_directory)} {API_SNAPSHOT}.{language} is not a string")
+            settings[working_directory, language] = path
+    return settings
 
 
 def read_overrides(root: Path) -> dict[str, Any]:
@@ -265,7 +255,11 @@ def snapshot_path_error(path: str, mode: Mode) -> str | None:
 
 
 def snapshot_path(root: Path, working_directory: str, language: str) -> str | None:
-    path = read_snapshot_settings(root).get((working_directory, language))
+    overrides = read_overrides(root)
+    path = snapshot_settings(overrides).get((working_directory, language))
+    # Each generator reads and checks its own scope; a misspelt language belongs to none of them.
+    for section_directory, section in project_sections(overrides).items():
+        language_table(section, API_SNAPSHOT_SCOPE, section_directory)
     if path is None:
         return None
     error = snapshot_path_error(path, checkout_mode(root))
@@ -273,51 +267,6 @@ def snapshot_path(root: Path, working_directory: str, language: str) -> str | No
         where = f"{section_header(working_directory)} {API_SNAPSHOT}.{language}"
         raise Error(f"{where} = {json.dumps(path, ensure_ascii=False)}: {error}")
     return path
-
-
-def identifiers(prefix: str, separator: str) -> bool:
-    return all(part.isidentifier() for part in prefix.split(separator))
-
-
-def go_package(prefix: str) -> bool:
-    return all(GO_SEGMENT.fullmatch(part) and part not in (".", "..") for part in prefix.split("/"))
-
-
-def typescript_subpath(prefix: str) -> bool:
-    if prefix == ".":
-        return True
-    parts = prefix.removeprefix("./").split("/")
-    return prefix.startswith("./") and all(part not in ("", ".", "..") and "*" not in part for part in parts)
-
-
-# Per language: whether a prefix is spelled as the generator names modules, and an example for the message.
-SCOPE_PREFIXES: dict[str, tuple[Callable[[str], bool], str]] = {
-    "rust": (lambda prefix: identifiers(prefix, "::"), 'a module path such as "kvm_op::driver"'),
-    "python": (lambda prefix: identifiers(prefix, "."), 'a dotted module name such as "pkg.sub"'),
-    "go": (go_package, 'a package import path such as "example.com/mod/driver"'),
-    "typescript": (typescript_subpath, '"." or an export subpath such as "./driver"'),
-}
-
-
-def scope_prefix_error(language: str, prefix: str) -> str | None:
-    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in prefix):
-        return "must not contain control characters"
-    valid, example = SCOPE_PREFIXES[language]
-    return None if valid(prefix) else f"must be {example}"
-
-
-def snapshot_scope(root: Path, working_directory: str, language: str) -> list[str] | None:
-    prefixes = scope_settings(read_overrides(root)).get((working_directory, language))
-    if prefixes is None:
-        return None
-    where = f"{section_header(working_directory)} {API_SNAPSHOT_SCOPE}.{language}"
-    if not prefixes:
-        raise Error(f"{where} = []: must list at least one module prefix; leave it unset to freeze the whole project")
-    for prefix in prefixes:
-        error = scope_prefix_error(language, prefix)
-        if error:
-            raise Error(f"{where}: {json.dumps(prefix, ensure_ascii=False)}: {error}")
-    return prefixes
 
 
 def text(value: Any) -> str:
@@ -347,11 +296,6 @@ def main(argv: list[str]) -> int:
             path = snapshot_path(Path(args[0]), args[1], args[2])
             if path is not None:
                 print(path)
-            return 0
-        if command == "snapshot-scope" and len(args) == 3 and args[2] in LANGUAGES:
-            prefixes = snapshot_scope(Path(args[0]), args[1], args[2])
-            if prefixes is not None:
-                print(json.dumps(prefixes, ensure_ascii=False, separators=(",", ":")))
             return 0
         if command == "get" and len(args) >= 2:
             for line in get(Path(args[0]), args[1:]):

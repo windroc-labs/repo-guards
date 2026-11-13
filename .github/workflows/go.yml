@@ -364,7 +364,6 @@ jobs:
         id: setting
         run: |
           snapshot=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-path "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
-          scope=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-scope "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
           artifact=$(uv run --no-project --python 3.12 "$RG/api-snapshot/snapshot_artifact.py" "$LANGUAGE" "$PROJECT_DIR")
           # The summary line keeps the word the docs and the acceptance scenario look for: 未启用 (not enabled).
           if [[ -z $snapshot ]]; then
@@ -372,7 +371,6 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-          echo "scope=$scope" >> "$GITHUB_OUTPUT"
       - name: Install Go
         if: ${{ steps.setting.outputs.path != '' }}
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -381,14 +379,13 @@ jobs:
           cache: false
       - *go-caches
       # api-snapshot builds the module and its dependencies (go list -export) and writes the public API entries
-      # from the compiler's export data; a failed build or tool error exits 2 before Compare.
+      # from the compiler's export data, only those in the working directory's api-snapshot-scope.go when set;
+      # a failed build, an invalid scope or a tool error exits 2 before Compare.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
-        env:
-          API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}
         run: |
           go build -C "$RG/go/api-snapshot" -o "$RUNNER_TEMP/go-tools/api-snapshot" . || exit 2
-          "$RUNNER_TEMP/go-tools/api-snapshot" > "$RUNNER_TEMP/api-entries.json" || exit 2
+          "$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

@@ -530,7 +530,7 @@ class SnapshotPathErrorTest(unittest.TestCase):
 
 
 class SnapshotJobTest(unittest.TestCase):
-    """Each language's API snapshot job reads the scope with the path and hands it to Generate."""
+    """Python, TypeScript and Go hand the scope to Generate; Rust's generator reads it from repo-guards.toml itself."""
 
     WORKFLOWS = CI_CHECKS.parent / ".github/workflows"
 
@@ -544,7 +544,7 @@ class SnapshotJobTest(unittest.TestCase):
         return steps
 
     def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("rust", "python", "go"):
+        for language in ("python",):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
@@ -558,7 +558,7 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("rust", "python", "go"):
+        for language in ("python",):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
@@ -568,6 +568,24 @@ class SnapshotJobTest(unittest.TestCase):
         self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
         self.assertNotIn("API_SNAPSHOT_SCOPE", steps["Generate"])
         self.assertIn('--root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR"', steps["Generate"])
+
+    def test_rust_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("rust")
+        self.assertNotIn("scope", steps["Read the snapshot settings"])
+        generate = steps["Generate"]
+        self.assertNotIn("API_SNAPSHOT_SCOPE", generate)
+        self.assertIn('--config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"', generate)
+        self.assertIn('--working-directory "$PROJECT_DIR"', generate)
+
+    def test_go_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("go")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("scope", steps["Generate"].split("run: |", 1)[0])
+        self.assertIn(
+            '"$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json"',
+            steps["Generate"],
+        )
+        self.assertNotIn("API_SNAPSHOT_SCOPE", (self.WORKFLOWS / "go.yml").read_text(encoding="utf-8"))
 
 
 class ScopeDocsTest(unittest.TestCase):
@@ -593,9 +611,12 @@ class ScopeDocsTest(unittest.TestCase):
         ci = (self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8")
         contract = self.section(ci, "#### 冻结范围")
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
-        self.assertIn("没设或为空", contract)
-        self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
-        self.assertIn("- 现状：TypeScript 的生成器已接上", contract)
+        self.assertIn("- 没设：写整个项目的公开接口", contract)
+        self.assertIn("- 范围不合法时退出 2", contract)
+        self.assertIn("Rust 的生成器自己从 `.github/checks/repo-guards.toml`", contract)
+        self.assertIn("- 现状：Rust 的生成器已接上", contract)
+        self.assertIn("Go 的也已接上", contract)
+        self.assertIn("TypeScript 的也已接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

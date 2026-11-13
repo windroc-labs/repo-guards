@@ -85,8 +85,10 @@ fn prefix_error(prefix: &str) -> Option<&'static str> {
     }
     let identifier = |segment: &str| {
         let mut chars = segment.chars();
-        chars.next().is_some_and(|c| c.is_alphabetic() || c == '_')
-            && chars.all(|c| c.is_alphanumeric() || c == '_')
+        chars
+            .next()
+            .is_some_and(|c| unicode_ident::is_xid_start(c) || c == '_')
+            && chars.all(unicode_ident::is_xid_continue)
     };
     if prefix.split("::").all(identifier) {
         None
@@ -139,6 +141,8 @@ mod tests {
         let missing =
             std::env::temp_dir().join(format!("api-snapshot-none-{}.toml", std::process::id()));
         assert_eq!(read(&missing, "."), Ok(WHOLE));
+        let directory = read(&std::env::temp_dir(), ".").unwrap_err();
+        assert!(directory.starts_with("cannot read "), "{directory}");
         for text in [
             "",
             "[\"ci-checks/coverage/coverage.toml\"]\ntotal-min = 70\n",
@@ -192,6 +196,7 @@ mod tests {
             ("kvm_op::driver::*", "must be a module path"),
             ("::kvm_op", "must be a module path"),
             ("1kvm", "must be a module path"),
+            ("kvm²", "must be a module path"),
             ("", "must be a module path"),
             ("kvm_op\\u001b[31m", "must not contain control characters"),
         ] {
@@ -205,7 +210,7 @@ mod tests {
             );
             assert!(message.contains(error), "{prefix:?}: {message}");
         }
-        assert!(scope(r#"["_private::ünï"]"#).contains("_private", &path("ünï")));
+        assert!(scope(r#"["_private::ünï::a·b"]"#).contains("_private", &path("ünï::a·b")));
     }
 
     #[test]

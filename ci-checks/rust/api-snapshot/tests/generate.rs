@@ -805,6 +805,19 @@ fn invalid_scope_exits_2() {
         .unwrap();
     assert_eq!(half.status.code(), Some(2));
     assert!(String::from_utf8_lossy(&half.stderr).contains("usage: "));
+    let other_half = Command::new(env!("CARGO_BIN_EXE_api-snapshot"))
+        .args([
+            "--project",
+            ".",
+            "--output",
+            "out.json",
+            "--working-directory",
+            ".",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(other_half.status.code(), Some(2));
+    assert!(String::from_utf8_lossy(&other_half.stderr).contains("usage: "));
 }
 
 /// Compares `changed` against a snapshot of scoped_v1, both generated with the driver scope.

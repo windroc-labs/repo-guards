@@ -6,7 +6,9 @@ the root: "files" names every source file of the language (not all are written),
 the language's resolution files (go.mod, tsconfig.json, Cargo.toml; none for Python), "settings" the project
 settings ("source-dirs"). stdout has one JSON line per statement, {"file", "line", "targets"}, targets being the
 "files" it resolves to (a package-unit language may name the package directory), or {"file", "error"} for a file
-that does not parse. References outside the project are left out.
+that does not parse. References outside the project are left out, except a crate outside the working-directory that
+the scanner can locate (Rust path dependencies): its target is the crate's directory relative to the root, normalized
+and starting with "../", and it counts as unassigned.
 """
 
 import ast

@@ -47,6 +47,17 @@ def python_scanner(side_root: Path) -> list[str]:
     return [sys.executable, "-I", "-S", str(CI_CHECKS / "python/layer-rules/imports.py"), str(side_root)]
 
 
+def rust_scanner(side_root: Path) -> list[str]:
+    # The toolchain rule of inline_exemptions.command: the job's RUSTUP_TOOLCHAIN, else repo-guards' pinned channel.
+    toolchain = []
+    if "RUSTUP_TOOLCHAIN" not in os.environ:
+        pinned = tomllib.loads((CI_CHECKS / "rust/rust-toolchain.toml").read_text(encoding="utf-8"))
+        toolchain = [f"+{pinned['toolchain']['channel']}"]
+    manifest = CI_CHECKS / "rust/layer-rules/Cargo.toml"
+    run = ["run", "--release", "--locked", "--quiet", "--manifest-path", str(manifest), "--", str(side_root)]
+    return ["cargo", *toolchain, *run]
+
+
 @dataclass(frozen=True)
 class Language:
     suffixes: tuple[str, ...]
@@ -65,7 +76,7 @@ LANGUAGES = {
     "typescript": Language(
         (".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"), context=("**/tsconfig*.json", "**/package.json")
     ),
-    "rust": Language((".rs",), context=("**/Cargo.toml",)),
+    "rust": Language((".rs",), context=("**/Cargo.toml",), scanner=rust_scanner),
     "go": Language((".go",), package_unit=True, context=("**/go.mod",)),
 }
 
@@ -381,6 +392,13 @@ def scanner_records(language: str, side_root: Path, request: dict[str, Any], run
     return [json_line(language, line) for line in result.stdout.splitlines()]
 
 
+def outside(prefix: str, target: str) -> bool:
+    """A scanner target naming a crate outside the working-directory: normalized, and it leaves prefix."""
+    if not target.startswith("../") or posixpath.normpath(target) != target:
+        return False
+    return not prefix or not f"{posixpath.normpath(prefix + target)}/".startswith(prefix)
+
+
 def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, runner: Runner) -> Side:
     spec = LANGUAGES[language]
     everything = tree(root, rev, prefix)
@@ -421,9 +439,9 @@ def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, 
         line, targets = record.get("line"), record.get("targets")
         if set(record) != {"file", "line", "targets"} or not isinstance(line, int) or not isinstance(targets, list):
             raise Error(f"{language} scanner wrote a malformed record: {str(record)[:200]}")
-        if not all(isinstance(t, str) and (t in files or t in packages) for t in targets):
+        if not all(isinstance(t, str) and (t in files or t in packages or outside(prefix, t)) for t in targets):
             raise Error(f"{language} scanner named a file that is not in the project: {str(record)[:200]}")
-        add(side, config, spec, path, line, [t if t in files else packages[t] for t in targets])
+        add(side, config, spec, path, line, [packages[t] if t in packages and t not in files else t for t in targets])
     return side
 
 
@@ -433,6 +451,9 @@ def add(side: Side, config: Config, spec: Language, path: str, line: int, target
     origin = unit(spec, path)
     side.layer[path] = side.layer[origin] = source
     for target in dict.fromkeys(targets):
+        if target.startswith("../"):
+            side.unassigned += 1
+            continue
         if config.is_test(target):
             continue
         layer = config.layer_of(target)
@@ -592,7 +613,7 @@ def judge(config: Config, prefix: str, head: Side, base: Side) -> Report:
 def summary_lines(rows: list[tuple[Any, ...]], cycles: int, unassigned: int) -> list[str]:
     out = [
         f"新增的循环边：{cycles} 条。",
-        f"未归层 import：{unassigned} 处（终点在项目里、不属于任何层）。",
+        f"未归层 import：{unassigned} 处（终点不属于任何层：项目里未归层的文件，或 working-directory 之外的 crate）。",
         "",
     ]
     if not rows:

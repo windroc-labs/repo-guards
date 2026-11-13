@@ -379,12 +379,13 @@ jobs:
           cache: false
       - *go-caches
       # api-snapshot builds the module and its dependencies (go list -export) and writes the public API entries
-      # from the compiler's export data; a failed build or tool error exits 2 before Compare.
+      # from the compiler's export data, only those in the working directory's api-snapshot-scope.go when set;
+      # a failed build, an invalid scope or a tool error exits 2 before Compare.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
         run: |
           go build -C "$RG/go/api-snapshot" -o "$RUNNER_TEMP/go-tools/api-snapshot" . || exit 2
-          "$RUNNER_TEMP/go-tools/api-snapshot" > "$RUNNER_TEMP/api-entries.json" || exit 2
+          "$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

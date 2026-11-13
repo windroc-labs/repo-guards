@@ -475,6 +475,16 @@ class SnapshotJobTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertNotIn("snapshot-scope", err)
 
+    def test_go_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("go")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("scope", steps["Generate"].split("run: |", 1)[0])
+        self.assertIn(
+            '"$RUNNER_TEMP/go-tools/api-snapshot" "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" > "$RUNNER_TEMP/api-entries.json"',
+            steps["Generate"],
+        )
+        self.assertNotIn("API_SNAPSHOT_SCOPE", (self.WORKFLOWS / "go.yml").read_text(encoding="utf-8"))
+
 
 class ScopeDocsTest(unittest.TestCase):
     """The README is the contract the four language generators implement."""

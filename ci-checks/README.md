@@ -508,7 +508,7 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
   - Python：条目所在模块的点分名；类的成员跟着类走。
   - Go：条目所在包的 import 路径。
   - TypeScript：条目所在的导出子路径（`package.json` 的 `exports` 键，只有 `types` 入口的包是 `.`），每个包都按子路径比。
-- 现状：Python 的生成器已接上（见[接口快照：Python 生成](#接口快照python-生成)）；Rust、Go、TypeScript 的还没接上，设了范围也不读、不检查，Generate 照旧写整个项目的条目。
+- 现状：Python 的生成器已接上（见[接口快照：Python 生成](#接口快照python-生成)），Go 的也已接上（见[接口快照生成](go/README.md#接口快照生成api-snapshot)）；Rust、TypeScript 的还没接上，设了范围也不读、不检查，Generate 照旧写整个项目的条目。
 
 ### 接口快照：Python 生成
 

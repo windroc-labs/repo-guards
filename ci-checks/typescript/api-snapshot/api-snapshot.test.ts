@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { generate, type Entry } from "./api-snapshot.ts";
+import { Failure, generate, readScope, type Entry } from "./api-snapshot.ts";
 
 const SCRIPT = fileURLToPath(new URL("./api-snapshot.ts", import.meta.url));
 const TESTDATA = fileURLToPath(new URL("./testdata/", import.meta.url));
@@ -50,12 +50,11 @@ function find(entries: Entry[], unit: string, parent: string, kind: string, name
 function run(
   project: string,
   out: string,
-  scope?: string,
+  flags: string[] = [],
 ): { status: number | null; stdout: string; stderr: string } {
-  const env = { ...process.env };
-  delete env["API_SNAPSHOT_SCOPE"];
-  if (scope !== undefined) env["API_SNAPSHOT_SCOPE"] = scope;
-  const result = spawnSync(process.execPath, [SCRIPT, project, out], { encoding: "utf8", env });
+  const result = spawnSync(process.execPath, [SCRIPT, ...flags, project, out], {
+    encoding: "utf8",
+  });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -518,29 +517,123 @@ describe("freeze scope", () => {
     );
   });
 
-  it("the command line reads API_SNAPSHOT_SCOPE; unset, empty and [] write the whole project", () => {
-    const out = mkdtempSync(path.join(scratch, "scope-"));
-    const dir = path.join(TESTDATA, "scoped");
-    for (const [name, scope, expected] of [
-      ["unset", undefined, whole],
-      ["empty", "", whole],
-      ["none", "[]", whole],
-      ["driver", '["./driver"]', generate(dir, ["./driver"])],
-    ] as const) {
-      const file = path.join(out, `${name}.json`);
-      const result = run(dir, file, scope);
-      assert.equal(result.status, 0, result.stderr);
-      assert.deepEqual(JSON.parse(readFileSync(file, "utf8")), expected, name);
+  it("a scope that matches no subpath writes no entries", () => {
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), ["./nope"]), []);
+  });
+
+  it("units outside the scope are not read", () => {
+    const dir = copy("conditions");
+    writeFileSync(path.join(dir, "lib/hand.d.ts"), 'export * from "./missing.js";\n');
+    assert.throws(() => generate(dir), /cannot resolve "\.\/missing\.js"/);
+    assert.deepEqual(
+      generate(dir, ["./features"]).map((e) => e.unit),
+      ["./features/a", "./features/b"],
+    );
+  });
+});
+
+// A repo root holding the scoped fixture at `pkg` and, when given, .github/checks/repo-guards.toml.
+function repo(toml?: string): string {
+  const root = mkdtempSync(path.join(scratch, "repo-"));
+  cpSync(path.join(TESTDATA, "scoped"), path.join(root, "pkg"), { recursive: true });
+  if (toml !== undefined) {
+    mkdirSync(path.join(root, ".github/checks"), { recursive: true });
+    writeFileSync(path.join(root, ".github/checks/repo-guards.toml"), toml);
+  }
+  return root;
+}
+
+describe("freeze scope from repo-guards.toml", () => {
+  it("no file, no section, no key or only other languages' scopes mean the whole project", () => {
+    for (const toml of [
+      undefined,
+      "",
+      '[project."other"]\napi-snapshot-scope.typescript = ["./driver"]\n',
+      '[project."pkg"]\napi-snapshot.typescript = ".github/checks/api-ts.json"\n',
+      '[project."pkg"]\napi-snapshot-scope.rust = ["kvm_op::driver"]\n',
+    ]) {
+      assert.deepEqual(readScope(repo(toml), "pkg"), [], String(toml));
     }
   });
 
-  for (const value of ["{", '"./driver"', "[1]", '["./driver", null]']) {
-    it(`exits 2 on API_SNAPSHOT_SCOPE=${value} and writes no entry file`, () => {
-      const out = path.join(mkdtempSync(path.join(scratch, "scope-")), "entries.json");
-      const result = run(path.join(TESTDATA, "scoped"), out, value);
-      assert.equal(result.status, 2, result.stderr);
-      assert.match(result.stderr, /^api snapshot \(typescript\): API_SNAPSHOT_SCOPE /);
-      assert.throws(() => readFileSync(out));
+  it("reads api-snapshot-scope.typescript of the working directory's section, in order", () => {
+    const root = repo(
+      '[project."pkg"]\napi-snapshot-scope.typescript = ["./net", ".", "./driver/io"]\n',
+    );
+    assert.deepEqual(readScope(root, "pkg"), ["./net", ".", "./driver/io"]);
+  });
+
+  for (const [toml, message] of [
+    ["[project", /^\.github\/checks\/repo-guards\.toml: /],
+    ["project = 1\n", /^\[project\] is not a table$/],
+    ['project."pkg" = 1\n', /^\[project\."pkg"\] is not a table$/],
+    ['[project."pkg"]\napi-snapshot-scope = ["./a"]\n', /api-snapshot-scope is not a table$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = "./a"\n', /not an array of strings$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = [1]\n', /not an array of strings$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = []\n', /= \[\]: must list at least one/],
+    ...["driver", "./", "./a//b", "./a/../b", "./a/./b", "./a/*", "*", "/a"].map(
+      (prefix) =>
+        [
+          `[project."pkg"]\napi-snapshot-scope.typescript = [${JSON.stringify(prefix)}]\n`,
+          `api-snapshot-scope.typescript: ${JSON.stringify(prefix)}: must be "." or an export subpath`,
+        ] as const,
+    ),
+    [
+      '[project."pkg"]\napi-snapshot-scope.typescript = ["./a\\u0001"]\n',
+      /must not contain control characters$/,
+    ],
+  ] as const) {
+    it(`exits 2 on ${JSON.stringify(toml)}`, () => {
+      assert.throws(
+        () => readScope(repo(toml), "pkg"),
+        (error) =>
+          error instanceof Failure &&
+          (typeof message === "string"
+            ? error.message.includes(message)
+            : message.test(error.message)),
+      );
+    });
+  }
+
+  it("the command line reads the scope with --root and --working-directory", () => {
+    const root = repo('[project."pkg"]\napi-snapshot-scope.typescript = ["./driver"]\n');
+    const flags = ["--root", root, "--working-directory", "pkg"];
+    const out = path.join(root, "entries.json");
+    const result = run(path.join(root, "pkg"), out, flags);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(readFileSync(out, "utf8")),
+      generate(path.join(TESTDATA, "scoped"), ["./driver"]),
+    );
+    const whole = path.join(root, "whole.json");
+    assert.equal(run(path.join(root, "pkg"), whole).status, 0);
+    assert.deepEqual(
+      JSON.parse(readFileSync(whole, "utf8")),
+      generate(path.join(TESTDATA, "scoped")),
+    );
+  });
+
+  it("exits 2 on an invalid scope and writes no entry file", () => {
+    const root = repo('[project."pkg"]\napi-snapshot-scope.typescript = ["./a/*"]\n');
+    const out = path.join(root, "entries.json");
+    const result = run(path.join(root, "pkg"), out, ["--root", root, "--working-directory", "pkg"]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(
+      result.stderr,
+      /^api snapshot \(typescript\): \[project\."pkg"\] api-snapshot-scope\.typescript: "\.\/a\/\*"/,
+    );
+    assert.throws(() => readFileSync(out));
+  });
+
+  for (const flags of [
+    ["--root", "."],
+    ["--working-directory", "."],
+    ["--scope", "./a"],
+  ]) {
+    it(`exits 2 with usage on ${flags.join(" ")}`, () => {
+      const result = run(path.join(TESTDATA, "scoped"), path.join(scratch, "unused.json"), flags);
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /usage/);
     });
   }
 });

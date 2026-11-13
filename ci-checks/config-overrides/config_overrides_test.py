@@ -544,7 +544,7 @@ class SnapshotJobTest(unittest.TestCase):
         return steps
 
     def test_read_step_outputs_the_scope(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("rust", "python", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Read the snapshot settings"]
                 self.assertIn("id: setting", step)
@@ -558,10 +558,16 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
-        for language in ("rust", "python", "typescript", "go"):
+        for language in ("rust", "python", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
+
+    def test_typescript_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("typescript")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("API_SNAPSHOT_SCOPE", steps["Generate"])
+        self.assertIn('--root "$GITHUB_WORKSPACE/repo" --working-directory "$PROJECT_DIR"', steps["Generate"])
 
 
 class ScopeDocsTest(unittest.TestCase):
@@ -589,7 +595,7 @@ class ScopeDocsTest(unittest.TestCase):
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
         self.assertIn("没设或为空", contract)
         self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
-        self.assertIn("- 现状：四种语言的生成器都还没接上", contract)
+        self.assertIn("- 现状：TypeScript 的生成器已接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
             self.assertIn(f"  - {language}：", contract)
 

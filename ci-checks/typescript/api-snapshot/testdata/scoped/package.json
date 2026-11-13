@@ -1,0 +1,11 @@
+{
+  "name": "kvm",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./driver": "./dist/driver/index.js",
+    "./driver/io": "./dist/driver/io.js",
+    "./driverx": "./dist/driverx.js",
+    "./net/*": "./dist/net/*.js"
+  }
+}

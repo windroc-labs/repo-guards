@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { generate, type Entry } from "./api-snapshot.ts";
+import { Failure, generate, readScope, type Entry } from "./api-snapshot.ts";
 
 const SCRIPT = fileURLToPath(new URL("./api-snapshot.ts", import.meta.url));
 const TESTDATA = fileURLToPath(new URL("./testdata/", import.meta.url));
@@ -50,8 +50,11 @@ function find(entries: Entry[], unit: string, parent: string, kind: string, name
 function run(
   project: string,
   out: string,
+  flags: string[] = [],
 ): { status: number | null; stdout: string; stderr: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, project, out], { encoding: "utf8" });
+  const result = spawnSync(process.execPath, [SCRIPT, ...flags, project, out], {
+    encoding: "utf8",
+  });
   return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
@@ -441,4 +444,209 @@ describe("command line", () => {
     assert.equal(run(dir, out).status, 0);
     assert.equal(readFileSync(out, "utf8"), "[]\n");
   });
+});
+
+describe("freeze scope", () => {
+  const units = (entries: Entry[]): string[] => [...new Set(entries.map((e) => e.unit))];
+  const whole = generate(path.join(TESTDATA, "scoped"));
+
+  it("no scope or an empty one writes the whole project", () => {
+    assert.deepEqual(units(whole), [
+      "kvm",
+      "kvm/driver",
+      "kvm/driver/io",
+      "kvm/driverx",
+      "kvm/net/tcp",
+      "plug",
+      "plug/driver",
+    ]);
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), []), whole);
+  });
+
+  it("a prefix keeps its subpath and those below it by segment, in every package", () => {
+    const entries = generate(path.join(TESTDATA, "scoped"), ["./driver"]);
+    assert.deepEqual(units(entries), ["kvm/driver", "kvm/driver/io", "plug/driver"]);
+    assert.deepEqual(
+      entries,
+      whole.filter((e) => units(entries).includes(e.unit)),
+    );
+  });
+
+  it("prefixes match expanded pattern subpaths, and . covers every subpath", () => {
+    assert.deepEqual(units(generate(path.join(TESTDATA, "scoped"), ["./net", "./driver/io"])), [
+      "kvm/driver/io",
+      "kvm/net/tcp",
+    ]);
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), ["."]), whole);
+  });
+
+  it("a new public export outside the scope leaves the entries unchanged", () => {
+    const dir = copy("scoped");
+    const before = generate(dir, ["./driver"]);
+    writeFileSync(
+      path.join(dir, "src/driverx.ts"),
+      "export const x = 2;\nexport const added = 9;\n",
+    );
+    writeFileSync(
+      path.join(dir, "plug/src/index.ts"),
+      "export const plugged = 4;\nexport const added = 9;\n",
+    );
+    assert.deepEqual(generate(dir, ["./driver"]), before);
+    assert.ok(generate(dir).some((e) => e.name === "added"));
+  });
+
+  it("a new public export inside the scope is a new entry", () => {
+    const dir = copy("scoped");
+    const before = generate(dir, ["./driver"]);
+    writeFileSync(
+      path.join(dir, "src/driver/io.ts"),
+      "export const io = 1;\nexport const added = 9;\n",
+    );
+    const after = generate(dir, ["./driver"]);
+    assert.deepEqual(
+      after.filter((e) => !before.some((b) => keyOf(b) === keyOf(e))),
+      [
+        {
+          unit: "kvm/driver/io",
+          parent: "",
+          kind: "const",
+          name: "added",
+          signature: "const added = 9",
+        },
+      ],
+    );
+  });
+
+  it("a scope that matches no subpath writes no entries", () => {
+    assert.deepEqual(generate(path.join(TESTDATA, "scoped"), ["./nope"]), []);
+  });
+
+  it("units outside the scope are not read", () => {
+    const dir = copy("conditions");
+    writeFileSync(path.join(dir, "lib/hand.d.ts"), 'export * from "./missing.js";\n');
+    assert.throws(() => generate(dir), /cannot resolve "\.\/missing\.js"/);
+    assert.deepEqual(
+      generate(dir, ["./features"]).map((e) => e.unit),
+      ["./features/a", "./features/b"],
+    );
+  });
+});
+
+// A repo root holding the scoped fixture at `pkg` and, when given, .github/checks/repo-guards.toml.
+function repo(toml?: string): string {
+  const root = mkdtempSync(path.join(scratch, "repo-"));
+  cpSync(path.join(TESTDATA, "scoped"), path.join(root, "pkg"), { recursive: true });
+  if (toml !== undefined) {
+    mkdirSync(path.join(root, ".github/checks"), { recursive: true });
+    writeFileSync(path.join(root, ".github/checks/repo-guards.toml"), toml);
+  }
+  return root;
+}
+
+describe("freeze scope from repo-guards.toml", () => {
+  it("no file, no section, no key or only other languages' scopes mean the whole project", () => {
+    for (const toml of [
+      undefined,
+      "",
+      '[project."other"]\napi-snapshot-scope.typescript = ["./driver"]\n',
+      '[project."pkg"]\napi-snapshot.typescript = ".github/checks/api-ts.json"\n',
+      '[project."pkg"]\napi-snapshot-scope.rust = ["kvm_op::driver"]\n',
+    ]) {
+      assert.deepEqual(readScope(repo(toml), "pkg"), [], String(toml));
+    }
+  });
+
+  it("reads api-snapshot-scope.typescript of the working directory's section, in order", () => {
+    const root = repo(
+      '[project."pkg"]\napi-snapshot-scope.typescript = ["./net", ".", "./driver/io"]\n',
+    );
+    assert.deepEqual(readScope(root, "pkg"), ["./net", ".", "./driver/io"]);
+  });
+
+  for (const [toml, message] of [
+    ["[project", /^\.github\/checks\/repo-guards\.toml: /],
+    ["project = 1\n", /^\[project\] is not a table$/],
+    ['project."pkg" = 1\n', /^\[project\."pkg"\] is not a table$/],
+    ['[project."pkg"]\napi-snapshot-scope = ["./a"]\n', /api-snapshot-scope is not a table$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = "./a"\n', /not an array of strings$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = [1]\n', /not an array of strings$/],
+    ['[project."pkg"]\napi-snapshot-scope.typescript = []\n', /= \[\]: must list at least one/],
+    ...["driver", "./", "./a//b", "./a/../b", "./a/./b", "./a/*", "*", "/a"].map(
+      (prefix) =>
+        [
+          `[project."pkg"]\napi-snapshot-scope.typescript = [${JSON.stringify(prefix)}]\n`,
+          `api-snapshot-scope.typescript: ${JSON.stringify(prefix)}: must be "." or an export subpath`,
+        ] as const,
+    ),
+    [
+      '[project."pkg"]\napi-snapshot-scope.typescript = ["./a\\u0001"]\n',
+      /must not contain control characters$/,
+    ],
+  ] as const) {
+    it(`exits 2 on ${JSON.stringify(toml)}`, () => {
+      assert.throws(
+        () => readScope(repo(toml), "pkg"),
+        (error) =>
+          error instanceof Failure &&
+          (typeof message === "string"
+            ? error.message.includes(message)
+            : message.test(error.message)),
+      );
+    });
+  }
+
+  it("the command line reads the scope with --root and --working-directory", () => {
+    const root = repo('[project."pkg"]\napi-snapshot-scope.typescript = ["./driver"]\n');
+    const flags = ["--root", root, "--working-directory", "pkg"];
+    const out = path.join(root, "entries.json");
+    const result = run(path.join(root, "pkg"), out, flags);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(readFileSync(out, "utf8")),
+      generate(path.join(TESTDATA, "scoped"), ["./driver"]),
+    );
+    const whole = path.join(root, "whole.json");
+    assert.equal(run(path.join(root, "pkg"), whole).status, 0);
+    assert.deepEqual(
+      JSON.parse(readFileSync(whole, "utf8")),
+      generate(path.join(TESTDATA, "scoped")),
+    );
+  });
+
+  it("takes a working directory that starts with - in the --flag=value form", () => {
+    const root = repo('[project."-pkg"]\napi-snapshot-scope.typescript = ["./driver"]\n');
+    cpSync(path.join(root, "pkg"), path.join(root, "-pkg"), { recursive: true });
+    const out = path.join(root, "entries.json");
+    const flags = [`--root=${root}`, "--working-directory=-pkg"];
+    const result = run(path.join(root, "-pkg"), out, flags);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(
+      JSON.parse(readFileSync(out, "utf8")),
+      generate(path.join(TESTDATA, "scoped"), ["./driver"]),
+    );
+  });
+
+  it("exits 2 on an invalid scope and writes no entry file", () => {
+    const root = repo('[project."pkg"]\napi-snapshot-scope.typescript = ["./a/*"]\n');
+    const out = path.join(root, "entries.json");
+    const result = run(path.join(root, "pkg"), out, ["--root", root, "--working-directory", "pkg"]);
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(
+      result.stderr,
+      /^api snapshot \(typescript\): \[project\."pkg"\] api-snapshot-scope\.typescript: "\.\/a\/\*"/,
+    );
+    assert.throws(() => readFileSync(out));
+  });
+
+  for (const flags of [
+    ["--root", "."],
+    ["--working-directory", "."],
+    ["--scope", "./a"],
+  ]) {
+    it(`exits 2 with usage on ${flags.join(" ")}`, () => {
+      const result = run(path.join(TESTDATA, "scoped"), path.join(scratch, "unused.json"), flags);
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /usage/);
+    });
+  }
 });

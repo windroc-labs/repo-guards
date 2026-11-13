@@ -313,7 +313,6 @@ jobs:
         id: setting
         run: |
           snapshot=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-path "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
-          scope=$(uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" snapshot-scope "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR" "$LANGUAGE")
           artifact=$(uv run --no-project --python 3.12 "$RG/api-snapshot/snapshot_artifact.py" "$LANGUAGE" "$PROJECT_DIR")
           # The summary line keeps the word the docs and the acceptance scenario look for: 未启用 (not enabled).
           if [[ -z $snapshot ]]; then
@@ -321,7 +320,6 @@ jobs:
           fi
           echo "path=$snapshot" >> "$GITHUB_OUTPUT"
           echo "artifact=$artifact" >> "$GITHUB_OUTPUT"
-          echo "scope=$scope" >> "$GITHUB_OUTPUT"
       - name: Install Node
         if: ${{ steps.setting.outputs.path != '' }}
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -329,19 +327,19 @@ jobs:
           node-version: "26.13.1"
           package-manager-cache: false
       # The generator builds every package's tsconfig.json in memory and writes the public API entries of each
-      # package.json exports or types entry to $RUNNER_TEMP/api-entries.json; a failed install, build or tool error exits 2 before Compare.
+      # package.json exports or types entry to $RUNNER_TEMP/api-entries.json, only those in the repo-guards.toml api-snapshot-scope.typescript
+      # it reads itself; a failed install, build, invalid scope or tool error exits 2 before Compare.
       # The shared .npmrc (ignore-scripts) also covers both installs, so no PR code runs here.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
-        env:
-          API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}
         run: |
           while IFS='=' read -r key value; do
             [[ -n "$key" ]] && export "npm_config_${key//-/_}=$value"
           done < "$RG/typescript/.npmrc"
           npm ci --prefix "$RG/typescript/api-snapshot" --no-audit --no-fund || exit 2
           npm ci --no-audit --no-fund || exit 2
-          node "$RG/typescript/api-snapshot/api-snapshot.ts" . "$RUNNER_TEMP/api-entries.json" || exit 2
+          node "$RG/typescript/api-snapshot/api-snapshot.ts" --root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR" \
+            . "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

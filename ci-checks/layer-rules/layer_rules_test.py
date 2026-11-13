@@ -673,25 +673,38 @@ class GoRunner(Helpers, unittest.TestCase):
 
 
 class Workflow(unittest.TestCase):
-    WORKFLOW = lr.CI_CHECKS.parent / ".github/workflows/python.yml"
+    LANGUAGES = ("python", "go")
 
-    def steps(self):
-        job = self.WORKFLOW.read_text().split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
+    def steps(self, language):
+        workflow = lr.CI_CHECKS.parent / f".github/workflows/{language}.yml"
+        job = workflow.read_text().split("\n  checks:\n", 1)[1].split("\n  coverage:\n", 1)[0]
         return re.split(r"\n      - (?=name: |&|\*)", job)[1:]
 
     def test_s21_s22_layer_rules_follows_inline_exemptions_and_blocks_nothing(self):
-        steps = self.steps()
-        names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", step, re.M)) else step for step in steps]
-        at = names.index("Inline exemptions")
-        self.assertEqual(names[at + 1], "Layer rules")
-        step = steps[at + 1]
-        self.assertIn("if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}", step)
-        self.assertNotIn("continue-on-error", step)
-        self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
-        self.assertIn("python=$(cd / && uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14)", step)
-        self.assertIn('"$python" -I -S "$RG/layer-rules/layer_rules.py" python --working-directory "$PROJECT_DIR" --base "$BASE_REF"', step)
-        for later in steps[at + 2 :]:
-            self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
+        for language in self.LANGUAGES:
+            with self.subTest(language):
+                steps = self.steps(language)
+                names = [m.group(1) if (m := re.search(r"^(?:&\S+\s+)?name: (.*)$", s, re.M)) else s for s in steps]
+                at = names.index("Inline exemptions")
+                self.assertEqual(names[at + 1], "Layer rules")
+                step = steps[at + 1]
+                self.assertIn("if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}", step)
+                self.assertNotIn("continue-on-error", step)
+                self.assertIn("working-directory: repo\n", step)
+                self.assertIn("UV_PYTHON_INSTALL_DIR: ${{ runner.temp }}/layer-rules-python", step)
+                find = "uv python install --no-config -q 3.14 && uv python find --no-config --managed-python 3.14"
+                self.assertIn(f"python=$(cd / && {find})", step)
+                command = f'"$python" -I -S "$RG/layer-rules/layer_rules.py" {language} --working-directory "$PROJECT_DIR"'
+                self.assertIn(command + ' --base "$BASE_REF"', step)
+                for later in steps[at + 2 :]:
+                    self.assertIn("!cancelled() && steps.inline-exemptions.outcome == 'success'", later)
+
+    def test_go_step_sees_gowork_off_and_the_project_dir(self):
+        workflow = (lr.CI_CHECKS.parent / ".github/workflows/go.yml").read_text()
+        job_env = workflow.split("\n  checks:\n", 1)[1].split("\n    steps:\n", 1)[0]
+        self.assertIn('GOWORK: "off"', job_env)
+        step = next(s for s in self.steps("go") if s.startswith("name: Layer rules\n"))
+        self.assertIn("PROJECT_DIR: ${{ inputs.working-directory }}", step)
 
 
 class Docs(unittest.TestCase):
@@ -703,7 +716,9 @@ class Docs(unittest.TestCase):
         self.assertIn("  - `layers`：", section)
         self.assertIn("  - `test-paths`：", section)
         self.assertIn('layers = [\n  { name = "api"', section)
-        self.assertIn("| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、", ci)
+        for workflow in ("python.yml", "go.yml"):
+            row = f"| `{workflow}` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、"
+            self.assertIn(row, ci)
         arch = (self.ROOT / "architecture/README.md").read_text()
         self.assertIn("| 2 | [分层规则](#第-2-项分层规则) |", arch)
         self.assertIn("\n### 第 2 项分层规则\n", arch)

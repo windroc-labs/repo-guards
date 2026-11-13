@@ -159,6 +159,40 @@ describe("exports forms", () => {
     );
   });
 
+  it("Node's subpath rules: exact keys beat patterns, null patterns exclude, targets without types are skipped", () => {
+    const entries = generate(path.join(TESTDATA, "exportsmap"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.name]),
+      [
+        ["em", "index"],
+        ["em/a", "a"],
+        ["em/b", "b"],
+        ["em/index", "index"],
+      ],
+    );
+  });
+
+  it("a project importing .ts extensions builds, with defaults", () => {
+    const entries = generate(path.join(TESTDATA, "tsext"));
+    assert.deepEqual(entries, [
+      {
+        unit: "tsext",
+        parent: "",
+        kind: "function",
+        name: "open",
+        signature: "function open(x: number = 5): number",
+      },
+    ]);
+  });
+
+  it("a solution tsconfig builds its referenced projects", () => {
+    const entries = generate(path.join(TESTDATA, "solution"));
+    assert.deepEqual(
+      entries.map((e) => [e.unit, e.signature]),
+      [["solution", "function open(x: number = 5): number"]],
+    );
+  });
+
   it("workspace packages build against a referenced project's source", () => {
     const entries = generate(path.join(TESTDATA, "workspace"));
     assert.equal(
@@ -245,6 +279,16 @@ describe("command line", () => {
         signature: "function open(): void",
       },
     ]);
+  });
+
+  it("security#1 traceResolution in the tsconfig prints no raw PR text, so no line starts with ::", () => {
+    const result = run(path.join(TESTDATA, "trace"), path.join(scratch, "trace.json"));
+    assert.equal(result.status, 2, result.stderr);
+    assert.match(result.stderr, /TS2307/);
+    for (const line of `${result.stdout}\n${result.stderr}`.split("\n")) {
+      assert.ok(!line.startsWith("::"), line);
+      assert.ok(line === "" || line.startsWith("api snapshot (typescript): "), line);
+    }
   });
 
   it("exits 2 on a type error and writes no entry file", () => {

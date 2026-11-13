@@ -28,7 +28,8 @@ interface Unit {
 interface Package {
   dir: string;
   config: string;
-  targets: [subpath: string, target: string][];
+  // null: Node resolves the subpath to nothing (a null target, or no condition this generator accepts).
+  targets: Map<string, string | null>;
   name: string;
 }
 
@@ -39,9 +40,13 @@ interface Outputs {
   source: Map<string, ts.SourceFile>;
   declarationOf: Map<string, string>;
   jsOf: Map<string, string>;
+  options: Map<string, ts.CompilerOptions>;
 }
 
 const PREFIX = "api snapshot (typescript): ";
+const DECLARATION = /\.d\.[cm]?ts$/;
+const JS = /\.[cm]?jsx?$/;
+const TS = /\.[cm]?tsx?$/;
 const CONDITIONS = new Set(["types", "import", "require", "node", "default"]);
 const DROPPED_MODIFIERS = new Set([
   ts.SyntaxKind.ExportKeyword,
@@ -69,11 +74,11 @@ export function generate(projectDir: string): Entry[] {
     source: new Map(),
     declarationOf: new Map(),
     jsOf: new Map(),
+    options: new Map(),
   };
   const builds = new Map<string, ts.CompilerOptions>();
-  for (const config of new Set(packages.map((p) => p.config)))
-    builds.set(config, build(config, outputs, rel));
-  const byConfig = new Map<string, Unit[]>();
+  for (const pkg of packages) build(pkg.config, outputs, builds, rel);
+  const byOptions = new Map<ts.CompilerOptions, Unit[]>();
   const owner = new Map<string, string>();
   for (const pkg of packages) {
     for (const unit of units(pkg, outputs, rel)) {
@@ -84,12 +89,13 @@ export function generate(projectDir: string): Entry[] {
         );
       }
       owner.set(unit.name, rel(pkg.dir));
-      byConfig.set(pkg.config, [...(byConfig.get(pkg.config) ?? []), unit]);
+      // Read each declaration with the options of the build that emitted it.
+      const options = outputs.options.get(unit.declaration) ?? builds.get(pkg.config) ?? {};
+      byOptions.set(options, [...(byOptions.get(options) ?? []), unit]);
     }
   }
   const entries = new Map<string, Entry>();
-  for (const [config, configUnits] of byConfig)
-    read(configUnits, builds.get(config) ?? {}, outputs, entries);
+  for (const [options, optionUnits] of byOptions) read(optionUnits, options, outputs, entries);
   return [...entries.values()].sort(compare);
 }
 
@@ -135,7 +141,7 @@ function readPackage(
   const manifest = json as Record<string, unknown>;
   const dir = path.dirname(file);
   const targets = entryTargets(manifest);
-  if (targets.length === 0) return undefined;
+  if (targets.size === 0) return undefined;
   return {
     dir,
     config:
@@ -146,11 +152,11 @@ function readPackage(
   };
 }
 
-function entryTargets(manifest: Record<string, unknown>): [string, string][] {
+function entryTargets(manifest: Record<string, unknown>): Map<string, string | null> {
   const exports = manifest["exports"];
   if (exports === undefined || exports === null) {
     const types = manifest["types"] ?? manifest["typings"];
-    return typeof types === "string" ? [[".", types]] : [];
+    return new Map(typeof types === "string" ? [[".", types]] : []);
   }
   const isSubpathMap =
     typeof exports === "object" &&
@@ -159,12 +165,7 @@ function entryTargets(manifest: Record<string, unknown>): [string, string][] {
   const map: Record<string, unknown> = isSubpathMap
     ? (exports as Record<string, unknown>)
     : { ".": exports };
-  const targets: [string, string][] = [];
-  for (const [subpath, value] of Object.entries(map)) {
-    const target = pick(value);
-    if (target !== undefined) targets.push([subpath, target]);
-  }
-  return targets;
+  return new Map(Object.entries(map).map(([subpath, value]) => [subpath, pick(value) ?? null]));
 }
 
 // Node's rule: the first listed condition this generator accepts wins; null excludes the subpath.
@@ -209,11 +210,15 @@ function describeDiagnostics(
     .join("\n");
 }
 
+// Builds the config in memory, after the projects it references, each once.
 function build(
   config: string,
   outputs: Outputs,
+  builds: Map<string, ts.CompilerOptions>,
   rel: (file: string) => string,
-): ts.CompilerOptions {
+): void {
+  if (builds.has(config)) return;
+  builds.set(config, {});
   const configErrors: ts.Diagnostic[] = [];
   const parsed = ts.getParsedCommandLineOfConfigFile(config, undefined, {
     ...ts.sys,
@@ -221,6 +226,9 @@ function build(
   });
   if (parsed === undefined || configErrors.length > 0) {
     fail(`cannot read ${quote(rel(config))}:\n${describeDiagnostics(configErrors, rel)}`);
+  }
+  for (const reference of parsed.projectReferences ?? []) {
+    build(ts.resolveProjectReferencePath(reference), outputs, builds, rel);
   }
   const { outFile: _outFile, ...projectOptions } = parsed.options;
   const options: ts.CompilerOptions = {
@@ -232,8 +240,14 @@ function build(
     sourceMap: false,
     inlineSourceMap: false,
     declarationMap: false,
+    // The compiler would print resolution traces, PR-chosen text, raw to stdout.
+    traceResolution: false,
+    // allowImportingTsExtensions is legal with emit only when the .ts import extensions are rewritten.
+    ...(projectOptions.allowImportingTsExtensions ? { rewriteRelativeImportExtensions: true } : {}),
   };
+  builds.set(config, options);
   const host = ts.createCompilerHost(options, true);
+  delete host.trace;
   host.writeFile = (file) => {
     throw new Error(`the compiler tried to write ${quote(rel(file))}`);
   };
@@ -254,26 +268,42 @@ function build(
   if (failed.length === 0) {
     const result = program.emit(undefined, (file, text, _bom, _onError, sources) => {
       outputs.text.set(file, text);
+      outputs.options.set(file, options);
       for (let dir = path.dirname(file); !outputs.dirs.has(dir); dir = path.dirname(dir))
         outputs.dirs.add(dir);
       const source = sources?.length === 1 ? sources[0] : undefined;
       if (source === undefined) return;
       outputs.source.set(file, source);
-      if (/\.d\.[cm]?ts$/.test(file)) outputs.declarationOf.set(source.fileName, file);
-      else if (/\.[cm]?jsx?$/.test(file)) outputs.jsOf.set(source.fileName, file);
+      if (DECLARATION.test(file)) outputs.declarationOf.set(source.fileName, file);
+      else if (JS.test(file)) outputs.jsOf.set(source.fileName, file);
     });
     failed = errors(result.diagnostics);
   }
   if (failed.length > 0)
     fail(`the build with ${quote(rel(config))} failed:\n${describeDiagnostics(failed, rel)}`);
-  return options;
 }
 
 function toDeclaration(target: string, outputs: Outputs): string | undefined {
-  if (/\.d\.[cm]?ts$/.test(target)) return target;
-  if (/\.[cm]?jsx?$/.test(target)) return target.replace(/\.([cm]?)jsx?$/, ".d.$1ts");
-  if (/\.[cm]?tsx?$/.test(target)) return outputs.declarationOf.get(target);
+  if (DECLARATION.test(target)) return target;
+  if (JS.test(target)) return target.replace(/\.([cm]?)jsx?$/, ".d.$1ts");
+  if (TS.test(target)) return outputs.declarationOf.get(target);
   return undefined;
+}
+
+// Node's PATTERN_KEY_COMPARE: an exact key wins, then the pattern with the longest part before "*".
+function winner(subpath: string, keys: string[]): string | undefined {
+  if (keys.includes(subpath)) return subpath;
+  return keys
+    .filter((key) => {
+      const [head = "", tail = ""] = key.split("*", 2);
+      return (
+        key.includes("*") &&
+        subpath.length >= head.length + tail.length &&
+        subpath.startsWith(head) &&
+        subpath.endsWith(tail)
+      );
+    })
+    .sort((a, b) => b.indexOf("*") - a.indexOf("*") || b.length - a.length)[0];
 }
 
 function isFile(file: string): boolean {
@@ -286,11 +316,14 @@ function isFile(file: string): boolean {
 
 function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): Unit[] {
   const found: Unit[] = [];
+  const keys = [...pkg.targets.keys()];
   for (const [subpath, target] of pkg.targets) {
+    // Targets without types (package.json, styles) have no API to read.
+    if (target === null || !(JS.test(target) || TS.test(target))) continue;
     const absolute = path.resolve(pkg.dir, target);
     const unitName = (sub: string): string => pkg.name + sub.slice(1);
     if (subpath.includes("*")) {
-      const sources = /\.d\.[cm]?ts$/.test(absolute) || !/\.[cm]?tsx?$/.test(absolute);
+      const sources = DECLARATION.test(absolute) || !TS.test(absolute);
       const pattern = sources ? (toDeclaration(absolute, outputs) ?? absolute) : absolute;
       const [head = "", tail = ""] = pattern.split("*", 2);
       const pool = sources ? [...outputs.text.keys()] : [...outputs.declarationOf.keys()];
@@ -308,9 +341,10 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
         );
       }
       for (const file of matches) {
-        const middle = file.slice(head.length, file.length - tail.length);
+        const expanded = subpath.replace("*", file.slice(head.length, file.length - tail.length));
+        if (winner(expanded, keys) !== subpath) continue;
         const declaration = sources ? file : (outputs.declarationOf.get(file) ?? file);
-        found.push({ name: unitName(subpath.replace("*", middle)), declaration });
+        found.push({ name: unitName(expanded), declaration });
       }
       continue;
     }
@@ -329,6 +363,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
 // Serves the in-memory outputs to a second program, also through symlinked paths such as workspace node_modules.
 function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.CompilerHost {
   const host = ts.createCompilerHost(options, true);
+  delete host.trace;
   const real = (file: string): string => {
     if (outputs.text.has(file) || outputs.dirs.has(file)) return file;
     let dir = file;
@@ -340,7 +375,12 @@ function virtualHost(options: ts.CompilerOptions, outputs: Outputs): ts.Compiler
     return path.join(realpathSync(dir), path.relative(dir, file));
   };
   const { fileExists, readFile, directoryExists } = host;
-  host.fileExists = (file) => outputs.text.has(real(file)) || fileExists.call(host, file);
+  // A source the build compiled is hidden, so imports resolve to its emitted .d.ts, never back to the source.
+  host.fileExists = (file) => {
+    const resolved = real(file);
+    if (outputs.declarationOf.has(resolved)) return false;
+    return outputs.text.has(resolved) || fileExists.call(host, file);
+  };
   host.readFile = (file) => outputs.text.get(real(file)) ?? readFile.call(host, file);
   host.directoryExists = (dir) =>
     outputs.dirs.has(real(dir)) || (directoryExists?.call(host, dir) ?? false);

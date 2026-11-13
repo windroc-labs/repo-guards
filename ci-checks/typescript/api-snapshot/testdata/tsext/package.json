@@ -1,0 +1,1 @@
+{ "name": "tsext", "type": "module", "exports": "./src/index.ts" }

@@ -265,11 +265,18 @@ def layer_problems(config: Config, where: str, language: str, files: frozenset[s
                 if not any(d == "" or pattern == d or pattern.startswith(f"{d}/") for d in config.source_dirs):
                     shown = "[" + ", ".join(quote(d or ".") for d in config.source_dirs) + "]"
                     problems.append(f"{label} 的 paths {quote(pattern)} 不在 source-dirs {shown} 里")
+    package_layers: dict[str, set[str]] = defaultdict(set)
     for path in mine:
         names = [layer.name for layer in config.layers if matches(layer.paths, path)]
         if len(names) > 1:
             shown = "、".join(quote(n) for n in names)
             problems.append(f"{where} 文件 {quote(path)} 同时被层 {shown} 匹配")
+        if spec.package_unit and names and not config.is_test(path):
+            package_layers[posixpath.dirname(path)].update(names)
+    for directory, names in sorted(package_layers.items()):
+        if len(names) > 1:
+            shown = "、".join(quote(n) for n in sorted(names))
+            problems.append(f"{where} 包 {quote(directory or '.')} 的文件分在层 {shown} 里")
     return problems
 
 
@@ -397,8 +404,12 @@ def scan_side(root: Path, rev: str, prefix: str, config: Config, language: str, 
             "settings": {"source-dirs": list(config.source_dirs)},
         }
         records = scanner_records(language, Path(tmp), request, runner)
-    # A package-unit language may name the package directory instead of one of its files.
-    packages = {posixpath.dirname(p): p for p in sorted(files, reverse=True)} if spec.package_unit else {}
+    # A package-unit language may name the package directory; it is judged by its first file that is not test code.
+    packages: dict[str, str] = {}
+    for path in sorted(files) if spec.package_unit else []:
+        held = packages.get(posixpath.dirname(path))
+        if held is None or (config.is_test(held) and not config.is_test(path)):
+            packages[posixpath.dirname(path)] = path
     scanned = set(todo)
     for record in records:
         if not isinstance(record, dict) or record.get("file") not in scanned:

@@ -1,3 +1,4 @@
+import dataclasses
 import io
 import json
 import os
@@ -6,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 import layer_rules as lr
@@ -230,7 +232,7 @@ class Repo:
         return [line for line in self.output.splitlines() if line.startswith("::error ")]
 
 
-class Check(unittest.TestCase):
+class Helpers:
     def repo(self, head=None, base=None, toml=None, head_toml=None):
         repo = Repo(self, {**BASE, **(base or {})}, config() if toml is None else toml)
         if head is not None or head_toml is not None:
@@ -240,6 +242,8 @@ class Check(unittest.TestCase):
     def assert_exit(self, repo, code, **kwargs):
         self.assertEqual(repo.run(**kwargs), code, repo.output)
 
+
+class Check(Helpers, unittest.TestCase):
     def test_s1_no_layers_lists_projects_that_have_them(self):
         repo = self.repo(toml='[project."app"]\nlayers = []\n')
         self.assert_exit(repo, 0)
@@ -458,7 +462,7 @@ class Check(unittest.TestCase):
         self.assertIn("--base", repo.output)
 
 
-class MoreChecks(Check):
+class MoreChecks(Helpers, unittest.TestCase):
     def test_other_languages_layers_are_not_checked(self):
         files = {**BASE, "web/index.ts": "", "web/inner.ts": ""}
         bad_ui = '{ name = "ui", paths = ["../web/**"], exits = 1, exit = "web/index.ts" },'
@@ -533,6 +537,52 @@ class PackageUnits(unittest.TestCase):
         report = lr.judge(config, "", side, lr.Side())
         self.assertIn("绕开出口", report.lines[0])
         self.assertIn("api/a.go 引用 core/inner", report.lines[0])
+
+
+class GoProtocol(unittest.TestCase):
+    LAYERS = (
+        '[project."."]\ntest-paths = ["**/*_test.go"]\nlayers = [\n'
+        '  { name = "api", paths = ["api/**"], exit = "api" },\n'
+        '  { name = "core", paths = ["core/**"], exit = "core" },\n'
+        '  { name = "store", paths = ["store/**"], exit = "store" },\n]\n'
+    )
+    FILES = {"go.mod": "module m\n", "api/a.go": "", "core/c.go": "", "store/a_test.go": "", "store/store.go": ""}
+
+    def test_package_target_is_judged_by_its_non_test_files(self):
+        def runner(argv, **kwargs):
+            side = Path(argv[-1])
+            request = json.loads(kwargs["input"])
+            self.assertEqual(request["context"], ["go.mod"])
+            self.assertTrue((side / "go.mod").is_file())
+            imports = (side / "api/a.go").read_text() if (side / "api/a.go").exists() else ""
+            out = json.dumps({"file": "api/a.go", "line": 1, "targets": ["store"]}) if "store" in imports else ""
+            return subprocess.CompletedProcess(argv, 0, out, "")
+
+        repo = Repo(self, self.FILES, self.LAYERS)
+        repo.commit({"api/a.go": 'import "m/store"\n'})
+        go = dataclasses.replace(lr.LANGUAGES["go"], scanner=lambda root: ["scanner", str(root)])
+        out = io.StringIO()
+        with unittest.mock.patch.dict(lr.LANGUAGES, {"go": go}):
+            code = lr.check(repo.root, "go", ".", "main", out, None, runner)
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertIn("越层：api → store，api/a.go 引用 store。", out.getvalue())
+
+    def test_package_split_across_layers_is_invalid(self):
+        files = frozenset({"api/a.go", "core/c.go", "lib/x.go", "lib/y.go", "lib/z_test.go"})
+        data = {
+            "project": {
+                ".": {
+                    "test-paths": ["**/*_test.go"],
+                    "layers": [
+                        {"name": "api", "paths": ["api/**", "lib/x.go"], "exit": "api"},
+                        {"name": "core", "paths": ["core/**", "lib/y.go"], "exit": "core"},
+                    ],
+                }
+            }
+        }
+        with self.assertRaises(lr.ConfigError) as caught:
+            lr.load_config(data, ".", "go", files)
+        self.assertIn('包 "lib" 的文件分在层 "api"、"core" 里', "\n".join(caught.exception.problems))
 
 
 class Workflow(unittest.TestCase):

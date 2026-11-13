@@ -554,13 +554,14 @@ class SnapshotJobTest(unittest.TestCase):
                     step,
                 )
                 self.assertIn('echo "scope=$scope" >> "$GITHUB_OUTPUT"', step)
+                text = (self.WORKFLOWS / f"{language}.yml").read_text(encoding="utf-8")
+                self.assertNotIn("Read the snapshot path", text)
 
     def test_generate_gets_the_scope_in_its_environment(self) -> None:
         for language in ("rust", "python", "typescript", "go"):
             with self.subTest(language):
                 step = self.steps(language)["Generate"]
                 self.assertIn("API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}", step)
-                self.assertNotIn("Read the snapshot path", (self.WORKFLOWS / f"{language}.yml").read_text())
 
 
 class ScopeDocsTest(unittest.TestCase):
@@ -587,18 +588,23 @@ class ScopeDocsTest(unittest.TestCase):
         contract = self.section(ci, "#### 冻结范围")
         self.assertIn("`API_SNAPSHOT_SCOPE`", contract)
         self.assertIn("没设或为空", contract)
-        self.assertIn("退出 2", contract)
+        self.assertIn("- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。", contract)
+        self.assertIn("- 现状：四种语言的生成器都还没接上", contract)
         for language in ("Rust", "Python", "Go", "TypeScript"):
-            self.assertIn(f"- {language}：", contract)
+            self.assertIn(f"  - {language}：", contract)
 
     def test_rust_impl_rules(self) -> None:
         contract = self.section((self.ROOT / "ci-checks/README.md").read_text(encoding="utf-8"), "#### 冻结范围")
+        rust = next(line for line in contract.splitlines() if line.startswith("  - Rust："))
         # Blocker 1: a foreign trait on &LocalType belongs to LocalType's module.
-        self.assertIn("`impl core::fmt::Display for &kvm_op::driver::Id`", contract)
-        self.assertIn("去掉 `&`、`&mut`、`*const`、`*mut`", contract)
+        self.assertIn("`impl core::fmt::Display for &kvm_op::driver::Id`", rust)
+        self.assertIn("去掉 `&`、`&mut`、`*const`、`*mut`", rust)
         # Blocker 2: an impl whose self type and trait are both foreign.
-        self.assertIn("`impl core::convert::From<kvm_op::driver::Id> for u32`", contract)
-        self.assertIn("头里一个本地路径都没有的 impl 总在范围内", contract)
+        self.assertIn("`impl core::convert::From<kvm_op::driver::Id> for u32`", rust)
+        self.assertIn("头里一个本地路径都没有的 impl 总在范围内", rust)
+        self.assertIn("(rust/README.md#接口快照)", rust)
+        rust_readme = (self.ROOT / "ci-checks/rust/README.md").read_text(encoding="utf-8")
+        self.assertIn("(../README.md#冻结范围)", self.section(rust_readme, "## 接口快照"))
 
     def test_architecture_item_points_at_the_setting(self) -> None:
         arch = (self.ROOT / "architecture/README.md").read_text(encoding="utf-8")

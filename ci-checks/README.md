@@ -502,9 +502,9 @@ api_snapshot.py --entries <条目文件> --snapshot <快照文件> --output <新
 
 - 没设或为空：写整个项目的公开接口，和没有这个设置时一样。
 - 否则只写模块路径在范围内的条目：模块路径等于某个前缀，或在它下面，按段比（`kvm_op::driver` 包括 `kvm_op::driver::io`，不包括 `kvm_op::driverx`）。
-- 值读不懂（不是字符串组成的 JSON 数组），或有前缀一个条目都对不上，退出 2：写错的前缀不能悄悄地什么都不冻结。
+- 值读不懂（不是字符串组成的 JSON 数组）时退出 2。
 - 条目的模块路径：
-  - Rust：crate 名（库 target 的名字）加上条目公开路径里除最后一段外的模块部分。经 `pub use` 到达的每条路径各算各的。trait 的方法、关联常量和关联类型跟着 trait 走。impl 条目和它里面的方法等：impl 头里任何一个本地路径（本 crate 的类型或 trait 的规范路径）所在的模块在范围内，它就在范围内。看三处：实现它的类型，先去掉 `&`、`&mut`、`*const`、`*mut`，所以别的 crate 的 trait 为 `&` 本地类型的实现（如 `impl core::fmt::Display for &kvm_op::driver::Id`）归 `kvm_op::driver`；trait 本身；trait 的泛型参数，所以类型和 trait 都是别的 crate 的实现（如 `impl core::convert::From<kvm_op::driver::Id> for u32`）也归 `kvm_op::driver`。头里一个本地路径都没有的 impl 总在范围内，不会被悄悄漏掉。
+  - Rust：crate 名（库 target 的名字）加上条目公开路径里除最后一段外的模块部分。经 `pub use` 到达的每条路径各算各的。trait 的方法、关联常量和关联类型跟着 trait 走。impl 条目和它里面的方法等：impl 头里任何一个本地路径（本 crate 的类型或 trait 的规范路径）所在的模块在范围内，它就在范围内。看三处：实现它的类型，先去掉 `&`、`&mut`、`*const`、`*mut`，所以别的 crate 的 trait 为 `&` 本地类型的实现（如 `impl core::fmt::Display for &kvm_op::driver::Id`）归 `kvm_op::driver`；trait 本身；trait 的泛型参数，所以类型和 trait 都是别的 crate 的实现（如 `impl core::convert::From<kvm_op::driver::Id> for u32`）也归 `kvm_op::driver`。头里一个本地路径都没有的 impl 总在范围内，不会被悄悄漏掉。现在的生成器还查不到上面两例这样没挂在本 crate 公开类型或公开 trait 上的 impl（见 [Rust 模板](rust/README.md#接口快照)），这几条定的是查得到时它们归哪个模块。
   - Python：条目所在模块的点分名；类的成员跟着类走。
   - Go：条目所在包的 import 路径。
   - TypeScript：条目所在的导出子路径（`package.json` 的 `exports` 键，只有 `types` 入口的包是 `.`），每个包都按子路径比。

@@ -80,6 +80,27 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 
 `python.yml` 的 Coverage 和 Coverage gate 两步跑覆盖率（判定规则见[覆盖率](../README.md#覆盖率)）：Coverage 在 PR 上用项目自己的环境跑 `coverage run -m pytest`，pytest 来自 repo 自己的 lockfile 或 `requirements.txt`，没装 pytest 的 `requirements.txt` 项目用共用 `dev` 组固定的版本；`pytest` 不带参数，repo 自己的 pytest 配置（`testpaths`、`addopts`）选中的测试就是覆盖率量的测试，所以这份配置只选单元测试，集成测试由 repo 自己的 job 按路径或标记另跑（如 `pytest tests/integration`，命令行给的路径优先于 `testpaths`）；插件自动加载是关掉的（`PYTEST_DISABLE_PLUGIN_AUTOLOAD`，见[依赖检查规则](../README.md#依赖检查规则)），要用的插件在 repo 自己的 pytest 配置里用 `-p` 列出；Coverage gate 判定。之后的 CRAP report 用同一份报告只出报告，见 [CRAP 分数](../README.md#crap-分数)。`# pragma: no cover` 算行内豁免。
 
+## 分层规则（import-linter）
+
+[架构第 2 项](../../architecture/README.md#第-2-项分层规则)的 Python 实现。规则用 [import-linter](https://import-linter.readthedocs.io/) 自己的写法，写在项目目录（`working-directory`）里：
+
+| 配置放哪 | 写法 |
+|---|---|
+| `.importlinter` | INI：`[importlinter]` 节写 `root_package` 或 `root_packages`，每条规则一个 `[importlinter:contract:<id>]` 节 |
+| `pyproject.toml` | TOML：`[tool.importlinter]` 表，规则写在 `[[tool.importlinter.contracts]]` 里 |
+
+两个都有时读 `.importlinter`，和 import-linter 自己的顺序一样。只看项目目录，不往上级、下级目录找；`setup.cfg` 不读。"哪层可以 import 哪层"用 `forbidden`、`layers`、`independence` 等规则写。已有的违规用规则自己的 `ignore_imports` 豁免，或者不写那条规则。
+
+`python.yml` 的 Layer rules 步跑 [`layer-rules/layer_rules.py`](layer-rules/layer_rules.py)：
+
+- 没有配置：打印一行 `layer rules (python): no import-linter config in .importlinter or pyproject.toml [tool.importlinter]; skipped`，通过。
+- 有配置：对整个项目跑一次 import-linter，规则不满足或配置被拒绝都失败（退出 1）；`pyproject.toml` 不是合法 TOML、装不上工具退出 2。
+- 找包：在项目目录和 `source-dirs`（见[覆盖默认配置](../README.md#覆盖默认配置)）里找 `root_packages`，src 布局不用装项目。
+- 不执行项目的代码：脚本用 `python -I` 跑，不经 import-linter 的命令行（它把当前目录放到 `sys.path` 最前面），找到的项目模块都没有 loader，import 它们不会运行。所以 `contract_types` 只能用 import-linter 自带的规则类型，指向项目代码的会失败。
+- 输出包在 `::stop-commands::` 里，PR 的文件名和源码行当不了 workflow 命令。
+- 版本：import-linter 固定在 [`layer-rules/requirements.in`](layer-rules/requirements.in)，[`requirements.txt`](layer-rules/requirements.txt) 带 hash（在该目录跑 `uv pip compile requirements.in -o requirements.txt --generate-hashes --universal --python-version 3.14` 生成），装进单独的 Python 3.14 环境，不和项目的依赖混装。
+- 测试：在该目录建好装了 `requirements.txt` 的 Python 3.14 环境，用它跑 `python -m unittest layer_rules_test`。
+
 ## 读 pyproject.toml（pyproject-config）
 
 [`pyproject-config/`](pyproject-config/) 是 `python.yml` 读 TOML 用的脚本，只用标准库，要 Python 3.11 及以上。

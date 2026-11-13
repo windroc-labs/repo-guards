@@ -100,7 +100,7 @@ func scanSide(root string, stdin io.Reader, out *json.Encoder) error {
 }
 
 // scanFile gives one record per import spec that resolves to a package of the project: each spec imports one
-// package under its own name, so it is one reference, at its own line.
+// package under its own name, so it is one reference, at its own line in the .go file (not a //line directive's).
 func scanFile(name string, data []byte, modules []module, packages map[string]bool) []record {
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, name, data, parser.ImportsOnly)
@@ -118,7 +118,7 @@ func scanFile(name string, data []byte, modules []module, packages map[string]bo
 			continue
 		}
 		if target, found := resolve(importPath, modules, packages); found {
-			records = append(records, record{File: name, Line: fset.Position(spec.Pos()).Line, Targets: []string{target}})
+			records = append(records, record{File: name, Line: fset.PositionFor(spec.Pos(), false).Line, Targets: []string{target}})
 		}
 	}
 	return records
@@ -164,20 +164,31 @@ func enclosing(directory string, modules []module) string {
 	return best
 }
 
-// modulePath is the path in go.mod's module directive, or "" when it has none.
+// modulePath is the path in go.mod's module directive, single-line or block form, or "" when it has none.
 func modulePath(text string) string {
+	inBlock := false
 	for _, line := range strings.Split(text, "\n") {
 		line, _, _ = strings.Cut(line, "//")
 		fields := strings.Fields(line)
-		if len(fields) != 2 || fields[0] != "module" {
-			continue
+		switch {
+		case inBlock && len(fields) == 1 && fields[0] != ")":
+			return unquote(fields[0])
+		case inBlock && len(fields) > 0:
+			return ""
+		case len(fields) == 2 && fields[0] == "module" && fields[1] == "(":
+			inBlock = true
+		case len(fields) == 2 && fields[0] == "module":
+			return unquote(fields[1])
 		}
-		if unquoted, err := strconv.Unquote(fields[1]); err == nil {
-			return unquoted
-		}
-		return fields[1]
 	}
 	return ""
+}
+
+func unquote(field string) string {
+	if unquoted, err := strconv.Unquote(field); err == nil {
+		return unquoted
+	}
+	return field
 }
 
 func depth(directory string) int {

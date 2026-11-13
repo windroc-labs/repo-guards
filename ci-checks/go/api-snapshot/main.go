@@ -71,12 +71,14 @@ func readScope() ([]string, error) {
 	if value == "" {
 		return nil, nil
 	}
-	var scope []string
-	if err := json.Unmarshal([]byte(value), &scope); err != nil || scope == nil {
+	// Pointers, because json.Unmarshal turns a null element of a []string into "".
+	var elems []*string
+	if err := json.Unmarshal([]byte(value), &elems); err != nil || elems == nil || slices.Contains(elems, nil) {
 		return nil, fmt.Errorf("API_SNAPSHOT_SCOPE is not a JSON array of strings: %s", value)
 	}
-	if len(scope) == 0 {
-		return nil, nil
+	var scope []string
+	for _, prefix := range elems {
+		scope = append(scope, *prefix)
 	}
 	return scope, nil
 }

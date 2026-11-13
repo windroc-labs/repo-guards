@@ -80,7 +80,7 @@ func TestScopeKeepsUnitsUnderPrefix(t *testing.T) {
 
 func TestNoScopeWritesWholeModule(t *testing.T) {
 	dir := fixture(t, "scope")
-	t.Setenv("API_SNAPSHOT_SCOPE", "")
+	t.Setenv("API_SNAPSHOT_SCOPE", "") // restores the variable after the test
 	if err := os.Unsetenv("API_SNAPSHOT_SCOPE"); err != nil {
 		t.Fatal(err)
 	}
@@ -101,14 +101,18 @@ func TestNoScopeWritesWholeModule(t *testing.T) {
 func TestScopeIgnoresAdditionsOutside(t *testing.T) {
 	dir := copyFixture(t, "scope")
 	before := scoped(t, dir, driverScope)
+	dev, ok := find(parse(t, before), "example.com/scope/driver", "", "type", "Dev")
+	if want := "type Dev struct; implements Closer"; !ok || dev.Signature != want {
+		t.Errorf("scoped Dev entry = %+v (found %v), want signature %q", dev, ok, want)
+	}
 	writeFile(t, filepath.Join(dir, "net", "more.go"), "package net\n\nfunc Listen() {}\n\ntype Closer interface{ Close() }\n")
 	writeFile(t, filepath.Join(dir, "driverx", "more.go"), "package driverx\n\nfunc Y() {}\n")
 	if after := scoped(t, dir, driverScope); after != before {
 		t.Errorf("out-of-scope additions changed the scoped output:\n%s\nwant:\n%s", after, before)
 	}
 	// Unscoped, Dev lists the new interface: only the scope keeps it out of the scoped Dev entry.
-	dev, ok := find(parse(t, scoped(t, dir, "")), "example.com/scope/driver", "", "type", "Dev")
-	if want := "type Dev struct; implements example.com/scope/net.Closer"; !ok || dev.Signature != want {
+	dev, ok = find(parse(t, scoped(t, dir, "")), "example.com/scope/driver", "", "type", "Dev")
+	if want := "type Dev struct; implements Closer, example.com/scope/net.Closer"; !ok || dev.Signature != want {
 		t.Errorf("unscoped Dev entry = %+v (found %v), want signature %q", dev, ok, want)
 	}
 }
@@ -129,7 +133,7 @@ func TestScopeReportsAdditionsInside(t *testing.T) {
 
 func TestBadScopeExits2(t *testing.T) {
 	dir := fixture(t, "scope")
-	for _, scope := range []string{"not json", "{}", "[1]", "null", `"example.com/scope"`, `["example.com/scope"] []`} {
+	for _, scope := range []string{"not json", "{}", "[1]", "null", "[null]", `["example.com/scope/driver",null]`, `"example.com/scope"`, `["example.com/scope"] []`} {
 		t.Setenv("API_SNAPSHOT_SCOPE", scope)
 		r := runIn(t, dir)
 		if r.code != 2 || !strings.Contains(r.stderr, "API_SNAPSHOT_SCOPE") || r.stdout != "" {

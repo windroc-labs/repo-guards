@@ -14,6 +14,7 @@ PROJECT = "project"
 DEFAULT_SOURCE_DIRS = ["src"]
 OVERRIDES = ".github/checks/repo-guards.toml"
 API_SNAPSHOT = "api-snapshot"
+API_SNAPSHOT_SCOPE = "api-snapshot-scope"
 LANGUAGES = ("rust", "python", "typescript", "go")
 BARE_KEY = re.compile(r"[A-Za-z0-9_-]+")
 ESCAPES = {
@@ -182,19 +183,27 @@ def source_dirs(overrides: Path, working_directory: str) -> list[str]:
     return project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
 
 
+def language_table(section: dict[str, Any], key: str, working_directory: str) -> dict[str, Any]:
+    """A section's <key>.<language> table, its language names checked."""
+    table = section.get(key, {})
+    where = f"{section_header(working_directory)} {key}"
+    if not isinstance(table, dict):
+        raise Error(f"{where} is not a table")
+    for language in table:
+        if language not in LANGUAGES:
+            raise Error(f"{where}: unknown language {json.dumps(language)}; expected one of {', '.join(LANGUAGES)}")
+    return table
+
+
 def snapshot_settings(overrides: dict[str, Any]) -> dict[tuple[str, str], str]:
     settings: dict[tuple[str, str], str] = {}
     for working_directory, section in project_sections(overrides).items():
-        paths = section.get(API_SNAPSHOT, {})
-        where = f"{section_header(working_directory)} {API_SNAPSHOT}"
-        if not isinstance(paths, dict):
-            raise Error(f"{where} is not a table")
-        for language, path in paths.items():
-            if language not in LANGUAGES:
-                raise Error(f"{where}: unknown language {json.dumps(language)}; expected one of {', '.join(LANGUAGES)}")
+        for language, path in language_table(section, API_SNAPSHOT, working_directory).items():
             if not isinstance(path, str):
-                raise Error(f"{where}.{language} is not a string")
+                raise Error(f"{section_header(working_directory)} {API_SNAPSHOT}.{language} is not a string")
             settings[working_directory, language] = path
+        # Each generator reads and checks its own scope; a misspelt language belongs to none of them.
+        language_table(section, API_SNAPSHOT_SCOPE, working_directory)
     return settings
 
 

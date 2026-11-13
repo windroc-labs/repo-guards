@@ -353,8 +353,6 @@ jobs:
       # and writes its public API entries to $RUNNER_TEMP/api-entries.json; exit 2 when it cannot.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
-        env:
-          API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}
         run: |
           "$RUNNER_TEMP/api-snapshot-tool/release/api-snapshot" --project "$PWD" --output "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare

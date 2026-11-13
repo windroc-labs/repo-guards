@@ -348,6 +348,25 @@ class SnapshotPathTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("rsut", err)
 
+    def test_unknown_scope_language_anywhere_exits_2(self) -> None:
+        # A misspelt language belongs to no generator, so the shared read step rejects it.
+        for text, needles in [
+            ('api-snapshot-scope.typscript = ["./driver"]\n', ['[project."."] api-snapshot-scope', "typscript"]),
+            ('[project."other"]\napi-snapshot-scope.pyhton = ["pkg"]\n', ['[project."other"] api-snapshot-scope', "pyhton"]),
+            ('api-snapshot-scope = ["pkg"]\n', ['[project."."] api-snapshot-scope is not a table']),
+        ]:
+            with self.subTest(text=text):
+                code, out, err = Repo(self, setting("go", ".github/api/go.json") + text).snapshot_path(".", "go")
+                self.assertEqual((code, out), (2, ""))
+                for needle in needles:
+                    self.assertIn(needle, err)
+
+    def test_scope_values_are_left_to_the_generators(self) -> None:
+        for value in ('["pkg.sub"]', "[]", "1", '["not a prefix"]'):
+            with self.subTest(value=value):
+                text = setting("python", ".github/api/py.json") + f"api-snapshot-scope.python = {value}\n"
+                self.assertEqual(Repo(self, text).snapshot_path(".", "python"), (0, ".github/api/py.json\n", ""))
+
     def test_invalid_toml_exits_2(self) -> None:
         code, out, err = Repo(self, "[project\n").snapshot_path(".", "go")
         self.assertEqual((code, out), (2, ""))
@@ -440,8 +459,10 @@ class SnapshotJobTest(unittest.TestCase):
                 self.assertNotIn(" snapshot-scope ", step)
                 self.assertNotIn("scope=", step)
 
-    def test_python_generate_gets_no_scope_variable(self) -> None:
-        self.assertNotIn("API_SNAPSHOT_SCOPE", self.steps("python")["Generate"])
+    def test_generate_gets_no_scope_variable(self) -> None:
+        for language in ("rust", "python", "typescript", "go"):
+            with self.subTest(language):
+                self.assertNotIn("API_SNAPSHOT_SCOPE", self.steps(language)["Generate"])
 
     def test_scope_command_is_gone(self) -> None:
         root = str(Repo(self, '[project."."]\napi-snapshot-scope.go = ["a/b"]\n').root)

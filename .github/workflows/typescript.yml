@@ -331,8 +331,6 @@ jobs:
       # The shared .npmrc (ignore-scripts) also covers both installs, so no PR code runs here.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
-        env:
-          API_SNAPSHOT_SCOPE: ${{ steps.setting.outputs.scope }}
         run: |
           while IFS='=' read -r key value; do
             [[ -n "$key" ]] && export "npm_config_${key//-/_}=$value"

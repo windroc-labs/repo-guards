@@ -1,10 +1,12 @@
-//! Turns one crate's rustdoc JSON into entries: one per item at each public path.
+//! Turns one crate's rustdoc JSON into entries: one per item at each public path, in the scope's modules.
 
 use crate::rustdoc::{item, kind_name};
+use crate::scope::Scope;
 use crate::signature::Printer;
 use crate::walk::{Public, walk};
 use rustdoc_types::{
-    Crate, Id, Item, ItemEnum, MacroKind, StructKind, Type, Use, Variant, VariantKind, Visibility,
+    Crate, GenericArg, GenericArgs, Id, Item, ItemEnum, MacroKind, StructKind, Type, Use, Variant,
+    VariantKind, Visibility,
 };
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -25,6 +27,8 @@ pub struct Entry {
 struct Renderer<'a> {
     unit: &'a str,
     krate: &'a Crate,
+    crate_name: String,
+    scope: &'a Scope,
     printer: Printer<'a>,
     entries: Vec<Entry>,
     /// Each reachable item's canonical path, segments after the crate name.
@@ -34,7 +38,7 @@ struct Renderer<'a> {
     seen_impls: HashSet<Id>,
 }
 
-pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
+pub fn entries(unit: &str, krate: &Crate, scope: &Scope) -> Result<Vec<Entry>, String> {
     let Public {
         items,
         external,
@@ -45,6 +49,8 @@ pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
         unit,
         krate,
         printer: Printer::new(krate, &crate_name, &canonical),
+        crate_name: crate_name.clone(),
+        scope,
         entries: Vec::new(),
         canonical,
         impls: Vec::new(),
@@ -52,23 +58,37 @@ pub fn entries(unit: &str, krate: &Crate) -> Result<Vec<Entry>, String> {
     };
     for (path, item) in &items {
         let (name, parent) = path.split_last().expect("a public path has a name");
-        let signature = renderer.signature(item, name)?;
-        renderer.push(
-            kind_name(item.inner.item_kind()),
-            &parent.join("::"),
-            name,
-            signature,
-        );
+        if renderer.in_scope(parent) {
+            let signature = renderer.signature(item, name)?;
+            renderer.push(
+                kind_name(item.inner.item_kind()),
+                &parent.join("::"),
+                name,
+                signature,
+            );
+        }
+        // Outside the scope, a type still hands on its impls: an impl is in scope by any local path in its header.
         if renderer.canonical.get(&item.id) == Some(path) {
             renderer.children(item, path)?;
         }
     }
     for (module, re_export, kind) in &external {
+        if !renderer.in_scope(module) {
+            continue;
+        }
         let (name, signature) = renderer.external(re_export);
         renderer.push(kind, &module.join("::"), &name, signature);
     }
     renderer.render_impls()?;
     Ok(renderer.entries)
+}
+
+/// The type behind any `&`, `&mut`, `*const` and `*mut`.
+fn pointee(ty: &Type) -> &Type {
+    match ty {
+        Type::BorrowedRef { type_, .. } | Type::RawPointer { type_, .. } => pointee(type_),
+        _ => ty,
+    }
 }
 
 fn vis(item: &Item) -> &'static str {
@@ -82,6 +102,11 @@ fn vis(item: &Item) -> &'static str {
 impl<'a> Renderer<'a> {
     fn item(&self, id: &Id) -> Result<&'a Item, String> {
         item(self.krate, id)
+    }
+
+    /// Whether entries in the module at `module` (segments after the crate name) are written.
+    fn in_scope(&self, module: &[String]) -> bool {
+        self.scope.contains(&self.crate_name, module)
     }
 
     fn push(&mut self, kind: &str, parent: &str, name: &str, signature: String) {
@@ -119,7 +144,14 @@ impl<'a> Renderer<'a> {
             ItemEnum::Enum(e) => &e.impls,
             ItemEnum::Union(u) => &u.impls,
             ItemEnum::Trait(t) => {
-                for id in &t.items {
+                // Members follow the trait into or out of the scope.
+                let (_, module) = path.split_last().expect("a public path has a name");
+                let members = if self.in_scope(module) {
+                    &t.items[..]
+                } else {
+                    &[]
+                };
+                for id in members {
                     let member = self.item(id)?;
                     let name = member.name.clone().unwrap_or_default();
                     let signature = self.member_signature(member, &name, true)?;
@@ -186,7 +218,7 @@ impl<'a> Renderer<'a> {
             let ItemEnum::Impl(imp) = &self.item(&id)?.inner else {
                 return Err(format!("item {} is not an impl", id.0));
             };
-            if !self.kept(imp) {
+            if !self.kept(imp) || !self.impl_in_scope(imp) {
                 continue;
             }
             let header = self.impl_header(imp);
@@ -215,6 +247,34 @@ impl<'a> Renderer<'a> {
             }
         }
         Ok(())
+    }
+
+    /// An impl is in scope when the module of any local path in its header is: the self type behind any
+    /// reference or pointer, the trait, or a type argument of the trait. With no local path, it always is.
+    fn impl_in_scope(&self, imp: &rustdoc_types::Impl) -> bool {
+        let mut types = vec![&imp.for_];
+        if let Some(trait_) = &imp.trait_
+            && let Some(GenericArgs::AngleBracketed { args, .. }) = trait_.args.as_deref()
+        {
+            types.extend(args.iter().filter_map(|arg| match arg {
+                GenericArg::Type(ty) => Some(ty),
+                _ => None,
+            }));
+        }
+        let mut ids: Vec<&Id> = types
+            .into_iter()
+            .filter_map(|ty| match pointee(ty) {
+                Type::ResolvedPath(path) => Some(&path.id),
+                _ => None,
+            })
+            .collect();
+        ids.extend(imp.trait_.as_ref().map(|t| &t.id));
+        let mut modules = ids
+            .into_iter()
+            .filter_map(|id| self.canonical.get(id))
+            .filter_map(|path| path.split_last().map(|(_, module)| module))
+            .peekable();
+        modules.peek().is_none() || modules.any(|module| self.in_scope(module))
     }
 
     fn impl_header(&self, imp: &rustdoc_types::Impl) -> String {

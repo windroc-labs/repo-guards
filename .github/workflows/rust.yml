@@ -350,11 +350,13 @@ jobs:
           cd / && RUSTUP_TOOLCHAIN=$toolchain cargo build --release --locked --manifest-path "$RG/rust/api-snapshot/Cargo.toml" \
             --target-dir "$RUNNER_TEMP/api-snapshot-tool" || exit 2
       # Builds every library crate of the workspace with all features (this runs the PR's build scripts and proc macros)
-      # and writes its public API entries to $RUNNER_TEMP/api-entries.json; exit 2 when it cannot.
+      # and writes its public API entries to $RUNNER_TEMP/api-entries.json, only in the modules repo-guards.toml's
+      # api-snapshot-scope.rust names when it is set; exit 2 when it cannot or that setting is invalid.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
         run: |
-          "$RUNNER_TEMP/api-snapshot-tool/release/api-snapshot" --project "$PWD" --output "$RUNNER_TEMP/api-entries.json" || exit 2
+          "$RUNNER_TEMP/api-snapshot-tool/release/api-snapshot" --project "$PWD" --output "$RUNNER_TEMP/api-entries.json" \
+            --config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" --working-directory "$PROJECT_DIR" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

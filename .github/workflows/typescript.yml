@@ -327,7 +327,8 @@ jobs:
           node-version: "26.13.1"
           package-manager-cache: false
       # The generator builds every package's tsconfig.json in memory and writes the public API entries of each
-      # package.json exports or types entry to $RUNNER_TEMP/api-entries.json; a failed install, build or tool error exits 2 before Compare.
+      # package.json exports or types entry to $RUNNER_TEMP/api-entries.json, only those in the repo-guards.toml api-snapshot-scope.typescript
+      # it reads itself; a failed install, build, invalid scope or tool error exits 2 before Compare.
       # The shared .npmrc (ignore-scripts) also covers both installs, so no PR code runs here.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
@@ -337,7 +338,8 @@ jobs:
           done < "$RG/typescript/.npmrc"
           npm ci --prefix "$RG/typescript/api-snapshot" --no-audit --no-fund || exit 2
           npm ci --no-audit --no-fund || exit 2
-          node "$RG/typescript/api-snapshot/api-snapshot.ts" . "$RUNNER_TEMP/api-entries.json" || exit 2
+          node "$RG/typescript/api-snapshot/api-snapshot.ts" --root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR" \
+            . "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
         id: compare
         if: ${{ steps.setting.outputs.path != '' }}

@@ -475,6 +475,20 @@ class SnapshotJobTest(unittest.TestCase):
         self.assertEqual((code, out), (2, ""))
         self.assertNotIn("snapshot-scope", err)
 
+    def test_typescript_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("typescript")
+        self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])
+        self.assertNotIn("API_SNAPSHOT_SCOPE", steps["Generate"])
+        self.assertIn('--root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR"', steps["Generate"])
+
+    def test_rust_generator_reads_the_scope_itself(self) -> None:
+        steps = self.steps("rust")
+        self.assertNotIn("scope", steps["Read the snapshot settings"])
+        generate = steps["Generate"]
+        self.assertNotIn("API_SNAPSHOT_SCOPE", generate)
+        self.assertIn('--config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"', generate)
+        self.assertIn('--working-directory "$PROJECT_DIR"', generate)
+
     def test_go_generator_reads_the_scope_itself(self) -> None:
         steps = self.steps("go")
         self.assertNotIn("snapshot-scope", steps["Read the snapshot settings"])

@@ -8,6 +8,8 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
+import { parse as parseToml } from "smol-toml";
 import ts from "typescript";
 
 export interface Entry {
@@ -22,6 +24,7 @@ export class Failure extends Error {}
 
 interface Unit {
   name: string;
+  subpath: string;
   declaration: string;
 }
 
@@ -114,11 +117,15 @@ export function quote(text: string): string {
   return JSON.stringify(text).replaceAll("#", "\\u0023");
 }
 
+function errorText(error: unknown): string {
+  return quote(error instanceof Error ? error.message : String(error));
+}
+
 function fail(message: string): never {
   throw new Failure(message);
 }
 
-export function generate(projectDir: string): Entry[] {
+export function generate(projectDir: string, scope: readonly string[] = []): Entry[] {
   const root = path.resolve(projectDir);
   const rel = (file: string): string => path.relative(root, file).split(path.sep).join("/") || ".";
   const packages = findPackages(root, root, rel);
@@ -145,6 +152,7 @@ export function generate(projectDir: string): Entry[] {
         );
       }
       owner.set(unit.name, rel(pkg.dir));
+      if (!inScope(unit.subpath, scope)) continue;
       // Read each declaration with the options of the build that emitted it.
       const options = outputs.options.get(unit.declaration) ?? builds.get(pkg.config) ?? {};
       byOptions.set(options, [...(byOptions.get(options) ?? []), unit]);
@@ -153,6 +161,79 @@ export function generate(projectDir: string): Entry[] {
   const entries = new Map<string, Entry>();
   for (const [options, optionUnits] of byOptions) read(optionUnits, options, outputs, entries, rel);
   return [...entries.values()].sort(compare);
+}
+
+// By segment, so "./driver" covers "./driver/io" but not "./driverx"; "." covers every subpath.
+function inScope(subpath: string, scope: readonly string[]): boolean {
+  return (
+    scope.length === 0 ||
+    scope.some((prefix) => prefix === "." || subpath === prefix || subpath.startsWith(`${prefix}/`))
+  );
+}
+
+const OVERRIDES = ".github/checks/repo-guards.toml";
+const SCOPE_KEY = "api-snapshot-scope.typescript";
+
+function isTable(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Date)
+  );
+}
+
+function own(table: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
+// api-snapshot-scope.typescript of [project."<workingDirectory>"] in the caller's repo-guards.toml; [] when unset.
+export function readScope(root: string, workingDirectory: string): string[] {
+  let text: string;
+  try {
+    text = readFileSync(path.join(root, OVERRIDES), "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    fail(`${OVERRIDES}: ${errorText(error)}`);
+  }
+  let overrides: Record<string, unknown>;
+  try {
+    overrides = parseToml(text);
+  } catch (error) {
+    fail(`${OVERRIDES}: ${errorText(error)}`);
+  }
+  const project = own(overrides, "project") ?? {};
+  if (!isTable(project)) fail("[project] is not a table");
+  const header = `[project.${quote(workingDirectory)}]`;
+  const section = own(project, workingDirectory) ?? {};
+  if (!isTable(section)) fail(`${header} is not a table`);
+  const scopes = own(section, "api-snapshot-scope") ?? {};
+  if (!isTable(scopes)) fail(`${header} api-snapshot-scope is not a table`);
+  const scope = own(scopes, "typescript");
+  const where = `${header} ${SCOPE_KEY}`;
+  if (scope === undefined) return [];
+  if (!Array.isArray(scope) || !scope.every((prefix) => typeof prefix === "string")) {
+    fail(`${where} is not an array of strings`);
+  }
+  if (scope.length === 0) {
+    fail(
+      `${where} = []: must list at least one module prefix; leave it unset to freeze the whole project`,
+    );
+  }
+  for (const prefix of scope) {
+    const error = prefixError(prefix);
+    if (error !== undefined) fail(`${where}: ${quote(prefix)}: ${error}`);
+  }
+  return scope;
+}
+
+function prefixError(prefix: string): string | undefined {
+  if (/[\u0000-\u001f\u007f]/.test(prefix)) return "must not contain control characters";
+  const segments = prefix.slice(2).split("/");
+  const valid =
+    prefix === "." ||
+    (prefix.startsWith("./") &&
+      segments.every(
+        (part) => part !== "" && part !== "." && part !== ".." && !part.includes("*"),
+      ));
+  return valid ? undefined : 'must be "." or an export subpath such as "./driver"';
 }
 
 function compare(a: Entry, b: Entry): number {
@@ -188,9 +269,7 @@ function readPackage(
   try {
     json = JSON.parse(readFileSync(file, "utf8"));
   } catch (error) {
-    fail(
-      `cannot read ${quote(rel(file))}: ${quote(error instanceof Error ? error.message : String(error))}`,
-    );
+    fail(`cannot read ${quote(rel(file))}: ${errorText(error)}`);
   }
   if (typeof json !== "object" || json === null || Array.isArray(json))
     fail(`${quote(rel(file))} is not a JSON object`);
@@ -420,7 +499,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
         const declaration = toDeclaration(file, outputs);
         if (winner(expanded, keys) !== subpath || declaration === undefined) continue;
         if (!outputs.text.has(declaration)) continue;
-        found.push({ name: unitName(expanded), declaration });
+        found.push({ name: unitName(expanded), subpath: expanded, declaration });
       }
       continue;
     }
@@ -433,7 +512,7 @@ function units(pkg: Package, outputs: Outputs, rel: (file: string) => string): U
         `${quote(rel(pkg.dir))}: exports ${quote(subpath)} -> ${quote(target)}, but no declaration file ${wanted} was built or exists`,
       );
     }
-    found.push({ name: unitName(subpath), declaration });
+    found.push({ name: unitName(subpath), subpath, declaration });
   }
   return found;
 }
@@ -925,21 +1004,43 @@ function print(node: ts.Node): string {
     .replace(/;$/, "");
 }
 
+interface CommandLine {
+  project: string;
+  out: string;
+  scope?: { root: string; workingDirectory: string };
+}
+
+function commandLine(args: string[]): CommandLine | undefined {
+  let parsed;
+  try {
+    parsed = parseArgs({
+      args,
+      options: { root: { type: "string" }, "working-directory": { type: "string" } },
+      allowPositionals: true,
+    });
+  } catch {
+    return undefined;
+  }
+  const [project, out, ...rest] = parsed.positionals;
+  const { root, "working-directory": workingDirectory } = parsed.values;
+  if (!project || !out || rest.length > 0) return undefined;
+  if (root === undefined && workingDirectory === undefined) return { project, out };
+  if (!root || !workingDirectory) return undefined;
+  return { project, out, scope: { root, workingDirectory } };
+}
+
 function main(args: string[]): number {
-  const [project, out] = args;
-  if (
-    args.length !== 2 ||
-    project === undefined ||
-    out === undefined ||
-    project === "" ||
-    out === ""
-  ) {
-    console.error(`${PREFIX}usage: api-snapshot.ts <project-dir> <entries-file>`);
+  const line = commandLine(args);
+  if (line === undefined) {
+    console.error(
+      `${PREFIX}usage: api-snapshot.ts [--root <repo-root> --working-directory <dir>] <project-dir> <entries-file>`,
+    );
     return 2;
   }
   try {
-    const entries = generate(project);
-    writeFileSync(out, `${JSON.stringify(entries, null, 2)}\n`);
+    const scope = line.scope && readScope(line.scope.root, line.scope.workingDirectory);
+    const entries = generate(line.project, scope);
+    writeFileSync(line.out, `${JSON.stringify(entries, null, 2)}\n`);
     console.log(`${PREFIX}${entries.length} entries`);
     return 0;
   } catch (error) {

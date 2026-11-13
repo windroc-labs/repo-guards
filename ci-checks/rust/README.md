@@ -87,3 +87,26 @@ unexpected_cfgs = { level = "warn", check-cfg = ["cfg(coverage_nightly)"] }
 覆盖率只量单元测试。`unit-tests` 输入写 repo 的单元测试目标，空格分开，如 `--lib`、`--bins`、`--bin=<名字>`、`--test=<名字>`，原样传给 cargo-llvm-cov。默认 `--lib --bins`，就是 `src` 里的测试模块。只有 bin 的 crate 写 `--bins`：选中的包里一个 lib 都没有时，cargo 对 `--lib` 报错。单元测试放在 `tests/unit.rs` 这类目标里的，再加 `--test=unit`。目标后面可以接 `--` 和测试名过滤，原样传给测试程序：`--test=unit -- input::` 只跑 `unit` 里名字含 `input::` 的测试。分片（见[覆盖率](../README.md#覆盖率)）时用它把一个测试目标按测试名拆成几片。
 
 单元测试只在 Coverage 步里跑一遍，有测试失败这一步就失败；`rust.yml` 不另跑测试。集成测试（没写进 `unit-tests` 的测试目标）、doctest 和 example 由 repo 自己的 job 跑。
+
+## 接口快照
+
+[第 1 项接口快照](../../architecture/README.md#第-1-项接口快照)的 Rust 生成器：[`api-snapshot/`](api-snapshot/)，一个带 `Cargo.lock` 的 cargo 小程序，读 rustdoc JSON，用 `rustdoc-types` 0.61.0（写死 `=`）解析。比对和输出见[接口快照比对](../README.md#接口快照比对)。
+
+| 文件 | 作用 |
+|---|---|
+| [`api-snapshot.toml`](api-snapshot.toml) | `toolchain`：rustdoc JSON 只有 nightly 能出，API snapshot job 用这个固定的 nightly，和覆盖率的 nightly 分开设。每版 `rustdoc-types` 只读一种 JSON 格式，所以升级时两个一起改，所有启用的调用方要重新生成快照。调用方在覆盖文件的 `["ci-checks/rust/api-snapshot.toml"]` 节改了它，格式对不上时 Generate 退出 2 |
+
+`rust.yml` 的 API snapshot job 设了 `api-snapshot.rust` 才跑这几步：Build the API snapshot tool 装上面的 nightly，在 `/` 下构建生成器（调用方的 `.cargo/config.toml` 管不到它）；Generate 在 `working-directory` 里对 workspace 每个有库 target 的成员（`lib`、`rlib`、`dylib`、`cdylib`、`staticlib`、`proc-macro`）打开全部 feature 跑 `cargo check --lib`，再跑 `cargo rustdoc --lib` 出 JSON，写成条目。构建失败、feature 全开编不过、JSON 格式不对，都退出 2。
+
+条目：
+
+- `unit`：包名。`parent`、`name`：条目的公开路径（从 crate 根算起，不带 crate 名），`parent` 是除最后一段外的部分，crate 根下为 `""`。经 `pub use` 能从几条公开路径到达的条目，每条路径一个条目；最短的那条（一样长取字典序小的）是它的规范路径。
+- `kind`：rustdoc 报告的种类，如 `function`、`struct`、`trait`、`impl`、`assoc_type`、`proc_derive`。
+- trait 的方法、关联常量和关联类型：上级是 trait 的规范路径。
+- 实现：每个 `impl` 一个条目，上级是实现它的类型的规范路径，名字和签名都是 impl 头（`impl core::convert::From<u32> for mycrate::Id`）；impl 里的方法等以这个头为上级，所以 `From<u32>` 和 `From<String>` 的 `from`、类型自己的 `len` 和 trait 实现里的 `len` 键都不同。同一类型的几个固有 `impl` 块合成一个。
+- 别的 crate 的条目被 `pub use` 出来时，种类照 rustdoc 对目标的报告，签名是 `pub use <路径>`；glob 的名字是 `<源路径>::*`。显式的 `pub use` 和本模块的条目照 Rust 的规则按命名空间（类型、值、宏）遮住 glob 带进来的同名条目，被遮住的不进快照；glob 带进来的条目只要主命名空间（类型的类型、函数的值）被占，就整个不进，即使元组结构体的构造函数还看得见。
+- 签名：泛型参数和约束、where 子句（rustdoc 把写在参数上的约束也并进 where）、公开字段（有私有字段时写 `/* private fields */`）、枚举成员和判别值（算出的值）、`const`/`async`/`unsafe`/`extern`、trait 方法的默认实现（`{ ... }`）。本 crate 的类型用规范路径，别的 crate 的类型用 rustdoc 记的定义路径（`core::result::Result`），所以改 `use` 写法、把代码挪到别的文件再 `pub use` 出来，签名都不变。参数只记类型不记名字：调用方依赖不到参数名。
+
+不进快照：文档注释、源文件位置、私有和 `#[doc(hidden)]` 条目、blanket impl、不稳定的自动 trait（`Freeze`、`UnsafeUnpin`）；自动 trait 的 impl（`Send`、`Sync`、`Unpin`、`UnwindSafe`、`RefUnwindSafe`）不带 where 子句，因为 rustdoc 是从私有字段的类型推出来的。宏的签名是 rustdoc 给的各分支模式，关联常量的默认值是 rustdoc 印出的文字，改它们的写法也算签名变化。既没挂在本 crate 公开类型上、也没挂在公开 trait 上的 impl（如别的 crate 的 trait 为 `&Id` 实现）查不到。升级 nightly 时 rustdoc 记的标准库路径可能变，快照要重新生成。
+
+测试：在 `api-snapshot/` 跑 `RUSTUP_TOOLCHAIN=<api-snapshot.toml 的 toolchain> cargo test --locked`（要先装这个 nightly 和 `python3`），fixture 项目在 `api-snapshot/tests/fixtures/`。

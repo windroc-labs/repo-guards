@@ -214,6 +214,11 @@ jobs:
         if: ${{ !cancelled() }}
         working-directory: repo/tests/ci-checks/dependency-allowlist
         run: python3 -m unittest dependency_allowlist_test
+      - name: Env allowlist tests
+        id: env-allowlist
+        if: ${{ !cancelled() }}
+        working-directory: repo/tests/ci-checks/env-allowlist
+        run: python3 -m unittest env_allowlist_test
       - name: config-overrides tests
         id: config-overrides
         if: ${{ !cancelled() }}
@@ -389,6 +394,7 @@ jobs:
           GITHUB_DIR_PR: ${{ steps.github-dir-pr.outcome }}
           DENY_MERGE: ${{ steps.deny-merge.outcome }}
           DEPENDENCY_ALLOWLIST: ${{ steps.dependency-allowlist.outcome }}
+          ENV_ALLOWLIST: ${{ steps.env-allowlist.outcome }}
           GO_COMMENT_BUDGET: ${{ steps.go-comment-budget.outcome }}
           GO_LICENSE_CHECK: ${{ steps.go-license-check.outcome }}
           GO_API_SNAPSHOT: ${{ steps.go-api-snapshot.outcome }}
@@ -416,7 +422,7 @@ jobs:
           PYTHON_LICENSE_CHECK: ${{ steps.python-license-check.outcome }}
         run: |
           failed=0
-          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES COVERAGE_GATE CRAP_REPORT DIFF_FILTER RUST_SHARD_TARGETS PYTHON_LICENSE_CHECK; do
+          for suite in SCANNER PYTHON TYPESCRIPT RUST CONFIG_OVERRIDES FETCH_CI_CHECKS INLINE_EXEMPTIONS GITHUB_DIR_PR DENY_MERGE DEPENDENCY_ALLOWLIST ENV_ALLOWLIST GO_COMMENT_BUDGET GO_LICENSE_CHECK GO_API_SNAPSHOT GO_COVERAGE_PROFILE LANGUAGE_GATE API_SNAPSHOT PYTHON_API_SNAPSHOT PYTHON_LAYER_RULES TYPESCRIPT_API_SNAPSHOT SHARD_ARTIFACT RUST_COVERAGE_LCOV PYPROJECT_CONFIG WORKFLOW_CONFIG PYTHON_INLINE_EXEMPTIONS GO_INLINE_EXEMPTIONS TYPESCRIPT_INLINE_EXEMPTIONS RUST_INLINE_EXEMPTIONS RUST_API_SNAPSHOT TYPESCRIPT_LAYER_RULES GO_LAYER_RULES COVERAGE_GATE CRAP_REPORT DIFF_FILTER RUST_SHARD_TARGETS PYTHON_LICENSE_CHECK; do
             printf '  %-10s  %s\n' "${suite,,}" "${!suite}"
             [[ ${!suite} == success ]] || failed=$((failed + 1))
           done

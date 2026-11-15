@@ -1,4 +1,5 @@
-allow = []
+# No `allow` here: a project that sets none has not adopted the check, which then only reports.
+# A project adopts it by setting `allow` (even `[]`) in .github/checks/repo-guards.toml.
 
 [rust]
 test_paths = ["tests/*", "benches/*", "examples/*", "*_test.rs", "tests.rs"]

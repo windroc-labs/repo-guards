@@ -62,7 +62,7 @@ PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Change
   - `source-dirs`：Python 要查的源码目录，默认 `["src"]`。
   - `api-snapshot.<语言>`：这个 `working-directory` 下本语言的接口快照文件路径，相对 repo 根目录，`<语言>` 是 `rust`、`python`、`typescript`、`go` 之一。没有默认值：没设就不启用，API snapshot job 只往 job summary 写一行"未启用"，然后通过。一种语言只读自己的快照文件，从不改写它。设了别的语言名、值不是字符串，或者路径不合下面的规定，API snapshot job 退出 2，并给出这个路径。路径的规定：只能是 `.github/checks/api-<语言>.json`，`<语言>` 就是键里的语言名，如 `api-snapshot.rust` 只能设成 `.github/checks/api-rust.json`，别的路径一律拒绝；`.github`、`.github/checks` 和这个文件都不是符号链接，文件存在时是普通文件。一种语言只有这一个路径，所以只能在一个 `working-directory` 启用：几个 `working-directory` 设了同一种语言，它们比对的是同一个文件。文件不存在不算违规：第一次运行就是这样，见[第 1 项接口快照](../architecture.md#第-1-项接口快照)。读设置和检查路径的是 `config_overrides.py` 的 `snapshot-path ROOT WORKING_DIRECTORY 语言`，Changes 也用同一份代码。
   - `api-snapshot-scope.<语言>`：这个 `working-directory` 下本语言接口快照的冻结范围，一组模块前缀（字符串数组），`<语言>` 同上。没设就是整个项目的公开接口，和以前一样。设了就只冻结范围内的条目：范围内仍是多、少、变都失败，范围外的条目不进快照、不比对。前缀的写法：Rust 是从 crate 名起的模块路径（如 `kvm_op::driver`）；Python 是点分模块名（如 `pkg.sub`）；Go 是包的 import 路径（如 `example.com/mod/driver`）；TypeScript 是 `package.json` 的导出子路径（如 `./driver`，包的根入口是 `.`），不带 `*`。语言名由 `snapshot-path` 一起查：设了别的语言名（如 `typscript`），或 `api-snapshot-scope` 不是表，Read the snapshot settings 步退出 2，和 `api-snapshot.<语言>` 不对时一样。值由本语言的生成器在 Generate 步读、检查（数组不能为空，前缀要合本语言的写法），所以没设 `api-snapshot.<语言>` 时值不检查。生成器怎样读、按什么筛条目见[冻结范围](#冻结范围)。
-- 依赖白名单在 [`guards/ci-checks/dependency-allowlist/allowlist.toml`](../../guards/ci-checks/dependency-allowlist/allowlist.toml) 的 `allow`（见[依赖白名单](#依赖白名单)），环境变量白名单在 [`guards/ci-checks/env-allowlist/allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow`（见[环境变量白名单](#环境变量白名单)），Python、TypeScript、Go 的许可证例外在 [`guards/ci-checks/licenses.toml`](../../guards/ci-checks/licenses.toml) 的 `exceptions`，Rust 的依赖来源、构建脚本白名单和许可证例外在 [`guards/ci-checks/rust/deny.toml`](../../guards/ci-checks/rust/deny.toml)，knip 的 `entry`、`project` 在 [`guards/ci-checks/typescript/knip.json`](../../guards/ci-checks/typescript/knip.json)：默认都是共用值或空列表，项目在对应文件那一节改。
+- 依赖白名单在 [`guards/ci-checks/dependency-allowlist/allowlist.toml`](../../guards/ci-checks/dependency-allowlist/allowlist.toml) 的 `allow`（见[依赖白名单](#依赖白名单)），环境变量白名单在 [`guards/ci-checks/env-allowlist/allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow`（默认不设，设了才算接入，见[环境变量白名单](#环境变量白名单)），Python、TypeScript、Go 的许可证例外在 [`guards/ci-checks/licenses.toml`](../../guards/ci-checks/licenses.toml) 的 `exceptions`，Rust 的依赖来源、构建脚本白名单和许可证例外在 [`guards/ci-checks/rust/deny.toml`](../../guards/ci-checks/rust/deny.toml)，knip 的 `entry`、`project` 在 [`guards/ci-checks/typescript/knip.json`](../../guards/ci-checks/typescript/knip.json)：默认都是共用值或空列表，项目在对应文件那一节改。
 - clippy、tsc、deptry、cargo machete、vitest 读项目自己的文件，不归这个文件管；jscpd 基线照旧是 `.github/checks/jscpd-baseline.json`。
 - 覆盖能放宽安全检查，这是有意的：比如放开 `ci-checks/rust/deny.toml` 的依赖来源（`sources`）、忽略漏洞（`advisories`），加依赖白名单和许可证例外。把关靠 CODEOWNERS：改这个文件要 owner 批准，审的时候看清每一节放宽了什么。
 - 测试：在 `tests/ci-checks/config-overrides/` 跑 `python3 -m unittest config_overrides_test`。
@@ -317,11 +317,25 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
 
 #### 环境变量白名单
 
-环境变量从外面传进来就能改程序的行为，读了哪些要看得见。发布代码只能读项目白名单里的环境变量，白名单以外的一出现，CI 就失败。目前只有 Rust：`rust.yml` 的 Env allowlist 步用 [`guards/ci-checks/env-allowlist/env_allowlist.py`](../../guards/ci-checks/env-allowlist/env_allowlist.py)（只用标准库）查。
+环境变量从外面传进来就能改程序的行为，读了哪些要看得见。项目接入后，发布代码只能读项目白名单里的环境变量，白名单以外的一出现，CI 就失败。目前只有 Rust：`rust.yml` 的 Env allowlist 步用 [`guards/ci-checks/env-allowlist/env_allowlist.py`](../../guards/ci-checks/env-allowlist/env_allowlist.py)（只用标准库）查。
 
-- 白名单：[`guards/ci-checks/env-allowlist/allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow`，按变量名逐个列，只认完全相同的名字，不认前缀或通配。默认空：发布代码读任何环境变量都失败。项目在覆盖文件的 `["ci-checks/env-allowlist/allowlist.toml"]` 节写（见[覆盖默认配置](#覆盖默认配置)）。名单不分语言，以后加的语言共用。[测试标记变量](#测试标记变量)不进名单。
-- 查哪些文件：`working-directory` 下 git 跟踪的全部 `.rs` 文件，不只看改动行，所以从名单里删掉一个名字，现有的读法也会失败。接入时第一次运行列出的就是要加的名字。
-- 算读的写法，名字不在 `allow` 里就失败：
+- 白名单：[`guards/ci-checks/env-allowlist/allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow`，按变量名逐个列，只认完全相同的名字，不认前缀或通配。项目在覆盖文件的 `["ci-checks/env-allowlist/allowlist.toml"]` 节写（见[覆盖默认配置](#覆盖默认配置)）。名单不分语言，以后加的语言共用。[测试标记变量](#测试标记变量)不进名单。
+- 接入前后：默认文件不设 `allow`。覆盖文件里设了 `allow`（`[]` 也算）就是接入了。
+
+  | | 没接入（不设 `allow`） | 接入后（设了 `allow`） |
+  |---|---|---|
+  | 查什么 | 一样，下面的规则全查 | 一样 |
+  | 有不合规的读 | 照样逐条列出，第一行是 `report env allowlist (not adopted, CI does not fail)`，最后一行说怎么接入，退出 0，CI 不失败 | 第一行是 `FAIL env allowlist`，退出 1，CI 失败 |
+  | 没有 | `ok env allowlist (not adopted)`，退出 0 | `ok env allowlist`，退出 0 |
+  | 配置或代码读不了 | 退出 2 | 退出 2 |
+
+- 怎么接入：分两个 PR，先代码、后白名单，两个都能全绿。
+  1. 代码 PR：看 Env allowlist 步列出的每一条，把名字不是字面量的读法改成写死名字（`env::var("NAME")`），去掉 `env::vars`、单独 import 的读函数和改名的 import。这时还没接入，列出的条目不让 CI 失败，`main` 和在途 PR 都不变红。合并后再跑一次，剩下的应该只有 `env var X is not in the allowlist`，这些 X 就是要加的名字。
+  2. `.github/` PR：在覆盖文件里写 `allow = ["X", …]`（一个都不读就写 `allow = []`），要 owner 批准。代码已经在 `main` 上改好，所以这个 PR 也是绿的。合并后检查开始拦。
+  - 反过来先合白名单不行：代码里还有名字不是字面量的读法时，白名单 PR 一设 `allow` 就失败。代码里本来只有写死的名字时，可以只提一个 `.github/` PR。
+  - 接入后，在途 PR 下一次跑用的是和 `main` 合并后的代码和白名单：它新加的读法也要写死名字、列进白名单，不然失败。
+- 查哪些文件：`working-directory` 下 git 跟踪的全部 `.rs` 文件，不只看改动行，所以从名单里删掉一个名字，现有的读法也会失败。
+- 算读的写法，接入后名字不在 `allow` 里就失败（没接入时同样列出）：
   - `env::var`、`env::var_os` 带字符串字面量的名字，路径前缀不限（`std::env::var`、`::std::env::var`、`crate::util::env::var` 都算）；`env!`、`option_env!` 宏，前缀不限。
   - 名字不是字符串字面量（变量、`format!`、`concat!`，或把 `env::var` 当函数值传出去）：一律失败，查不了名字。
   - `env::vars`、`env::vars_os` 读所有变量：一律失败。
@@ -329,7 +343,7 @@ jscpd --config .repo-guards/ci-checks/.jscpd.json --baseline .github/checks/jscp
   - 项目自己的模块叫 `env`、里面有函数 `var` 的也会报，改名即可。
 - 测试代码不查：路径匹配 `[rust]` 的 `test_paths` 的文件，以及 `#[cfg(test)] mod 名字 { … }` 行内模块。`test_paths` 默认 `tests/*`、`benches/*`、`examples/*`、`*_test.rs`、`tests.rs`（`#[cfg(test)] mod tests;` 指向的文件），相对 `working-directory`：`*` 也跨 `/`，不以 `/` 开头的在任何深度都匹配，以 `/` 开头的只从 `working-directory` 算起。别的 `cfg(test)` 写法（`#[cfg(test)] fn`、`#[cfg(all(test, …))]`）和别的名字的 `mod x;` 文件照发布代码查，后者要加进 `test_paths`。这份 `test_paths` 和 [Rust 注释预算](rust.md#注释预算)的是两份设置，写法也不同（那边用 `**`），改一份不影响另一份。
 - `build.rs` 算发布代码：它决定发布的东西怎么构建，构建脚本读的变量（如 `OUT_DIR`）也要列。
-- 输出：每处一行 `<路径>:<行>:<列>: <原因>`，最后一行说怎么修。退出码：0 通过，1 有不合规的读，2 出错（配置文件读不了或格式不对、`allow` 或 `rust.test_paths` 不是字符串数组、`git ls-files` 失败、发布代码里有没闭合的字符串、字符或注释）。
+- 输出：每处一行 `<路径>:<行>:<列>: <原因>`，最后一行说怎么修（没接入时说怎么接入）。退出码：0 通过或没接入，1 接入后有不合规的读，2 出错（不管接没接入；配置文件读不了或格式不对、`allow` 或 `rust.test_paths` 不是字符串数组、`git ls-files` 失败、发布代码里有没闭合的字符串、字符或注释）。
 - 这是 lint，防的是无意中、或者 agent 顺手加的环境变量开关，不防故意绕过。查不到的写法：FFI 或 `libc::getenv`、用宏拼出来的调用、通过别的进程读（如跑 `printenv`）、第三方库的读法（如 clap 的 `#[arg(env = "X")]`、`dotenvy`、`envy`）。这些靠代码审查和流程级[隔离再跑](#流程级)（第 16 项）。
 - 测试：在 `tests/ci-checks/env-allowlist/` 跑 `python3 -m unittest env_allowlist_test`。
 

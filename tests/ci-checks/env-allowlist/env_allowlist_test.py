@@ -14,6 +14,7 @@ sys.path.insert(0, str(SOURCE))
 from env_allowlist import Error, findings, lex, main, release_tokens
 
 DEFAULT = SOURCE / "allowlist.toml"
+ADOPTED = 'allow = []\n[rust]\ntest_paths = ["tests/*", "benches/*", "examples/*", "*_test.rs", "tests.rs"]\n'
 OVERRIDES = GUARDS / "ci-checks/config-overrides/config_overrides.py"
 
 
@@ -187,9 +188,45 @@ class MainTest(unittest.TestCase):
         self.addCleanup(Path(handle.name).unlink)
         return Path(handle.name)
 
+    def adopted(self) -> Path:
+        return self.config(ADOPTED)
+
+    def test_not_adopted_reports_and_passes(self) -> None:
+        git_repo(
+            self.root,
+            {"a.rs": 'fn f() { env::var(name); }\n', "b.rs": 'fn f() { env!("B"); }\n', "c.rs": "fn c() {}\n"},
+        )
+        code, out, err = run(self.root)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(
+            out,
+            "report env allowlist (not adopted, CI does not fail): 2 findings in 2 of 3 files\n"
+            "  a.rs:1:15: name is not a string literal\n"
+            "  b.rs:1:10: env var B is not in the allowlist\n"
+            "To adopt the check: hard-code every name and merge that code, then set allow under "
+            '["ci-checks/env-allowlist/allowlist.toml"] in .github/checks/repo-guards.toml (an owner-approved change).\n',
+        )
+
+    def test_not_adopted_without_findings(self) -> None:
+        git_repo(self.root, {"src/main.rs": "fn main() {}\n"})
+        self.assertEqual(run(self.root), (0, "ok env allowlist (not adopted): 1 file checked\n", ""))
+
+    def test_caller_override_without_allow_stays_not_adopted(self) -> None:
+        guards = self.root.parent / f"{self.root.name}-guards"
+        shutil.copytree(SOURCE, guards / "ci-checks/env-allowlist")
+        self.addCleanup(shutil.rmtree, guards)
+        overrides = self.config('["ci-checks/env-allowlist/allowlist.toml"]\nrust.test_paths = ["tests/*"]\n')
+        subprocess.run(
+            [sys.executable, str(OVERRIDES), "apply", str(guards), str(overrides)], check=True, capture_output=True
+        )
+        git_repo(self.root, {"src/main.rs": 'fn main() { std::env::var("HOME").ok(); }\n'})
+        code, out, _ = run(self.root, guards / "ci-checks/env-allowlist/allowlist.toml")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("report env allowlist (not adopted"), out)
+
     def test_empty_allowlist_fails_any_read(self) -> None:
         git_repo(self.root, {"src/main.rs": 'fn main() { std::env::var("HOME").ok(); }\n'})
-        code, out, _ = run(self.root)
+        code, out, _ = run(self.root, self.adopted())
         self.assertEqual(code, 1)
         self.assertIn("src/main.rs:1:23: env var HOME is not in the allowlist", out)
 
@@ -202,7 +239,7 @@ class MainTest(unittest.TestCase):
                 "c.rs": "fn c() {}\n",
             },
         )
-        code, out, _ = run(self.root)
+        code, out, _ = run(self.root, self.adopted())
         self.assertEqual(code, 1)
         self.assertEqual(
             out,
@@ -220,7 +257,7 @@ class MainTest(unittest.TestCase):
 
     def test_one_finding_is_singular(self) -> None:
         git_repo(self.root, {"a.rs": 'fn f() { env!("A"); }\n'})
-        _, out, _ = run(self.root)
+        _, out, _ = run(self.root, self.adopted())
         self.assertTrue(out.startswith("FAIL env allowlist: 1 finding in 1 of 1 file\n"), out)
 
     def test_test_paths_exempt(self) -> None:
@@ -237,15 +274,15 @@ class MainTest(unittest.TestCase):
                 "src/lib.rs": "#[cfg(test)]\nmod tests;\n",
             },
         )
-        self.assertEqual(run(self.root), (0, "ok env allowlist: 1 file checked, allow=[]\n", ""))
+        self.assertEqual(run(self.root, self.adopted()), (0, "ok env allowlist: 1 file checked, allow=[]\n", ""))
 
     def test_scans_only_the_current_directory(self) -> None:
         git_repo(self.root, {"other/a.rs": 'fn f() { env!("A"); }\n', "app/src/main.rs": "fn main() {}\n"})
-        self.assertEqual(run(self.root / "app")[0], 0)
+        self.assertEqual(run(self.root / "app", self.adopted())[0], 0)
 
     def test_no_rust_files_pass(self) -> None:
         git_repo(self.root, {"README.md": "x\n"})
-        self.assertEqual(run(self.root), (0, "ok env allowlist: 0 files checked, allow=[]\n", ""))
+        self.assertEqual(run(self.root, self.adopted()), (0, "ok env allowlist: 0 files checked, allow=[]\n", ""))
 
     def test_caller_override_applies(self) -> None:
         guards = self.root.parent / f"{self.root.name}-guards"
@@ -255,8 +292,11 @@ class MainTest(unittest.TestCase):
         subprocess.run(
             [sys.executable, str(OVERRIDES), "apply", str(guards), str(overrides)], check=True, capture_output=True
         )
+        config = guards / "ci-checks/env-allowlist/allowlist.toml"
         git_repo(self.root, {"src/main.rs": 'fn main() { std::env::var("HOME").ok(); }\n'})
-        self.assertEqual(run(self.root, guards / "ci-checks/env-allowlist/allowlist.toml")[0], 0)
+        self.assertEqual(run(self.root, config), (0, 'ok env allowlist: 1 file checked, allow=["HOME"]\n', ""))
+        (self.root / "src/main.rs").write_text('fn main() { std::env::var("PATH").ok(); }\n')
+        self.assertEqual(run(self.root, config)[0], 1)
 
     def test_errors_exit_2(self) -> None:
         git_repo(self.root, {"src/bad.rs": 'fn f() { let s = "open; }\n', "tests/bad.rs": '"open'})
@@ -264,8 +304,9 @@ class MainTest(unittest.TestCase):
         cases = {
             "missing config": (self.root.parent / "missing.toml", "rust", "missing.toml"),
             "bad toml": (self.config("allow = [\n"), "rust", "-config.toml"),
-            "allow missing": (self.config("[rust]\ntest_paths = []\n"), "rust", "allow"),
             "allow not strings": (self.config("allow = [1]\n[rust]\ntest_paths = []\n"), "rust", "allow"),
+            "allow not a list": (self.config('allow = "HOME"\n[rust]\ntest_paths = []\n'), "rust", "allow"),
+            "test_paths missing, not adopted": (self.config("[rust]\n"), "rust", "rust.test_paths"),
             "test_paths missing": (self.config("allow = []\n"), "rust", "rust.test_paths"),
             "test_paths not list": (self.config('allow = []\n[rust]\ntest_paths = "x"\n'), "rust", "rust.test_paths"),
             "unknown language": (self.config(good), "cobol", "usage"),
@@ -285,7 +326,7 @@ class MainTest(unittest.TestCase):
 
     def test_default_config(self) -> None:
         text = DEFAULT.read_text()
-        self.assertIn("allow = []", text)
+        self.assertNotIn("allow =", text)
         self.assertIn('test_paths = ["tests/*", "benches/*", "examples/*", "*_test.rs", "tests.rs"]', text)
 
 

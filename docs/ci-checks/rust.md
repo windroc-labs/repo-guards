@@ -58,6 +58,10 @@
 
 `allow-build-scripts` 的共用白名单只收基础 crate：大多数项目的依赖树里都有（crates.io 近 90 天下载量约 1.5 亿以上，或 `syn` 1、`generic-array` 0.14 这类仍被大量锁住的旧版本），`build.rs` 只探测编译器和目标平台、设 cfg 或链接路径，不编译原生代码（没有 `cc`、`cmake`、`bindgen` 这类构建依赖）。名单按包名匹配所有版本。`ring`、`openssl-sys` 这类要编译原生代码的，和只在某类项目里出现的（如 `httparse`、`wasm-bindgen`），由项目在覆盖文件里写；覆盖的列表整个替换共用名单，所以连共用名单一起写。
 
+## 环境变量白名单
+
+`rust.yml` 的 Env allowlist 步跑 [`guards/ci-checks/env-allowlist/env_allowlist.py`](../../guards/ci-checks/env-allowlist/env_allowlist.py) `rust`：发布代码只能读 [`allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow` 里的环境变量，默认空。哪些写法算读、测试代码怎么认、查不到什么，见[环境变量白名单](README.md#环境变量白名单)。
+
 ## 覆盖率（cargo-llvm-cov）
 
 | 文件 | 作用 |

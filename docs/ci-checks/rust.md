@@ -60,7 +60,7 @@
 
 ## 环境变量白名单
 
-`rust.yml` 的 Env allowlist 步跑 [`guards/ci-checks/env-allowlist/env_allowlist.py`](../../guards/ci-checks/env-allowlist/env_allowlist.py) `rust`：发布代码只能读 [`allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow` 里的环境变量，默认空。哪些写法算读、测试代码怎么认、查不到什么，见[环境变量白名单](README.md#环境变量白名单)。
+`rust.yml` 的 Env allowlist 步跑 [`guards/ci-checks/env-allowlist/env_allowlist.py`](../../guards/ci-checks/env-allowlist/env_allowlist.py) `rust`：项目在覆盖文件里设了 [`allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow` 才算接入，接入后发布代码只能读 `allow` 里的环境变量；没接入时只列出不合规的读，不让 CI 失败。怎么接入、哪些写法算读、测试代码怎么认、查不到什么，见[环境变量白名单](README.md#环境变量白名单)。
 
 ## 覆盖率（cargo-llvm-cov）
 

@@ -11,10 +11,9 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 USAGE = "usage: env_allowlist.py rust CONFIG"
-HINT = (
-    "Read only allowlisted variables, or add the name to allow under "
-    '["ci-checks/env-allowlist/allowlist.toml"] in .github/checks/repo-guards.toml (an owner-approved change).'
-)
+SECTION = '["ci-checks/env-allowlist/allowlist.toml"] in .github/checks/repo-guards.toml (an owner-approved change).'
+HINT = f"Read only allowlisted variables, or add the name to allow under {SECTION}"
+ADOPT_HINT = f"To adopt the check: hard-code every name and merge that code, then set allow under {SECTION}"
 NOT_LITERAL = "name is not a string literal"
 FUNCTIONS = {"var", "var_os", "vars", "vars_os"}
 READS_ALL = {"vars", "vars_os"}
@@ -241,7 +240,7 @@ def literal_name(tokens: list[Token], i: int) -> str | None:
     return None
 
 
-def findings(path: str, tokens: list[Token], allow: frozenset[str]) -> list[Finding]:
+def findings(path: str, tokens: list[Token], allow: frozenset[str] | None) -> list[Finding]:
     found: list[Finding] = []
 
     def report(token: Token, message: str) -> None:
@@ -250,7 +249,7 @@ def findings(path: str, tokens: list[Token], allow: frozenset[str]) -> list[Find
     def read(token: Token, name: str | None) -> None:
         if name is None:
             report(token, NOT_LITERAL)
-        elif name not in allow:
+        elif allow is None or name not in allow:
             report(token, f"env var {name} is not in the allowlist")
 
     in_use: set[int] = set()
@@ -287,10 +286,10 @@ def findings(path: str, tokens: list[Token], allow: frozenset[str]) -> list[Find
 
 class Language(NamedTuple):
     pathspec: str
-    scan: Callable[[str, str, frozenset[str]], list[Finding]]
+    scan: Callable[[str, str, frozenset[str] | None], list[Finding]]
 
 
-def scan_rust(path: str, text: str, allow: frozenset[str]) -> list[Finding]:
+def scan_rust(path: str, text: str, allow: frozenset[str] | None) -> list[Finding]:
     return findings(path, release_tokens(lex(text)), allow)
 
 
@@ -330,7 +329,8 @@ def check(name: str, config: Path) -> int:
         settings = tomllib.loads(config.read_text())
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
         raise Error(f"{config}: {error}") from error
-    allow = frozenset(strings(settings.get("allow"), "allow", config))
+    # A config without `allow` is a project that has not adopted the check: report, never fail.
+    allow = None if "allow" not in settings else frozenset(strings(settings["allow"], "allow", config))
     table = settings.get(name)
     test_paths = strings(table.get("test_paths") if isinstance(table, dict) else None, f"{name}.test_paths", config)
     files = [p for p in tracked(language.pathspec) if not any(matches(g, p) for g in test_paths)]
@@ -340,14 +340,21 @@ def check(name: str, config: Path) -> int:
             found += language.scan(path, Path(path).read_text(encoding="utf-8"), allow)
         except (OSError, UnicodeDecodeError, Error) as error:
             raise Error(f"{path}: {error}") from error
+    checked = plural(len(files), "file")
     if not found:
-        listed = ", ".join(json.dumps(n) for n in sorted(allow))
-        print(f"ok env allowlist: {plural(len(files), 'file')} checked, allow=[{listed}]")
+        if allow is None:
+            print(f"ok env allowlist (not adopted): {checked} checked")
+        else:
+            listed = ", ".join(json.dumps(n) for n in sorted(allow))
+            print(f"ok env allowlist: {checked} checked, allow=[{listed}]")
         return 0
-    failing = len({f.path for f in found})
-    print(f"FAIL env allowlist: {plural(len(found), 'finding')} in {failing} of {plural(len(files), 'file')}")
+    status = "FAIL env allowlist" if allow is not None else "report env allowlist (not adopted, CI does not fail)"
+    print(f"{status}: {plural(len(found), 'finding')} in {len({f.path for f in found})} of {checked}")
     for f in found:
         print(f"  {f.path}:{f.line}:{f.column}: {f.message}")
+    if allow is None:
+        print(ADOPT_HINT)
+        return 0
     print(HINT)
     return 1
 

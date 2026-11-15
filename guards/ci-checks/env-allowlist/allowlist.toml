@@ -1,0 +1,4 @@
+allow = []
+
+[rust]
+test_paths = ["tests/*", "benches/*", "examples/*", "*_test.rs", "tests.rs"]

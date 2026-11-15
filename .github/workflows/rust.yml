@@ -158,6 +158,9 @@ jobs:
           # No lock at the merge-base (a new project) leaves the base file absent: every crate counts as new.
           if git cat-file -e "$base:./Cargo.lock" 2>/dev/null; then git show "$base:./Cargo.lock" > "$RUNNER_TEMP/base-Cargo.lock"; fi
           uv run --no-project --python 3.12 "$RG/dependency-allowlist/dependency_allowlist.py" cargo "$RG/dependency-allowlist/allowlist.toml" "$RUNNER_TEMP/base-Cargo.lock" Cargo.lock
+      - name: Env allowlist
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        run: uv run --no-project --python 3.12 "$RG/env-allowlist/env_allowlist.py" rust "$RG/env-allowlist/allowlist.toml"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:

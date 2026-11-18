@@ -111,9 +111,13 @@ jobs:
           npm ci --prefix "$RG/typescript/comment-budget" --no-audit --no-fund
           npm ci --prefix "$RG/typescript/layer-rules" --omit=dev --no-audit --no-fund
           echo "$RUNNER_TEMP/ts-tools/node_modules/.bin" >> "$GITHUB_PATH"
+      # Item 20, checkout unchanged: node resolves node_modules from the checkout, so the install stays there. The listing
+      # taken right after it is what Checkout unchanged lets through; a file added to node_modules later still counts.
       - &install-project
         name: Install the project
-        run: npm ci --no-audit --no-fund
+        run: |
+          npm ci --no-audit --no-fund
+          uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" installed "$GITHUB_WORKSPACE/repo" "$RUNNER_TEMP/installed-files"
       - name: Inline exemptions
         id: inline-exemptions
         # The whole repo from its root, whatever working-directory is; UV_NO_CONFIG keeps the caller's uv config out.
@@ -157,6 +161,14 @@ jobs:
           args=(--onlyAllow "$allowed" --excludePrivatePackages)
           if [[ -n $exceptions ]]; then args+=(--excludePackages "$exceptions"); fi
           license-checker-rseidelsohn "${args[@]}"
+      # Last: what the steps above left in the caller's checkout, the whole repo. It only reports until the project
+      # sets enforce in repo-guards.toml, which it reads at HEAD. uv runs from $RUNNER_TEMP without the PR's config.
+      - name: Checkout unchanged
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo" "$RUNNER_TEMP/installed-files"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -200,19 +212,22 @@ jobs:
             echo "::error::a coverage shard failed ($SHARDS_RESULT)"
             exit 1
           fi
-          flags=(--coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura)
+          # Item 20: every mode reports into $RUNNER_TEMP, a shard's too, and vitest keeps no cache in node_modules.
+          # --fsModuleCache came with a later vitest; an older one rejects it.
+          flags=(--no-cache --coverage.enabled=true --coverage.provider=v8 --coverage.reporter=cobertura --coverage.reportsDirectory="$RUNNER_TEMP/coverage-head")
+          help=$(npx --no-install vitest run --help)
+          if [[ $help == *--fsModuleCache* ]]; then flags+=(--no-fsModuleCache); fi
           mapfile -t include < <(node "$RG/typescript/workflow-config/workflow-config.ts" coverage-include "$RG/typescript/knip.json")
           mapfile -t exclude < <(node "$RG/typescript/workflow-config/workflow-config.ts" coverage-exclude "$RG/typescript/coverage.json")
           for glob in "${include[@]}"; do flags+=("--coverage.include=$glob"); done
           for glob in "${exclude[@]}"; do flags+=("--coverage.exclude=$glob"); done
-          report=--coverage.reportsDirectory="$RUNNER_TEMP/coverage-head"
           # Blob reports hold absolute paths and runners may check out to different directories:
           # shards store a placeholder for the checkout root, and merge puts its own back.
           root=/__repo_guards_checkout__
           swap() { node "$RG/typescript/workflow-config/workflow-config.ts" replace "$@"; }
           case $MODE in
             whole)
-              npx --no-install vitest run "${flags[@]}" "$report" ;;
+              npx --no-install vitest run "${flags[@]}" ;;
             shard)
               read -ra tests <<< "$TESTS"
               npx --no-install vitest run "${flags[@]}" --reporter=default --reporter=blob --outputFile.blob="$RUNNER_TEMP/shard/blob-$SHARD.json" "${tests[@]}"
@@ -223,7 +238,7 @@ jobs:
               exit ;;
             merge)
               for blob in "$RUNNER_TEMP"/shards/*.json; do swap "$blob" "$root" "$PWD"; done
-              npx --no-install vitest run --merge-reports="$RUNNER_TEMP/shards" "${flags[@]}" "$report" ;;
+              npx --no-install vitest run --merge-reports="$RUNNER_TEMP/shards" "${flags[@]}" ;;
           esac
           mv "$RUNNER_TEMP/coverage-head/cobertura-coverage.xml" "$RUNNER_TEMP/coverage-head.xml"
       - name: Coverage gate
@@ -242,6 +257,13 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - &checkout-unchanged
+        name: Checkout unchanged
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo" "$RUNNER_TEMP/installed-files"
 
   # One job per coverage-shards item, running only its test files; Coverage merges their reports.
   coverage-shard:
@@ -279,6 +301,7 @@ jobs:
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
+      - *checkout-unchanged
 
   # Generating the snapshot builds the caller's code, so it gets a job of its own: read-only token, no secrets.
   api-snapshot:
@@ -329,6 +352,7 @@ jobs:
           done < "$RG/typescript/.npmrc"
           npm ci --prefix "$RG/typescript/api-snapshot" --no-audit --no-fund || exit 2
           npm ci --no-audit --no-fund || exit 2
+          uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" installed "$GITHUB_WORKSPACE/repo" "$RUNNER_TEMP/installed-files" || exit 2
           node "$RG/typescript/api-snapshot/api-snapshot.ts" --root="$GITHUB_WORKSPACE/repo" --working-directory="$PROJECT_DIR" \
             . "$RUNNER_TEMP/api-entries.json" || exit 2
       - name: Compare
@@ -353,3 +377,4 @@ jobs:
           name: ${{ steps.setting.outputs.artifact }}
           path: ${{ runner.temp }}/api-snapshot
           if-no-files-found: error
+      - *checkout-unchanged

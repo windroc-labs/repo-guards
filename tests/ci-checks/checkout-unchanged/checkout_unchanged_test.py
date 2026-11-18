@@ -304,7 +304,7 @@ class Workflows(unittest.TestCase):
     """Every job of a language workflow that runs on the caller's checkout ends with the check; callers add nothing."""
 
     WORKFLOWS = SOURCE.parents[2] / ".github/workflows"
-    LANGUAGES = ("go", "python")
+    LANGUAGES = ("go", "python", "typescript")
     JOBS = ("checks", "coverage", "coverage-shard", "api-snapshot")
     # The file `installed` wrote after the dependency install, where the workflow installs into the checkout.
     FILES = {"typescript": ' "$RUNNER_TEMP/installed-files"'}
@@ -356,6 +356,32 @@ class Workflows(unittest.TestCase):
             # Before anything is installed or run, so no step writes where the check would find it.
             steps = [step.split("\n", 1)[0] for step in jobs[job].split("\n      - ")[1:]]
             self.assertEqual(steps[3].removeprefix("&").removeprefix("*"), "outside", job)
+
+
+    def test_typescript_records_the_install_and_keeps_vitest_out_of_the_checkout(self):
+        jobs = self.jobs("typescript")
+        record = (
+            'uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py"'
+            ' installed "$GITHUB_WORKSPACE/repo" "$RUNNER_TEMP/installed-files"'
+        )
+        install = jobs["checks"].split("\n      - &install-project\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertLess(install.index("npm ci --no-audit --no-fund\n"), install.index(record))
+        for job in ("coverage", "coverage-shard"):
+            self.assertIn("\n      - *install-project\n", jobs[job])
+        # API snapshot installs inside Generate; a failed listing stops the job like a failed install.
+        generate = jobs["api-snapshot"].split("\n      - name: Generate\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertLess(generate.index("npm ci --no-audit --no-fund || exit 2\n"), generate.index(f"{record} || exit 2\n"))
+        self.assertLess(generate.index(record), generate.index("api-snapshot.ts"))
+        self.assertEqual(sum(job.count(record) for job in jobs.values()), 2)
+        coverage = jobs["coverage"].split("\n      - &coverage\n", 1)[1].split("\n      - ", 1)[0]
+        flags = next(line for line in coverage.splitlines() if line.strip().startswith("flags=("))
+        self.assertIn("--no-cache ", flags)
+        self.assertIn('--coverage.reportsDirectory="$RUNNER_TEMP/coverage-head"', flags)
+        self.assertIn("flags+=(--no-fsModuleCache)", coverage)
+        runs = [line for line in coverage.splitlines() if "vitest run " in line and "--help" not in line]
+        self.assertEqual(len(runs), 3)
+        for line in runs:
+            self.assertIn('"${flags[@]}"', line)
 
 
 if __name__ == "__main__":

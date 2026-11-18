@@ -458,6 +458,7 @@ class Targets(unittest.TestCase):
         self.assertIsNone(ie.owner("generated", "README.md"))
         self.assertEqual(ie.owner("jscpd", "src/a.rs"), "jscpd")
         self.assertEqual(ie.owner("go-mod", "go.mod"), "go")
+        self.assertEqual(ie.owner("pylint", "src/a.py"), "python")
 
 
 class Main(unittest.TestCase):

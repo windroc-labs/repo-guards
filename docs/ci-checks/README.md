@@ -443,6 +443,7 @@ reason = "只在 feature full 下用到"
 | Python（大小写、空格不限） | `# noqa`、`# noqa: <规则>`；文件级 `# ruff: noqa`、`# flake8: noqa` | `ruff`，`V` 开头的规则记 `vulture` |
 | | `# fmt: off`、`# yapf: disable`；`# fmt: skip` | `ruff-format` / `off`；`skip` |
 | | `# type: ignore[…]`、`# pyright: ignore[…]`；文件级 `# pyright: <设置>` | `pyright` / 规则或设置名 |
+| | `# pylint: disable=…`、`disable-next=…`、`disable-msg=…`；文件级 `# pylint: skip-file`、`disable-all`、`disable=all`（按 pylint 的解析：一条注释只认最后一处 `pylint:`，写错的部分和它后面的不算；`enable` 不算） | `pylint` / 消息名或编号；文件级记 `skip-file`、`disable-all`、`all` |
 | | `# pragma: no cover`、`# pragma: no branch`（coverage.py 默认正则） | `coverage` / `no cover`、`no branch` |
 | | `pytest.mark.skip`、`skipif`、`xfail`，`pytest.skip()`、`xfail()`、`importorskip()`（含别名导入和 `pytestmark`） | `pytest` / 标记或函数名 |
 | | `unittest.skip`、`skipIf`、`skipUnless`、`expectedFailure`、`SkipTest`，`self.skipTest()` | `unittest` / 名字 |

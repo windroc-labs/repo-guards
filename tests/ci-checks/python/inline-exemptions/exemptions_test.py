@@ -105,7 +105,7 @@ class Forms(unittest.TestCase):
     def test_s14_forms_outside_the_list_never_count(self):
         for text in (
             "x = 1  # nosec\n",
-            "x = 1  # pylint: disable=unused\n",
+            "x = 1  # pylint: enable=unused-import\n",
             "x = 1  # type: ignored\n",
             "x = 1  # noqanything\n",
             "x = 1  # Pragma: No Cover\n",
@@ -212,6 +212,56 @@ class Forms(unittest.TestCase):
                     ("pyright", "src/m.py", "strict", ""): 1,
                 }
             ),
+        )
+
+
+class Pylint(unittest.TestCase):
+    def test_each_disabled_message_counts_in_its_function(self):
+        for line, rules in (
+            ("import a  # pylint: disable=cyclic-import", ["cyclic-import"]),
+            ("import a  # pylint: disable=R0401, C0114", ["R0401", "C0114"]),
+            ("# pylint: disable-next=cyclic-import\nimport a", ["cyclic-import"]),
+            ("import a  # pylint: disable-msg=R", ["R"]),
+            ("import a  # see pylint: disable = imports ; reason", ["imports"]),
+            ("import a  # PYLINT: disable=cyclic-import", []),
+        ):
+            with self.subTest(line=line):
+                expected = Counter({("pylint", "src/m.py", rule, "C.run"): 1 for rule in rules})
+                self.assertEqual(found("src/m.py", method(line)), expected)
+
+    def test_pragmas_that_skip_the_file_are_file_level(self):
+        for comment, rule in (
+            ("# pylint: skip-file", "skip-file"),
+            ("# pylint: disable-all", "disable-all"),
+            ("# pylint: disable=all", "all"),
+        ):
+            with self.subTest(comment=comment):
+                self.assertEqual(
+                    found("src/m.py", method(comment + "\nx = 1")),
+                    Counter({("pylint", "src/m.py", rule, ""): 1}),
+                )
+
+    def test_only_what_pylint_applies_counts(self):
+        for text, rules in (
+            ("x = 1  # pylint: enable=cyclic-import\n", []),
+            ("x = '# pylint: disable=cyclic-import'\n", []),
+            ("x = 1  # pylint: disable=a-b # pylint: disable=c-d\n", ["c-d"]),
+            ("x = 1  # pylint: disable=a-b # no pragma here\n", ["a-b"]),
+            ("x = 1  # pylint: disable=a-b enable=c-d disable=e-f\n", ["a-b", "e-f"]),
+            ("x = 1  # pylint: disable a-b\n", []),
+            ("x = 1  # pylint: disable=a-b, enable\n", ["a-b"]),
+            ("x = 1  # pylint: disable=\n", []),
+            ("x = 1  # pylint: frobnicate=a-b\n", []),
+            ("x = 1  # pylint: disable=a-b skip-file disable=c-d\n", ["a-b", "skip-file"]),
+        ):
+            with self.subTest(text=text):
+                expected = Counter({("pylint", "src/m.py", rule, ""): 1 for rule in rules})
+                self.assertEqual(found("src/m.py", text), expected)
+
+    def test_disable_all_after_other_messages_skips_the_file(self):
+        self.assertEqual(
+            found("src/m.py", "def f():\n    x = 1  # pylint: disable=a-b,all,c-d\n"),
+            Counter({("pylint", "src/m.py", "a-b", "f"): 1, ("pylint", "src/m.py", "all", ""): 1}),
         )
 
 

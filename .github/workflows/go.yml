@@ -204,6 +204,14 @@ jobs:
           set -o pipefail
           uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions > "$RUNNER_TEMP/license-exceptions.txt"
           go list -mod=readonly -m -json all | license-check "$RG/licenses.toml" "$RUNNER_TEMP/license-exceptions.txt"
+      # Last: what the steps above left in the caller's checkout, the whole repo. It only reports until the project
+      # sets enforce in repo-guards.toml, which it reads at HEAD. uv runs from $RUNNER_TEMP without the PR's config.
+      - name: Checkout unchanged
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -296,6 +304,13 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - &checkout-unchanged
+        name: Checkout unchanged
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # One job per coverage-shards item, running only its unit-tests arguments; Coverage merges their data.
   coverage-shard:
@@ -335,6 +350,7 @@ jobs:
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
+      - *checkout-unchanged
 
   # Generating the snapshot builds the caller's code, so it gets a job of its own: read-only token, no secrets.
   api-snapshot:
@@ -407,3 +423,4 @@ jobs:
           name: ${{ steps.setting.outputs.artifact }}
           path: ${{ runner.temp }}/api-snapshot
           if-no-files-found: error
+      - *checkout-unchanged

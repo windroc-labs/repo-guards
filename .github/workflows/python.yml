@@ -89,6 +89,18 @@ jobs:
           persist-credentials: false
       - *checkout-repo-guards
       - *install-uv
+      # Item 20, checkout unchanged: the project's environment, bytecode, tool caches and coverage data go to the runner's
+      # temp directory, so the steps below leave nothing in the caller's checkout. pytest splits PYTEST_ADDOPTS like a shell.
+      - &outside
+        name: Write outside the checkout
+        run: |
+          {
+            echo "UV_PROJECT_ENVIRONMENT=$RUNNER_TEMP/project-venv"
+            echo "PYTHONPYCACHEPREFIX=$RUNNER_TEMP/pycache"
+            echo "RUFF_CACHE_DIR=$RUNNER_TEMP/ruff-cache"
+            echo "COVERAGE_FILE=$RUNNER_TEMP/coverage-data"
+            echo "PYTEST_ADDOPTS=-o cache_dir='$RUNNER_TEMP/pytest-cache'"
+          } >> "$GITHUB_ENV"
       # SOURCE_DIRS is the project section's source-dirs for this working-directory, less those that do not exist,
       # each of which gets a warning. When none exists, the steps that check or measure them skip.
       - &apply-overrides
@@ -108,14 +120,14 @@ jobs:
           if [[ -f uv.lock ]]; then
             uv sync --locked
           else
-            uv venv .venv
-            uv pip install --python .venv/bin/python -r requirements.txt
+            uv venv "$UV_PROJECT_ENVIRONMENT"
+            uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" -r requirements.txt
           fi
       - name: Export the resolved dependencies
         run: |
           # pylock.toml (for pip-audit) and dependencies.toml (for the allowlist: uv.lock itself, which lists every extra and
           # group, else the compiled pylock.toml); a merge-base without uv.lock or requirements.txt leaves no base files.
-          python=$PWD/.venv/bin/python
+          python=$UV_PROJECT_ENVIRONMENT/bin/python
           export_lock() {
             if [[ -f $1/uv.lock ]]; then
               (cd "$1" && uv export -q --frozen --format pylock.toml --no-emit-workspace -o "$2/pylock.toml")
@@ -173,7 +185,7 @@ jobs:
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 "$RG/python/pyproject-config/pyproject_config.py" pyright-config "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
-          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
+          python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath "$UV_PROJECT_ENVIRONMENT/bin/python" $SOURCE_DIRS
       - name: Dead code
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' && env.SOURCE_DIRS != '' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
@@ -181,7 +193,7 @@ jobs:
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' && env.SOURCE_DIRS != '' }}
         run: |
           deptry=$(python3 "$RG/python/pyproject-config/pyproject_config.py" pin "$RG/python/pyproject.toml" "deptry==")
-          uv run --no-project --python .venv/bin/python --with "$deptry" deptry $SOURCE_DIRS
+          uv run --no-project --python "$UV_PROJECT_ENVIRONMENT/bin/python" --with "$deptry" deptry $SOURCE_DIRS
       - name: Vulnerabilities
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: pip-audit --locked "$RUNNER_TEMP/pylock-head"
@@ -198,10 +210,18 @@ jobs:
           fi
           python3 "$RG/config-overrides/config_overrides.py" get "$RG/licenses.toml" exceptions > "$RUNNER_TEMP/license-exceptions.txt"
           mapfile -t -O "${#ignore[@]}" ignore < "$RUNNER_TEMP/license-exceptions.txt"
-          args=(--python .venv/bin/python --from all --format json)
+          args=(--python "$UV_PROJECT_ENVIRONMENT/bin/python" --from all --format json)
           if (( ${#ignore[@]} )); then args+=(--ignore-packages "${ignore[@]}"); fi
           pip-licenses "${args[@]}" > "$RUNNER_TEMP/licenses.json"
           python3 "$RG/python/license-check/license_check.py" "$RG/licenses.toml" "$RUNNER_TEMP/licenses.json"
+      # Last: what the steps above left in the caller's checkout, the whole repo. It only reports until the project
+      # sets enforce in repo-guards.toml, which it reads at HEAD. uv runs from $RUNNER_TEMP without the PR's config.
+      - name: Checkout unchanged
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -222,6 +242,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *outside
       - *apply-overrides
       # The Coverage step reads TOML with python3, which needs 3.11 or later; this job skips the dev group.
       - &install-python
@@ -263,10 +284,10 @@ jobs:
           if [[ -f uv.lock ]]; then
             uv sync --locked
           else
-            uv venv .venv && uv pip install --python .venv/bin/python -r requirements.txt
-            uv pip show -q --python .venv/bin/python pytest > /dev/null 2>&1 || tools+=(--with "$pytest")
+            uv venv "$UV_PROJECT_ENVIRONMENT" && uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" -r requirements.txt
+            uv pip show -q --python "$UV_PROJECT_ENVIRONMENT/bin/python" pytest > /dev/null 2>&1 || tools+=(--with "$pytest")
           fi
-          cov() { uv run --no-project --python .venv/bin/python "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
+          cov() { uv run --no-project --python "$UV_PROJECT_ENVIRONMENT/bin/python" "${tools[@]}" coverage "$1" --rcfile "$RG/python/pyproject.toml" "${@:2}"; }
           case $MODE in
             whole)
               cov run --source "$sources" -m pytest ;;
@@ -298,6 +319,13 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - &checkout-unchanged
+        name: Checkout unchanged
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # One job per coverage-shards item, running only its test paths; Coverage combines their data.
   coverage-shard:
@@ -324,6 +352,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *outside
       - *apply-overrides
       - *install-python
       - *coverage
@@ -335,6 +364,7 @@ jobs:
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
+      - *checkout-unchanged
 
   # Generating the snapshot builds the caller's code, so it gets a job of its own: read-only token, no secrets.
   api-snapshot:
@@ -356,6 +386,7 @@ jobs:
       - *checkout
       - *checkout-repo-guards
       - *install-uv
+      - *outside
       - name: Read the snapshot settings
         id: setting
         run: |
@@ -399,3 +430,4 @@ jobs:
           name: ${{ steps.setting.outputs.artifact }}
           path: ${{ runner.temp }}/api-snapshot
           if-no-files-found: error
+      - *checkout-unchanged

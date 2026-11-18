@@ -1,0 +1,3 @@
+# false: the check lists what changed and passes. A project adopts it by setting
+# `enforce = true` under ["ci-checks/checkout-unchanged/settings.toml"] in .github/checks/repo-guards.toml.
+enforce = false

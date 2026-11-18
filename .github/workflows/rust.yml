@@ -100,8 +100,11 @@ jobs:
         run: uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
       # The job's TOOLCHAIN file (rust-toolchain.toml or coverage.toml) names the toolchain at TOOLCHAIN_KEY; COMPONENTS adds to it.
       # The Coverage job builds nothing in merge mode, so it skips the Rust steps; MODE is unset in Checks.
+      # Item 20, checkout unchanged: cargo builds into the runner's temp directory, not the project's target/. The step
+      # outputs that directory's path from the project directory, the form the cache step takes.
       - &install-rust
         name: Install Rust
+        id: install-rust
         if: ${{ env.MODE != 'merge' }}
         run: |
           read -ra key <<< "$TOOLCHAIN_KEY"
@@ -113,12 +116,15 @@ jobs:
           fi
           rustup toolchain install "$toolchain" --profile minimal ${COMPONENTS:+--component "$COMPONENTS"}
           echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"
+          echo "target=$(realpath -m --relative-to=. "$RUNNER_TEMP/cargo-target")" >> "$GITHUB_OUTPUT"
+      # rust-cache joins the target onto the workspace root, so an absolute path would end up under the project.
       - &cache
         name: Cache Rust builds
         if: ${{ env.MODE != 'merge' }}
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: repo/${{ inputs.working-directory }}
+          workspaces: repo/${{ inputs.working-directory }} -> ${{ steps.install-rust.outputs.target }}
           save-if: ${{ github.event_name == 'push' }}
       - name: Install cargo-machete and cargo-deny
         uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
@@ -161,6 +167,14 @@ jobs:
       - name: Env allowlist
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: uv run --no-project --python 3.12 "$RG/env-allowlist/env_allowlist.py" rust "$RG/env-allowlist/allowlist.toml"
+      # Last: what the steps above left in the caller's checkout, the whole repo. It only reports until the project
+      # sets enforce in repo-guards.toml, which it reads at HEAD. uv runs from $RUNNER_TEMP without the PR's config.
+      - name: Checkout unchanged
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # The coverage steps run the PR's tests, so they get a job of their own.
   coverage:
@@ -251,6 +265,13 @@ jobs:
           else
             echo "CRAP report skipped: lizard did not install" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
+      - &checkout-unchanged
+        name: Checkout unchanged
+        if: ${{ !cancelled() }}
+        working-directory: ${{ runner.temp }}
+        env:
+          UV_NO_CONFIG: "1"
+        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py" check "$GITHUB_WORKSPACE/repo"
 
   # One job per coverage-shards item, running only its unit-tests targets; Coverage merges their LCOV reports.
   coverage-shard:
@@ -292,6 +313,7 @@ jobs:
           path: ${{ runner.temp }}/shard
           if-no-files-found: error
           retention-days: 1
+      - *checkout-unchanged
 
   # Generating the snapshot builds the caller's code, so it gets a job of its own: read-only token, no secrets.
   api-snapshot:
@@ -345,6 +367,8 @@ jobs:
       # api-snapshot-scope.rust names when it is set; exit 2 when it cannot or that setting is invalid.
       - name: Generate
         if: ${{ steps.setting.outputs.path != '' }}
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target
         run: |
           "$RUNNER_TEMP/api-snapshot-tool/release/api-snapshot" --project "$PWD" --output "$RUNNER_TEMP/api-entries.json" \
             --config "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" --working-directory "$PROJECT_DIR" || exit 2
@@ -370,3 +394,4 @@ jobs:
           name: ${{ steps.setting.outputs.artifact }}
           path: ${{ runner.temp }}/api-snapshot
           if-no-files-found: error
+      - *checkout-unchanged

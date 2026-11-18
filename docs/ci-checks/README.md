@@ -15,6 +15,7 @@
 5. 可选：启用接口快照（[第 4 层](../architecture.md)第 1 项）：在 `.github/checks/repo-guards.toml` 的 `[project."<working-directory>"]` 节里给语言设 `api-snapshot.<语言>`（见[覆盖默认配置](#覆盖默认配置)），`ci.yml` 不用改；没设的语言，API snapshot job 只写一行"未启用"就通过。用法见 [`docs/architecture.md`](../architecture.md#第-1-项接口快照)。
 6. 第 2 层的设置，见 [`docs/repo-settings.md`](../repo-settings.md)。
 7. 可选：本地要读规则、跑工具时，把 [`guards/ci-checks/fetch-ci-checks/fetch_ci_checks.py`](../../guards/ci-checks/fetch-ci-checks/fetch_ci_checks.py)（只用标准库）复制进 repo，在 repo 根目录跑它。它确认 `ci.yml` 用 `@main` 调用 repo-guards，把 `main` 当前的 `guards/ci-checks/` 下载到 `.repo-guards/ci-checks/`，commit 记在 `.repo-guards/SHA`，`main` 改了就重跑。下载后它用下载下来的 [`guards/ci-checks/config-overrides/config_overrides.py`](../../guards/ci-checks/config-overrides/config_overrides.py) 把 `.github/checks/repo-guards.toml`（`--overrides` 可改路径）写进 `.repo-guards/` 里对应的文件，和 CI 一致；合并失败就退出 2，留着上次下载的。它会运行下载来的代码，从哪个 repo 下载由 `ci.yml` 的 `uses:` 决定，所以只在 `ci.yml` 是 CODEOWNERS 批准过的那份的检出上跑。脚本在 `.repo-guards/` 里写一个内容为 `*` 的 `.gitignore`，git 自己忽略整个目录，不用改 repo 的 `.gitignore`。本地只有 `ci-checks/`，覆盖它以外文件的节在本地会失败。测试：在 `tests/ci-checks/fetch-ci-checks/` 跑 `python3 -m unittest fetch_ci_checks_test`（要 Python 3.11.4 及以上）。
+8. 可选：接入工作区不变（[第 20 项](#工作区不变)）：四个语言 workflow 已带 Checkout unchanged 步，`ci.yml` 不用改；没接入时它只列出 job 留在工作区里的东西，不让 CI 失败。把列出的路径清掉后，在 `.github/checks/repo-guards.toml` 的 `["ci-checks/checkout-unchanged/settings.toml"]` 节设 `enforce = true`。
 
 | workflow | 跑什么 | 输入（默认） |
 |---|---|---|
@@ -31,10 +32,10 @@
 
 | workflow | job（里面的步） |
 |---|---|
-| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist、Env allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Cyclic imports、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
-| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
-| `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
+| `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist、Env allowlist、Checkout unchanged）、Coverage（Coverage、Coverage gate、CRAP report、Checkout unchanged）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot、Checkout unchanged） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Cyclic imports、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses、Checkout unchanged）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot、Checkout unchanged） |
+| `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses、Checkout unchanged）、Coverage（同上）、API snapshot（同上） |
+| `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses、Checkout unchanged）、Coverage（同上）、API snapshot（同上） |
 
 PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Changes job，用 [`guards/ci-checks/language-gate/language_gate.py`](../../guards/ci-checks/language-gate/language_gate.py)（只用标准库）列出这个 PR 合并后改动的文件：检出的合并 commit 和它的第一个父 commit 比，删掉的文件、改名前后的路径都算。有一个是本语言的文件，后面的 job 照常跑；一个都没有，Checks、Coverage、Coverage shard 和 API snapshot 都跳过，跳过的 job 不算失败，必跑的 CI 照样通过。
 
@@ -64,6 +65,7 @@ PR 上只在改到本语言时才跑检查。每个语言 workflow 先跑 Change
     - 一个都不剩（全不存在，或设成 `[]`）时再打一条警告，只查这些目录的步跳过：Checks 的 Type check、Dead code、Unused dependencies，Coverage job 的 Coverage、Coverage gate、CRAP report（分片时还有各分片的 Coverage 和下载、上传分片数据）；Layer rules 照跑。
   - `api-snapshot.<语言>`：这个 `working-directory` 下本语言的接口快照文件路径，相对 repo 根目录，`<语言>` 是 `rust`、`python`、`typescript`、`go` 之一。没有默认值：没设就不启用，API snapshot job 只往 job summary 写一行"未启用"，然后通过。一种语言只读自己的快照文件，从不改写它。设了别的语言名、值不是字符串，或者路径不合下面的规定，API snapshot job 退出 2，并给出这个路径。路径的规定：只能是 `.github/checks/api-<语言>.json`，`<语言>` 就是键里的语言名，如 `api-snapshot.rust` 只能设成 `.github/checks/api-rust.json`，别的路径一律拒绝；`.github`、`.github/checks` 和这个文件都不是符号链接，文件存在时是普通文件。一种语言只有这一个路径，所以只能在一个 `working-directory` 启用：几个 `working-directory` 设了同一种语言，它们比对的是同一个文件。文件不存在不算违规：第一次运行就是这样，见[第 1 项接口快照](../architecture.md#第-1-项接口快照)。读设置和检查路径的是 `config_overrides.py` 的 `snapshot-path ROOT WORKING_DIRECTORY 语言`，Changes 也用同一份代码。
   - `api-snapshot-scope.<语言>`：这个 `working-directory` 下本语言接口快照的冻结范围，一组模块前缀（字符串数组），`<语言>` 同上。没设就是整个项目的公开接口，和以前一样。设了就只冻结范围内的条目：范围内仍是多、少、变都失败，范围外的条目不进快照、不比对。前缀的写法：Rust 是从 crate 名起的模块路径（如 `kvm_op::driver`）；Python 是点分模块名（如 `pkg.sub`）；Go 是包的 import 路径（如 `example.com/mod/driver`）；TypeScript 是 `package.json` 的导出子路径（如 `./driver`，包的根入口是 `.`），不带 `*`。语言名由 `snapshot-path` 一起查：设了别的语言名（如 `typscript`），或 `api-snapshot-scope` 不是表，Read the snapshot settings 步退出 2，和 `api-snapshot.<语言>` 不对时一样。值由本语言的生成器在 Generate 步读、检查（数组不能为空，前缀要合本语言的写法），所以没设 `api-snapshot.<语言>` 时值不检查。生成器怎样读、按什么筛条目见[冻结范围](#冻结范围)。
+- 工作区不变的开关在 [`guards/ci-checks/checkout-unchanged/settings.toml`](../../guards/ci-checks/checkout-unchanged/settings.toml) 的 `enforce`（默认 `false`，设成 `true` 才算接入，见[工作区不变](#工作区不变)）。
 - 依赖白名单在 [`guards/ci-checks/dependency-allowlist/allowlist.toml`](../../guards/ci-checks/dependency-allowlist/allowlist.toml) 的 `allow`（见[依赖白名单](#依赖白名单)），环境变量白名单在 [`guards/ci-checks/env-allowlist/allowlist.toml`](../../guards/ci-checks/env-allowlist/allowlist.toml) 的 `allow`（默认不设，设了才算接入，见[环境变量白名单](#环境变量白名单)），Python、TypeScript、Go 的许可证例外在 [`guards/ci-checks/licenses.toml`](../../guards/ci-checks/licenses.toml) 的 `exceptions`，Rust 的依赖来源、构建脚本白名单和许可证例外在 [`guards/ci-checks/rust/deny.toml`](../../guards/ci-checks/rust/deny.toml)，knip 的 `entry`、`project` 在 [`guards/ci-checks/typescript/knip.json`](../../guards/ci-checks/typescript/knip.json)：默认都是共用值或空列表，项目在对应文件那一节改。
 - clippy、tsc、deptry、cargo machete、vitest 读项目自己的文件，不归这个文件管；jscpd 基线照旧是 `.github/checks/jscpd-baseline.json`。
 - 覆盖能放宽安全检查，这是有意的：比如放开 `ci-checks/rust/deny.toml` 的依赖来源（`sources`）、忽略漏洞（`advisories`），加依赖白名单和许可证例外。把关靠 CODEOWNERS：改这个文件要 owner 批准，审的时候看清每一节放宽了什么。
@@ -112,7 +114,7 @@ api-snapshot-scope.rust = ["kvm_op::driver"]
 
 ## 流程级
 
-本 repo 只定要求（第 13 项除外，由四个语言 workflow 和 [`jscpd.yml`](../../.github/workflows/jscpd.yml) 实现；第 21 项除外，由 [`github-dir-pr.yml`](../../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
+本 repo 只定要求（第 13 项除外，由四个语言 workflow 和 [`jscpd.yml`](../../.github/workflows/jscpd.yml) 实现；第 20 项除外，由四个语言 workflow 实现；第 21 项除外，由 [`github-dir-pr.yml`](../../.github/workflows/github-dir-pr.yml) 实现；第 17 项由本 repo 的共享 workflow 部分实现），各 repo 用自己的语言和工具实现。实现放在 `.github/` 下，由 CODEOWNERS 锁住。要求较长的检查的细节见[附录：流程级各项](#流程级各项)。
 
 状态指本 repo 的实现：✅ 已实现，⚠️ 部分实现，空着为未实现。
 
@@ -125,7 +127,7 @@ api-snapshot-scope.rust = ["kvm_op::driver"]
 | 17 | 工具版本 | 检查工具按它们自己锁定的清单安装，版本写死，和 PR 的依赖分开 | 检查工具清单 | PR 的依赖换掉检查工具；工具升级让检查悄悄变松 | 每个 PR | ⚠️ |
 | 18 | [生成内容](#生成内容) | 生成文件能逐字节重新生成；二进制和编码数据只在白名单里；golden 和快照文件锁住 | 生成路径名单、生成器配置、二进制白名单、golden 和快照目录 | 把逻辑藏进"生成"文件、二进制或编码数据躲过检查；改 golden 文件迁就错误输出 | 每个 PR |  |
 | 19 | 只读范围 | 测试运行时，源码、测试、fixture、快照目录只读 | `.github/` 里的 CI 文件 | 测试运行中改源码、测试或快照 | 每个 PR |  |
-| 20 | 工作区不变 | 全部跑完后 `git status --porcelain --ignored` 没有输出：构建产物、缓存、结果文件都写到工作区外 | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR |  |
+| 20 | [工作区不变](#工作区不变) | 每个 job 跑完后 `git status --porcelain --ignored --untracked-files=all` 没有输出：构建产物、缓存、结果文件都写到工作区外；只放过 workflow 自己装的 `node_modules` | `.github/` 里的 CI 文件、`.gitignore` | 测试或生成器偷偷改文件、改快照；写进被 ignore 的路径躲过检查 | 每个 PR | ✅ |
 | 21 | [`.github/` 改动单独成 PR](#github-改动单独成-pr) | 改了 `.github/` 下任何文件的 PR，不能改别的文件 | `.github/` 里的 CI 文件 | 改 CI 的 PR 只经过旧版或它自己改过的检查，夹带的别的改动也就没经过新版检查 | 每个 PR | ✅ |
 
 ## CODEOWNERS
@@ -479,6 +481,45 @@ reason = "只在 feature full 下用到"
 - 带"生成"头的文件必须在生成路径名单里。
 - 二进制、压缩过的代码、大段编码数据、符号链接只能出现在二进制白名单里。
 - golden 和快照文件锁住，测试从不以更新模式运行。
+
+#### 工作区不变
+
+job 跑完后，调用方的工作区要和刚检出时一样。四个语言 workflow 的 Checks、Coverage、每个 Coverage shard 和 API snapshot job 最后都有一步 Checkout unchanged，调用方不用改 `ci.yml`。Changes job、[`jscpd.yml`](../../.github/workflows/jscpd.yml) 和 [`github-dir-pr.yml`](../../.github/workflows/github-dir-pr.yml) 不跑调用方的代码，不带这一步。
+
+- 查什么：[`guards/ci-checks/checkout-unchanged/checkout_unchanged.py`](../../guards/ci-checks/checkout-unchanged/checkout_unchanged.py)（只用标准库）对整个 repo 跑 `git status --porcelain=v1 -z --ignored --untracked-files=all`，不只看 `working-directory`。列出来的每一条都算：改了、删了、暂存了的跟踪文件，没跟踪的文件，被 ignore 的文件。`--untracked-files=all` 让每个文件各占一条：不加的话，整个被 ignore 的目录只有一行，之后往里加文件看不出来。
+- 每个 job 各自检出代码，所以列出来的都是这个 job 的步骤留下的。Checks 里这一步和别的检查一样，Inline exemptions 通过就跑，别的检查失败也跑；其余 job 里只要没取消就跑。
+- workflow 自己的输出都写到工作区外：
+
+  | 语言 | 怎么做 |
+  |---|---|
+  | Rust | Install Rust 步设 `CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target`，clippy、`cargo check`、cargo-llvm-cov 和本 repo 的检查工具都构建到那里，Cache Rust builds 缓存的也是它；API snapshot 的 Generate 步设同一个变量 |
+  | Python | Write outside the checkout 步把项目环境（`UV_PROJECT_ENVIRONMENT`）、字节码（`PYTHONPYCACHEPREFIX`）、ruff 缓存（`RUFF_CACHE_DIR`）、覆盖率数据（`COVERAGE_FILE`）和 pytest 缓存（`PYTEST_ADDOPTS` 的 `-o cache_dir=`）都指到 `$RUNNER_TEMP` 下；项目环境不再是工作区里的 `.venv` |
+  | TypeScript | `node_modules` 只能装在工作区里（node 从那里找依赖），是唯一放过的，见下一条；覆盖率报告在每种模式（含分片）下都写到 `$RUNNER_TEMP`；vitest 带 `--no-cache`，装的 vitest 有 `--fsModuleCache` 选项时再带 `--no-fsModuleCache`，不在 `node_modules` 里留缓存 |
+  | Go | 模块缓存、编译缓存和 golangci-lint 的缓存本来就在 `$RUNNER_TEMP`（Use fresh Go caches 步），不用改 |
+
+- `node_modules`：`typescript.yml` 的 Install the project 步（API snapshot job 是 Generate 步）在 `npm ci` 之后马上跑 `checkout_unchanged.py installed`，把当时的列表存到 `$RUNNER_TEMP/installed-files`。最后检查时只放过这份列表里的一种条目：路径里有一段是 `node_modules`，而且没跟踪或被 ignore。之后才加进 `node_modules` 的文件照样算；安装改了跟踪的文件、往别处写了文件，也照样算。
+- 接入前后：默认 `enforce = false`，没接入。项目在 `.github/checks/repo-guards.toml` 里设了 `enforce = true` 就是接入了（见[覆盖默认配置](#覆盖默认配置)）：
+
+  ```toml
+  ["ci-checks/checkout-unchanged/settings.toml"]
+  enforce = true
+  ```
+
+  | | 没接入 | 接入后 |
+  |---|---|---|
+  | 工作区没变 | `ok checkout unchanged (not adopted)`，退出 0 | `ok checkout unchanged`，退出 0 |
+  | 工作区变了 | 第一行是 `report checkout unchanged (not adopted, CI does not fail)`，照样逐条列出，最后一行说怎么接入，退出 0，CI 不失败 | 第一行是 `FAIL checkout unchanged`，退出 1，CI 失败 |
+  | 跑不了 | 退出 2 | 退出 2 |
+
+- 这个设置读的是 HEAD 上的 `.github/checks/repo-guards.toml`（`git show`），不是工作区里的那份：测试改了工作区里的文件也关不掉检查，没有 Apply caller overrides 步的 job 也读得到。
+- 怎么接入：分两个 PR，两个都能全绿。
+  1. 代码 PR：看各 job 的 Checkout unchanged 步列出的路径，把项目自己的构建、生成器和测试写进工作区的东西改到工作区外（如系统临时目录）。这时还没接入，列出的条目不让 CI 失败。合并后各 job 这一步都是 `ok checkout unchanged (not adopted)`。
+  2. `.github/` PR：设 `enforce = true`，要 owner 批准。合并后检查开始拦。
+- 要项目自己改的，workflow 管不了（前两种实测过）：setuptools 项目装成 editable 时在源码目录写 `*.egg-info`，构建 wheel 时写 `build/`；`tsconfig.json` 开了 `incremental` 时 `tsc --noEmit` 也写 `.tsbuildinfo`；测试把日志、报告、快照写进工作区。
+- 输出：每条一行，两个字符的状态码加路径，状态码同 `git status --porcelain`（`??` 没跟踪，`!!` 被 ignore）。路径写成 JSON 字符串，跟在状态码后面，不会产生 workflow 命令，也不会断行。按路径排序，最多列 50 条，其余只报数量。
+- 退出码：0 没变，或没接入；1 接入后工作区变了；2 跑不了（参数不对，不是 git repo 或 `git status` 失败，HEAD 上的覆盖文件读不懂，本节不是表，`enforce` 不是 `true` 或 `false`，`installed-files` 读不了或写不了）。
+- 查不到的：列表里的 `node_modules` 文件被改了内容（`git status` 只看它们在不在，不比内容），这归只读范围（第 19 项）；测试自己 `git commit`，或用 `git update-index --assume-unchanged` 之类把改动藏起来。
+- 测试：在 `tests/ci-checks/checkout-unchanged/` 跑 `python3 -m unittest checkout_unchanged_test`。
 
 #### `.github/` 改动单独成 PR
 

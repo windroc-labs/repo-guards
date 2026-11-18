@@ -1,6 +1,6 @@
 # Rust 模板
 
-[`docs/ci-checks/README.md`](README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](README.md#每个-repo-自己要做的)下的 job 表。
+[`docs/ci-checks/README.md`](README.md) 语言级各工具的 Rust 配置，由 reusable workflow [`rust.yml`](../../.github/workflows/rust.yml) 从 repo-guards 读取，不用复制；接入见[每个 repo 自己要做的](README.md#每个-repo-自己要做的)。各节写明它由哪一步跑；顺序同主表。各步在哪个 job 见[每个 repo 自己要做的](README.md#每个-repo-自己要做的)下的 job 表。cargo 都构建到工作区外的 `$RUNNER_TEMP/cargo-target`（`CARGO_TARGET_DIR`），不写项目的 `target/`，见[工作区不变](README.md#工作区不变)。
 
 ## formatter（rustfmt）
 

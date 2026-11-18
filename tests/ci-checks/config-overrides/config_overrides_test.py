@@ -224,6 +224,13 @@ class SourceDirsTest(unittest.TestCase):
             f"source-dirs: {json.dumps(path)} does not exist, so it is not checked\n"
         )
 
+    @staticmethod
+    def none_left(working_directory: str) -> str:
+        return (
+            f"::warning file=.github/checks/repo-guards.toml::[project.{json.dumps(working_directory)}] "
+            "source-dirs: no listed directory exists, so the steps that check them skip\n"
+        )
+
     def source_dirs(self, repo: Repo, working_directory: str) -> tuple[int, str, str]:
         return run("source-dirs", str(repo.root), working_directory)
 
@@ -246,11 +253,16 @@ class SourceDirsTest(unittest.TestCase):
         self.assertEqual(self.source_dirs(repo, "app"), (0, "lib\n", expected))
 
     def test_missing_default_is_left_out_with_a_warning(self) -> None:
-        self.assertEqual(self.source_dirs(self.repo(None), "."), (0, "\n", self.warning(".", "src")))
+        expected = self.warning(".", "src") + self.none_left(".")
+        self.assertEqual(self.source_dirs(self.repo(None), "."), (0, "\n", expected))
+
+    def test_empty_list_warns_that_none_is_left(self) -> None:
+        repo = self.repo('[project."."]\nsource-dirs = []\n', "src")
+        self.assertEqual(self.source_dirs(repo, "."), (0, "\n", self.none_left(".")))
 
     def test_dir_outside_the_working_directory_counts_as_missing(self) -> None:
         repo = self.repo('[project."app"]\nsource-dirs = ["lib"]\n', "lib")
-        self.assertEqual(self.source_dirs(repo, "app"), (0, "\n", self.warning("app", "lib")))
+        self.assertEqual(self.source_dirs(repo, "app"), (0, "\n", self.warning("app", "lib") + self.none_left("app")))
 
     def test_regular_file_counts_as_missing(self) -> None:
         repo = self.repo('[project."."]\nsource-dirs = ["lib", "main.py"]\n', "lib")
@@ -260,7 +272,15 @@ class SourceDirsTest(unittest.TestCase):
     def test_warning_escapes_workflow_command_characters(self) -> None:
         repo = self.repo('[project."."]\nsource-dirs = ["100%"]\n')
         _, _, err = self.source_dirs(repo, ".")
-        self.assertEqual(err, self.warning(".", "100%").replace("100%", "100%25"))
+        self.assertEqual(err, self.warning(".", "100%").replace("100%", "100%25") + self.none_left("."))
+
+    def test_not_a_list_of_strings_exits_2_naming_the_section(self) -> None:
+        for value in ('"src"', "[1]", '["src", 1]', "{ a = 1 }"):
+            with self.subTest(value=value):
+                repo = self.repo(f'[project."app"]\nsource-dirs = {value}\n', "app/src")
+                code, out, err = self.source_dirs(repo, "app")
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn('[project."app"] source-dirs is not a list of strings', err)
 
     def test_bad_project_table_exits_2(self) -> None:
         for text in ('project = "x"\n', '[project]\n"." = 1\n'):

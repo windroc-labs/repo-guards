@@ -213,14 +213,15 @@ def source_dirs(root: Path, working_directory: str) -> tuple[list[str], list[str
     """The section's source-dirs split into (present, missing), missing ones not being directories."""
     project = project_sections(read_overrides(root))
     dirs = project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
+    if not (isinstance(dirs, list) and all(isinstance(d, str) for d in dirs)):
+        raise Error(f"{section_header(working_directory)} source-dirs is not a list of strings")
     present = [d for d in dirs if (root / working_directory / d).is_dir()]
     return present, [d for d in dirs if d not in present]
 
 
-def missing_dir_warning(working_directory: str, path: str) -> str:
-    # A later code PR may add the directory, so it warns instead of failing; % starts a workflow command escape.
-    name = json.dumps(path, ensure_ascii=False)
-    message = f"{section_header(working_directory)} source-dirs: {name} does not exist, so it is not checked"
+def source_dirs_warning(working_directory: str, problem: str) -> str:
+    # % starts a workflow command escape.
+    message = f"{section_header(working_directory)} source-dirs: {problem}"
     return f"::warning file={OVERRIDES}::" + message.replace("%", "%25")
 
 
@@ -291,9 +292,14 @@ def main(argv: list[str]) -> int:
         if command == "apply" and len(args) == 2:
             return apply(Path(args[0]), Path(args[1]))
         if command == "source-dirs" and len(args) == 2:
+            # A later code PR may add a missing directory, so it warns instead of failing.
             present, missing = source_dirs(Path(args[0]), args[1])
             for path in missing:
-                print(missing_dir_warning(args[1], path), file=sys.stderr)
+                name = json.dumps(path, ensure_ascii=False)
+                print(source_dirs_warning(args[1], f"{name} does not exist, so it is not checked"), file=sys.stderr)
+            if not present:
+                problem = "no listed directory exists, so the steps that check them skip"
+                print(source_dirs_warning(args[1], problem), file=sys.stderr)
             print(" ".join(present))
             return 0
         if command == "snapshot-path" and len(args) == 3 and args[2] in LANGUAGES:

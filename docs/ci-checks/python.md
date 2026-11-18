@@ -42,7 +42,7 @@
 |---|---|
 | [`guards/ci-checks/python/pyproject.toml`](../../guards/ci-checks/python/pyproject.toml) | `[tool.pyright]` 开 `typeCheckingMode = "strict"`，再加 strict 不开的 `reportUnnecessaryTypeIgnoreComment`，对应 [类型检查规则](README.md#类型检查规则) 的 Python 一列；`[dependency-groups]` 的 `dev` 组同样固定 pyright 的版本 |
 
-`python.yml` 的 Type check 步只查 `source-dirs`（覆盖文件里 `[project."<working-directory>"]` 节的 `source-dirs`，默认 `["src"]`，见[覆盖默认配置](README.md#覆盖默认配置)） 里的目录。`# type: ignore`、`# pyright: ignore` 算行内豁免。
+`python.yml` 的 Type check 步只查 `source-dirs`（覆盖文件里 `[project."<working-directory>"]` 节的 `source-dirs`，默认 `["src"]`，见[覆盖默认配置](README.md#覆盖默认配置)） 里的目录。登记了但不存在的目录不查，只打警告；一个都不剩时这一步和 Dead code、Unused dependencies、Coverage 都跳过，见[覆盖默认配置](README.md#覆盖默认配置)。`# type: ignore`、`# pyright: ignore` 算行内豁免。
 
 ## 死代码（vulture、deptry）
 

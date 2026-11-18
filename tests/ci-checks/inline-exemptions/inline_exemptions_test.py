@@ -514,7 +514,8 @@ class Workflows(unittest.TestCase):
     """The check is a step of each language workflow's Checks job and of jscpd.yml; callers add nothing."""
 
     WORKFLOWS = ie.CI_CHECKS.parents[1] / ".github/workflows"
-    GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}"
+    # A step may add its own conditions after the gate.
+    GATE = re.compile(r"if: \$\{\{ !cancelled\(\) && steps\.inline-exemptions\.outcome == 'success'( && [^\n]+)? \}\}\n")
     # Languages whose Checks job runs a Layer rules step, right after Inline exemptions.
     LAYER_RULES = frozenset({"go", "python", "typescript"})
 
@@ -557,7 +558,7 @@ class Workflows(unittest.TestCase):
                 self.assertIn('UV_NO_CONFIG: "1"', step)
                 self.assertTrue(step.rstrip().endswith(f'inline_exemptions.py" {language}'), step)
                 for later in steps[at + 1 :]:
-                    self.assertIn(self.GATE, later)
+                    self.assertRegex(later, self.GATE)
                 for earlier in steps[:at]:
                     self.assertNotIn("cancelled()", earlier)
 

@@ -19,7 +19,7 @@ OVERRIDES = ".github/checks/repo-guards.toml"
 # Each workflow that runs this check reconciles the tools it owns: a language workflow its language's, jscpd.yml jscpd.
 OWNED = {
     "rust": frozenset("rustc clippy rustfmt cargo-llvm-cov cargo-test sanitizer cargo-machete".split()),
-    "python": frozenset("ruff ruff-format pyright coverage pytest unittest vulture deptry".split()),
+    "python": frozenset("ruff ruff-format pyright pylint coverage pytest unittest vulture deptry".split()),
     "typescript": frozenset("tsc eslint prettier vitest-coverage knip vitest".split()),
     "go": frozenset("golangci-lint go-test go-build go-mod".split()),
     "jscpd": frozenset({"jscpd"}),

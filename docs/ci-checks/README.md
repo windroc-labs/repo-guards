@@ -32,7 +32,7 @@
 | workflow | job（里面的步） |
 |---|---|
 | `rust.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Format、Lint、Comment budget、Type check and dead code、Unused dependencies、Dependency rules、Dependency allowlist、Env allowlist）、Coverage（Coverage、Coverage gate、CRAP report）、API snapshot（Read the snapshot settings、Build the API snapshot tool、Generate、Compare、Upload the new snapshot） |
-| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
+| `python.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Cyclic imports、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（Read the snapshot settings、Generate、Compare、Upload the new snapshot） |
 | `typescript.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Comment budget、Type check、Dead code and unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 | `go.yml` | Changes（Match changed files，只在 PR 上跑）、Checks（Inline exemptions、Layer rules、Format、Lint、Comment budget、Type check、Dead code、Unused dependencies、Vulnerabilities、Dependency allowlist、Licenses）、Coverage（同上）、API snapshot（同上） |
 
@@ -443,6 +443,7 @@ reason = "只在 feature full 下用到"
 | Python（大小写、空格不限） | `# noqa`、`# noqa: <规则>`；文件级 `# ruff: noqa`、`# flake8: noqa` | `ruff`，`V` 开头的规则记 `vulture` |
 | | `# fmt: off`、`# yapf: disable`；`# fmt: skip` | `ruff-format` / `off`；`skip` |
 | | `# type: ignore[…]`、`# pyright: ignore[…]`；文件级 `# pyright: <设置>` | `pyright` / 规则或设置名 |
+| | `# pylint: disable=…`、`disable-next=…`、`disable-msg=…` 里能关掉 `cyclic-import` 的（`cyclic-import`、`all`，不分大小写的 `R0401`、`R`、`imports`；其他消息名不算）；文件级 `# pylint: skip-file`、`disable-all`、`disable=all`，之后的 `# pylint:` 都不算。按 pylint 的解析：一条注释只认最后一处 `pylint:`，写错的部分和它后面的不算 | `pylint` / 消息名；文件级记 `skip-file`、`disable-all`、`all` |
 | | `# pragma: no cover`、`# pragma: no branch`（coverage.py 默认正则） | `coverage` / `no cover`、`no branch` |
 | | `pytest.mark.skip`、`skipif`、`xfail`，`pytest.skip()`、`xfail()`、`importorskip()`（含别名导入和 `pytestmark`） | `pytest` / 标记或函数名 |
 | | `unittest.skip`、`skipIf`、`skipUnless`、`expectedFailure`、`SkipTest`，`self.skipTest()` | `unittest` / 名字 |

@@ -1,0 +1,13 @@
+[MAIN]
+jobs=1
+load-plugins=
+persistent=no
+unsafe-load-any-extension=no
+
+[MESSAGES CONTROL]
+disable=all
+enable=cyclic-import,syntax-error
+
+[REPORTS]
+reports=no
+score=no

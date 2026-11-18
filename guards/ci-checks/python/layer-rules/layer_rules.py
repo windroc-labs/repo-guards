@@ -4,15 +4,15 @@ Usage: python -I layer_rules.py PROJECT [SOURCE_DIR ...], with the venv that has
 SOURCE_DIRS are relative to PROJECT; with PROJECT itself they are where the root packages are looked for.
 """
 
-import os
-import secrets
 import sys
 import tomllib
-import traceback
 from collections.abc import Sequence
 from importlib.machinery import ModuleSpec, PathFinder
 from pathlib import Path
 from types import ModuleType
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from stop_commands import run_quoted
 
 PREFIX = "layer rules (python): "
 INI = ".importlinter"
@@ -100,21 +100,7 @@ def main(argv: list[str]) -> int:
     roots = [project, *(root for root in (project / name for name in argv[1:]) if root.is_dir())]
     searched = ", ".join(str(root.relative_to(project)) for root in roots)
     print(f"{PREFIX}config {config.name}, packages looked for in: {searched}", flush=True)
-    # The report quotes the PR's file names and source lines; no line of it may act as a workflow command.
-    token = secrets.token_hex(16)
-    print(f"::stop-commands::{token}", flush=True)
-    sys.stderr.flush()
-    os.dup2(sys.stdout.fileno(), sys.stderr.fileno())
-    try:
-        passed = lint(config, roots)
-    except Exception:  # noqa: BLE001 -- the traceback can quote the PR's text, so it must print inside the block.
-        traceback.print_exc()
-        return 2
-    finally:
-        sys.stdout.flush()
-        sys.stderr.flush()
-        print(f"::{token}::", flush=True)
-    return 0 if passed else 1
+    return run_quoted(lambda: 0 if lint(config, roots) else 1)
 
 
 if __name__ == "__main__":

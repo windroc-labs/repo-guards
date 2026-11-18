@@ -89,13 +89,14 @@ jobs:
           persist-credentials: false
       - *checkout-repo-guards
       - *install-uv
-      # SOURCE_DIRS is the project section's source-dirs for this working-directory.
+      # SOURCE_DIRS is the project section's source-dirs for this working-directory, less those that do not exist,
+      # each of which gets a warning.
       - &apply-overrides
         name: Apply caller overrides
         run: |
           overrides() { uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" "$@"; }
           overrides apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
-          dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" "$PROJECT_DIR")
+          dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR")
           echo "SOURCE_DIRS=$dirs" >> "$GITHUB_ENV"
       - name: Install the shared dev group
         run: |

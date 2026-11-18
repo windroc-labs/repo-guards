@@ -27,7 +27,7 @@ ESCAPES = {
     "\r": "\\r",
 }
 USAGE = f"""usage: config_overrides.py apply ROOT OVERRIDES
-       config_overrides.py source-dirs OVERRIDES WORKING_DIRECTORY
+       config_overrides.py source-dirs REPO_ROOT WORKING_DIRECTORY
        config_overrides.py snapshot-path REPO_ROOT WORKING_DIRECTORY {{{'|'.join(LANGUAGES)}}}
        config_overrides.py get FILE KEY..."""
 
@@ -176,13 +176,6 @@ def parse_overrides(text: str) -> dict[str, Any]:
         raise Error(f"{OVERRIDES}: {error}") from error
 
 
-def source_dirs(overrides: Path, working_directory: str) -> list[str]:
-    if not overrides.exists():
-        return DEFAULT_SOURCE_DIRS
-    project = project_sections(parse_overrides(overrides.read_text(encoding="utf-8")))
-    return project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
-
-
 def language_table(section: dict[str, Any], key: str, working_directory: str) -> dict[str, Any]:
     """A section's <key>.<language> table, its language names checked."""
     table = section.get(key, {})
@@ -214,6 +207,21 @@ def read_overrides(root: Path) -> dict[str, Any]:
     except (OSError, UnicodeDecodeError) as error:
         raise Error(f"{OVERRIDES}: {error}") from error
     return parse_overrides(text)
+
+
+def source_dirs(root: Path, working_directory: str) -> tuple[list[str], list[str]]:
+    """The section's source-dirs split into (present, missing), missing ones not being directories."""
+    project = project_sections(read_overrides(root))
+    dirs = project.get(working_directory, {}).get("source-dirs", DEFAULT_SOURCE_DIRS)
+    present = [d for d in dirs if (root / working_directory / d).is_dir()]
+    return present, [d for d in dirs if d not in present]
+
+
+def missing_dir_warning(working_directory: str, path: str) -> str:
+    # A later code PR may add the directory, so it warns instead of failing; % starts a workflow command escape.
+    name = json.dumps(path, ensure_ascii=False)
+    message = f"{section_header(working_directory)} source-dirs: {name} does not exist, so it is not checked"
+    return f"::warning file={OVERRIDES}::" + message.replace("%", "%25")
 
 
 def read_snapshot_settings(root: Path) -> dict[tuple[str, str], str]:
@@ -283,7 +291,10 @@ def main(argv: list[str]) -> int:
         if command == "apply" and len(args) == 2:
             return apply(Path(args[0]), Path(args[1]))
         if command == "source-dirs" and len(args) == 2:
-            print(" ".join(source_dirs(Path(args[0]), args[1])))
+            present, missing = source_dirs(Path(args[0]), args[1])
+            for path in missing:
+                print(missing_dir_warning(args[1], path), file=sys.stderr)
+            print(" ".join(present))
             return 0
         if command == "snapshot-path" and len(args) == 3 and args[2] in LANGUAGES:
             path = snapshot_path(Path(args[0]), args[1], args[2])

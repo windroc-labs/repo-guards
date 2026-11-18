@@ -89,13 +89,14 @@ jobs:
           persist-credentials: false
       - *checkout-repo-guards
       - *install-uv
-      # SOURCE_DIRS is the project section's source-dirs for this working-directory.
+      # SOURCE_DIRS is the project section's source-dirs for this working-directory, less those that do not exist,
+      # each of which gets a warning. When none exists, the steps that check or measure them skip.
       - &apply-overrides
         name: Apply caller overrides
         run: |
           overrides() { uv run --no-project --python 3.12 "$RG/config-overrides/config_overrides.py" "$@"; }
           overrides apply "$GITHUB_WORKSPACE/repo-guards/guards" "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml"
-          dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo/.github/checks/repo-guards.toml" "$PROJECT_DIR")
+          dirs=$(overrides source-dirs "$GITHUB_WORKSPACE/repo" "$PROJECT_DIR")
           echo "SOURCE_DIRS=$dirs" >> "$GITHUB_ENV"
       - name: Install the shared dev group
         run: |
@@ -168,16 +169,16 @@ jobs:
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         run: python3 "$RG/python/comment-budget/comment_budget.py" --base "$BASE_REF" --config "$RG/python/comment-budget.toml"
       - name: Type check
-        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' && env.SOURCE_DIRS != '' }}
         run: |
           # pyright roots imports at its config's folder, so the shared settings go into a config that points at the repo.
           python3 "$RG/python/pyproject-config/pyproject_config.py" pyright-config "$RG/python/pyproject.toml" "$RUNNER_TEMP/pyrightconfig.json" $SOURCE_DIRS
           python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format pyright -- pyright --outputjson --project "$RUNNER_TEMP/pyrightconfig.json" --pythonpath .venv/bin/python $SOURCE_DIRS
       - name: Dead code
-        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' && env.SOURCE_DIRS != '' }}
         run: python3 "$RG/diff-filter/diff_filter.py" --base "$BASE_REF" --format vulture -- vulture --config "$RG/python/pyproject.toml" $SOURCE_DIRS
       - name: Unused dependencies
-        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' && env.SOURCE_DIRS != '' }}
         run: |
           deptry=$(python3 "$RG/python/pyproject-config/pyproject_config.py" pin "$RG/python/pyproject.toml" "deptry==")
           uv run --no-project --python .venv/bin/python --with "$deptry" deptry $SOURCE_DIRS
@@ -234,7 +235,7 @@ jobs:
           uv venv --python 3.12 coverage-venv
           uv pip install --python coverage-venv/bin/python --require-hashes -r "$RG/coverage/requirements.txt"
       - name: Download shard data
-        if: ${{ needs.coverage-shard.result == 'success' }}
+        if: ${{ needs.coverage-shard.result == 'success' && env.SOURCE_DIRS != '' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: ${{ needs.coverage-shard.outputs.artifact }}-*
@@ -243,7 +244,7 @@ jobs:
       - &coverage
         name: Coverage
         id: coverage
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SOURCE_DIRS != '' }}
         env:
           PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1"
         run: |
@@ -288,7 +289,7 @@ jobs:
             --head "$RUNNER_TEMP/coverage-head.xml" --compare-branch "$BASE_REF"
       # Report only: lizard installs inside the step, and a failure anywhere leaves the job result unchanged.
       - name: CRAP report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && env.SOURCE_DIRS != '' }}
         continue-on-error: true
         run: |
           if uv venv -q --no-config --clear --python 3.12 "$RUNNER_TEMP/crap-venv" \
@@ -327,6 +328,7 @@ jobs:
       - *install-python
       - *coverage
       - name: Upload shard data
+        if: ${{ steps.coverage.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.coverage.outputs.artifact }}-${{ strategy.job-index }}

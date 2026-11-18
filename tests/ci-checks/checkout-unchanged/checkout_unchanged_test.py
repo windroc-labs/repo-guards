@@ -304,7 +304,7 @@ class Workflows(unittest.TestCase):
     """Every job of a language workflow that runs on the caller's checkout ends with the check; callers add nothing."""
 
     WORKFLOWS = SOURCE.parents[2] / ".github/workflows"
-    LANGUAGES = ("go",)
+    LANGUAGES = ("go", "python")
     JOBS = ("checks", "coverage", "coverage-shard", "api-snapshot")
     # The file `installed` wrote after the dependency install, where the workflow installs into the checkout.
     FILES = {"typescript": ' "$RUNNER_TEMP/installed-files"'}
@@ -343,6 +343,19 @@ class Workflows(unittest.TestCase):
                 for job in ("coverage-shard", "api-snapshot"):
                     self.assertEqual(self.last_step(jobs[job]).split("\n", 1)[0], "*checkout-unchanged")
                 self.assertEqual(sum(job.count("checkout_unchanged.py\" check") for job in jobs.values()), 2)
+
+
+    def test_python_jobs_write_outside_the_checkout(self):
+        jobs = self.jobs("python")
+        self.assertNotIn(".venv", "".join(jobs.values()))
+        outside = self.jobs("python")["checks"].split("\n      - &outside\n", 1)[1].split("\n      - ", 1)[0]
+        for name in ("UV_PROJECT_ENVIRONMENT", "PYTHONPYCACHEPREFIX", "RUFF_CACHE_DIR", "COVERAGE_FILE", "PYTEST_ADDOPTS"):
+            self.assertRegex(outside, rf'echo "{name}=[^\n]*\$RUNNER_TEMP/')
+        self.assertIn('>> "$GITHUB_ENV"', outside)
+        for job in self.JOBS:
+            # Before anything is installed or run, so no step writes where the check would find it.
+            steps = [step.split("\n", 1)[0] for step in jobs[job].split("\n      - ")[1:]]
+            self.assertEqual(steps[3].removeprefix("&").removeprefix("*"), "outside", job)
 
 
 if __name__ == "__main__":

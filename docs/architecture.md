@@ -68,3 +68,4 @@
   - 只改规则也要跑：这一步和工具读的每个文件（如 `.importlinter`、`.golangci.yml`、`.golangci.yaml`）都加进 [`language_gate.py`](../guards/ci-checks/language-gate/language_gate.py) 里本语言的 `PATTERNS`，`language_gate_test` 里加一条对应的测试。
   - 各语言接入时自己定：怎样算有配置（如 `.golangci.yml` 要配了 depguard 才算）、怎样装工具；并把本语言加进 [`inline_exemptions_test.py`](../tests/ci-checks/inline-exemptions/inline_exemptions_test.py) 的 `LAYER_RULES`。
 - 现状：Python 已接上 import-linter，配置放哪、怎样算有配置见 [Python 模板的分层规则](ci-checks/python.md#分层规则import-linter)；TypeScript 已接上 dependency-cruiser（见 [TypeScript 模板](ci-checks/typescript.md#分层规则dependency-cruiser)），Go 已接上 depguard（见[分层规则（depguard）](ci-checks/go.md#分层规则depguard)）；Rust 不需要这一步。
+- 循环导入：Python 另有 Cyclic imports 步，不看有没有配置，每次都查整个项目有没有循环 import，见 [Python 模板的循环导入](ci-checks/python.md#循环导入pylint-cyclic-import)。

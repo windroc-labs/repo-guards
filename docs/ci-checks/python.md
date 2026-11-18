@@ -101,6 +101,22 @@ Export the resolved dependencies 步把项目解析好的依赖写成 `pylock.to
 - 版本：import-linter 固定在 [`guards/ci-checks/python/layer-rules/requirements.in`](../../guards/ci-checks/python/layer-rules/requirements.in)，[`requirements.txt`](../../guards/ci-checks/python/layer-rules/requirements.txt) 带 hash（在该目录跑 `uv pip compile requirements.in -o requirements.txt --generate-hashes --universal --python-version 3.14` 生成），装进单独的 Python 3.14 环境，不和项目的依赖混装。
 - 测试：在 `tests/ci-checks/python/layer-rules/` 建好装了 `guards/ci-checks/python/layer-rules/requirements.txt` 的 Python 3.14 环境，用它跑 `python -m unittest layer_rules_test`。
 
+## 循环导入（pylint cyclic-import）
+
+[架构第 2 项](../architecture.md#第-2-项分层规则)的一部分：模块之间不能循环 import。和 Layer rules 不同，不要求项目有任何配置，每个 Python 项目都查。
+
+`python.yml` 的 Cyclic imports 步紧跟 Layer rules，跑 [`guards/ci-checks/python/cyclic-imports/cyclic_imports.py`](../../guards/ci-checks/python/cyclic-imports/cyclic_imports.py)：
+
+- 查什么：`source-dirs`（见[覆盖默认配置](README.md#覆盖默认配置)）里 git 跟踪的全部 `.py` 文件，查整个项目，不只看改动行。`.venv` 等没跟踪的文件不查；不存在的目录跳过。
+- 怎样算循环：pylint 的 `cyclic-import`，函数里的 import 也算，`if TYPE_CHECKING:` 下的不算。模块名从 `source-dirs` 算起（目录本身是包时，从包的上一级算起），命名空间包也对。
+- 结果：没有循环通过；有循环失败（退出 1），每个环列一行 `Cyclic import (a -> b)`；`source-dirs` 都不存在、有文件语法错误（读不了的文件里的 import 查不到）、工具出错，退出 2。没有跟踪的 `.py` 文件时打印一行后通过。
+- 配置：只用 [`pylintrc`](../../guards/ci-checks/python/cyclic-imports/pylintrc)（只开 `cyclic-import` 和 `syntax-error`），不读项目的 `pyproject.toml`、`.pylintrc`、`setup.cfg` 里的 pylint 配置，项目关不掉这项检查。
+- 豁免：已有的环先拆开。拆不了的，在环上某条 import 那行写 `# pylint: disable=cyclic-import`，这条边就不算；它和其他 `# pylint:` 关闭写法一样算[行内豁免](README.md#行内豁免)，要登记。
+- 不执行项目代码：脚本用 `python -I` 跑；pylint 只解析源码，项目目录里的模块都没有 loader，和标准库同名的项目文件也顶替不了标准库。
+- 输出包在 `::stop-commands::` 里。
+- 版本：pylint 固定在 [`requirements.in`](../../guards/ci-checks/python/cyclic-imports/requirements.in)，[`requirements.txt`](../../guards/ci-checks/python/cyclic-imports/requirements.txt) 带 hash（在该目录跑 `uv pip compile requirements.in -o requirements.txt --generate-hashes --universal --python-version 3.14` 生成），装进单独的 Python 3.14 环境。升级 pylint 时，对照新版的 pragma 解析检查[行内豁免](README.md#行内豁免)的 Python 扫描器。
+- 测试：在 `tests/ci-checks/python/cyclic-imports/` 用装了 `requirements.txt` 的 Python 3.14 环境跑 `python -m unittest cyclic_imports_test`。
+
 ## 读 pyproject.toml（pyproject-config）
 
 [`guards/ci-checks/python/pyproject-config/`](../../guards/ci-checks/python/pyproject-config/) 是 `python.yml` 读 TOML 用的脚本，只用标准库，要 Python 3.11 及以上。

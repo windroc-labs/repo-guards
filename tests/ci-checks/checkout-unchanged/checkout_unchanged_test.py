@@ -304,7 +304,7 @@ class Workflows(unittest.TestCase):
     """Every job of a language workflow that runs on the caller's checkout ends with the check; callers add nothing."""
 
     WORKFLOWS = SOURCE.parents[2] / ".github/workflows"
-    LANGUAGES = ("go", "python", "typescript")
+    LANGUAGES = ("go", "python", "typescript", "rust")
     JOBS = ("checks", "coverage", "coverage-shard", "api-snapshot")
     # The file `installed` wrote after the dependency install, where the workflow installs into the checkout.
     FILES = {"typescript": ' "$RUNNER_TEMP/installed-files"'}
@@ -382,6 +382,25 @@ class Workflows(unittest.TestCase):
         self.assertEqual(len(runs), 3)
         for line in runs:
             self.assertIn('"${flags[@]}"', line)
+
+
+    def test_rust_builds_outside_the_checkout(self):
+        jobs = self.jobs("rust")
+        install = jobs["checks"].split("\n      - &install-rust\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("id: install-rust\n", install)
+        self.assertIn('echo "CARGO_TARGET_DIR=$RUNNER_TEMP/cargo-target" >> "$GITHUB_ENV"\n', install)
+        # rust-cache joins the target onto the workspace root, so it gets the path from the project directory.
+        self.assertIn('realpath -m --relative-to=. "$RUNNER_TEMP/cargo-target")" >> "$GITHUB_OUTPUT"\n', install)
+        cache = jobs["checks"].split("\n      - &cache\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn(
+            "workspaces: repo/${{ inputs.working-directory }} -> ${{ steps.install-rust.outputs.target }}\n", cache
+        )
+        for job in ("coverage", "coverage-shard"):
+            steps = [step.split("\n", 1)[0] for step in jobs[job].split("\n      - ")[1:]]
+            self.assertLess(steps.index("*install-rust"), steps.index("*cache"))
+        # API snapshot installs its own toolchain; its generator builds the caller's crates.
+        generate = jobs["api-snapshot"].split("\n      - name: Generate\n", 1)[1].split("\n      - ", 1)[0]
+        self.assertIn("CARGO_TARGET_DIR: ${{ runner.temp }}/cargo-target\n", generate)
 
 
 if __name__ == "__main__":

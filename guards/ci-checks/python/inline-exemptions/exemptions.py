@@ -40,6 +40,9 @@ PYLINT_TOKEN = re.compile(
 )
 PYLINT_TAKES_MESSAGES = frozenset({"disable", "disable-next", "disable-msg", "enable", "enable-msg"})
 PYLINT_SKIPS_FILE = frozenset({"disable-all", "skip-file"})
+# The names pylint 4.1.4 resolves to cyclic-import, the only pylint check repo-guards runs; the rest are case-insensitive.
+PYLINT_CYCLIC_EXACT = frozenset({"all", "cyclic-import"})
+PYLINT_CYCLIC_ANY_CASE = frozenset({"r", "r0401", "imports"})
 
 GENERATED = re.compile(
     r"@generated|Code generated .* DO NOT EDIT\.|"
@@ -132,23 +135,29 @@ def pylint_actions(pragma):
     return actions
 
 
+def disables_cycles(message):
+    return message in PYLINT_CYCLIC_EXACT or message.lower() in PYLINT_CYCLIC_ANY_CASE
+
+
 def pylint_rules(comment):
-    """Returns [(rule, file_level)] for what the comment's pylint pragma disables."""
+    """Returns ([(rule, file_level)] the comment's pylint pragma disables of cyclic-import, whether pylint stops
+    reading the file's pragmas there)."""
     starts = [m.start() for m in re.finditer("#", comment)]
     match = next(filter(None, (PYLINT.match(comment, at) for at in reversed(starts))), None)
     if match is None:
-        return []
+        return [], False
     found = []
     for action, messages in pylint_actions(match[1]):
         if action in PYLINT_SKIPS_FILE:
-            return found + [(action, True)]
+            return found + [(action, True)], True
         if not action.startswith("disable"):
             continue
         for message in messages:
             if (action, message) == ("disable", "all"):
-                return found + [(message, True)]
-            found.append((message, False))
-    return found
+                return found + [(message, True)], True
+            if disables_cycles(message):
+                found.append((message, False))
+    return found, False
 
 
 def comment_occurrences(comment, function):
@@ -156,8 +165,6 @@ def comment_occurrences(comment, function):
     for hash_mark in re.finditer("#", comment):
         rules, file_level = directive(comment, hash_mark.start())
         found += [(tool, rule, "" if file_level else function) for tool, rule in rules]
-    for rule, file_level in pylint_rules(comment):
-        found.append(("pylint", rule, "" if file_level else function))
     if "jscpd:ignore-start" in comment:
         found.append(("jscpd", "ignore", function))
     return found
@@ -285,8 +292,14 @@ def scan_python(path, text):
         if token.type == tokenize.COMMENT and GENERATED.search(token.string):
             found.append(("generated", "generated", ""))
             break
+    pylint_reads = True
     for comment in comments:
-        found += comment_occurrences(comment.string, function_at(functions, comment.start[0]))
+        function = function_at(functions, comment.start[0])
+        found += comment_occurrences(comment.string, function)
+        if pylint_reads:
+            rules, skips_file = pylint_rules(comment.string)
+            found += [("pylint", rule, "" if file_level else function) for rule, file_level in rules]
+            pylint_reads = not skips_file
     found += walker.found
     if "whitelist" in PurePosixPath(path).name.lower():
         found += [("vulture", name, "") for name in whitelist_names(tree)]

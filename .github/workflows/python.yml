@@ -148,8 +148,8 @@ jobs:
           uv pip install -q --python "$RUNNER_TEMP/layer-rules-venv/bin/python" --require-hashes -r "$rules/requirements.txt"
           "$RUNNER_TEMP/layer-rules-venv/bin/python" -I "$rules/layer_rules.py" . $SOURCE_DIRS
       - name: Cyclic imports
-        # pylint cyclic-import on the tracked .py files in SOURCE_DIRS, always, with repo-guards' pylintrc only; the
-        # wrapper runs none of the project's code.
+        # pylint cyclic-import on every tracked .py file in working-directory, always, with repo-guards' pylintrc only;
+        # SOURCE_DIRS set where module names start. The wrapper runs none of the project's code.
         if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}
         env:
           UV_NO_CONFIG: "1"

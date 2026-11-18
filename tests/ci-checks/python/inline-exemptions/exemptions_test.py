@@ -216,13 +216,15 @@ class Forms(unittest.TestCase):
 
 
 class Pylint(unittest.TestCase):
-    def test_each_disabled_message_counts_in_its_function(self):
+    def test_each_message_that_disables_cyclic_import_counts_in_its_function(self):
         for line, rules in (
             ("import a  # pylint: disable=cyclic-import", ["cyclic-import"]),
-            ("import a  # pylint: disable=R0401, C0114", ["R0401", "C0114"]),
-            ("# pylint: disable-next=cyclic-import\nimport a", ["cyclic-import"]),
+            ("import a  # pylint: disable=R0401, too-many-arguments, IMPORTS", ["R0401", "IMPORTS"]),
+            ("# pylint: disable-next=r0401\nimport a", ["r0401"]),
             ("import a  # pylint: disable-msg=R", ["R"]),
             ("import a  # see pylint: disable = imports ; reason", ["imports"]),
+            ("import a  # pylint: disable-next=all", ["all"]),
+            ("import a  # pylint: disable=too-many-arguments,CYCLIC-IMPORT,refactor,ALL", []),
             ("import a  # PYLINT: disable=cyclic-import", []),
         ):
             with self.subTest(line=line):
@@ -245,14 +247,15 @@ class Pylint(unittest.TestCase):
         for text, rules in (
             ("x = 1  # pylint: enable=cyclic-import\n", []),
             ("x = '# pylint: disable=cyclic-import'\n", []),
-            ("x = 1  # pylint: disable=a-b # pylint: disable=c-d\n", ["c-d"]),
-            ("x = 1  # pylint: disable=a-b # no pragma here\n", ["a-b"]),
-            ("x = 1  # pylint: disable=a-b enable=c-d disable=e-f\n", ["a-b", "e-f"]),
-            ("x = 1  # pylint: disable a-b\n", []),
-            ("x = 1  # pylint: disable=a-b, enable\n", ["a-b"]),
+            ("x = 1  # pylint: disable=R0401 # pylint: disable=imports\n", ["imports"]),
+            ("x = 1  # pylint: disable=R0401 # no pragma here\n", ["R0401"]),
+            ("x = 1  # pylint: disable=R0401 enable=imports disable=R\n", ["R0401", "R"]),
+            ("x = 1  # pylint: disable=r\n", []),
+            ("x = 1  # pylint: disable R0401\n", []),
+            ("x = 1  # pylint: disable=R0401, enable\n", ["R0401"]),
             ("x = 1  # pylint: disable=\n", []),
-            ("x = 1  # pylint: frobnicate=a-b\n", []),
-            ("x = 1  # pylint: disable=a-b skip-file disable=c-d\n", ["a-b", "skip-file"]),
+            ("x = 1  # pylint: frobnicate=R0401\n", []),
+            ("x = 1  # pylint: disable=R0401 skip-file disable=imports\n", ["R0401", "skip-file"]),
         ):
             with self.subTest(text=text):
                 expected = Counter({("pylint", "src/m.py", rule, ""): 1 for rule in rules})
@@ -260,8 +263,19 @@ class Pylint(unittest.TestCase):
 
     def test_disable_all_after_other_messages_skips_the_file(self):
         self.assertEqual(
-            found("src/m.py", "def f():\n    x = 1  # pylint: disable=a-b,all,c-d\n"),
-            Counter({("pylint", "src/m.py", "a-b", "f"): 1, ("pylint", "src/m.py", "all", ""): 1}),
+            found("src/m.py", "def f():\n    x = 1  # pylint: disable=R0401,all,imports\n"),
+            Counter({("pylint", "src/m.py", "R0401", "f"): 1, ("pylint", "src/m.py", "all", ""): 1}),
+        )
+
+    def test_pylint_reads_no_pragma_after_one_that_skips_the_file(self):
+        text = "x = 1  # pylint: disable=R\n# pylint: skip-file\ny = 2  # pylint: disable=R\n"
+        self.assertEqual(
+            found("src/m.py", text),
+            Counter({("pylint", "src/m.py", "R", ""): 1, ("pylint", "src/m.py", "skip-file", ""): 1}),
+        )
+        self.assertEqual(
+            found("src/m.py", "# pylint: disable=all\n# pylint: skip-file\nx = 1  # noqa: E501\n"),
+            Counter({("pylint", "src/m.py", "all", ""): 1, ("ruff", "src/m.py", "E501", ""): 1}),
         )
 
 

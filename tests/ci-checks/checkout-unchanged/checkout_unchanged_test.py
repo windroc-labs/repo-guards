@@ -1,4 +1,5 @@
 import io
+import re
 import subprocess
 import sys
 import tempfile
@@ -297,6 +298,51 @@ class Usage(unittest.TestCase):
                     code, out, err = run(*argv)
                     self.assertEqual((code, out), (2, ""))
                     self.assertIn("checkout-unchanged: git ", err)
+
+
+class Workflows(unittest.TestCase):
+    """Every job of a language workflow that runs on the caller's checkout ends with the check; callers add nothing."""
+
+    WORKFLOWS = SOURCE.parents[2] / ".github/workflows"
+    LANGUAGES = ("go",)
+    JOBS = ("checks", "coverage", "coverage-shard", "api-snapshot")
+    # The file `installed` wrote after the dependency install, where the workflow installs into the checkout.
+    FILES = {"typescript": ' "$RUNNER_TEMP/installed-files"'}
+    # Checks runs every check whatever the others found; inline_exemptions_test wants this gate on each of them.
+    GATE = "if: ${{ !cancelled() && steps.inline-exemptions.outcome == 'success' }}\n"
+
+    def jobs(self, language):
+        text = (self.WORKFLOWS / f"{language}.yml").read_text().split("\njobs:\n", 1)[1]
+        parts = re.split(r"^  ([a-z-]+):\n", text, flags=re.M)
+        return dict(zip(parts[1::2], parts[2::2]))
+
+    @staticmethod
+    def last_step(job):
+        return job.split("\n      - ")[-1]
+
+    def test_every_job_but_the_gate_ends_with_the_check(self):
+        for language in self.LANGUAGES:
+            with self.subTest(language):
+                jobs = self.jobs(language)
+                self.assertEqual(list(jobs), ["changes", *self.JOBS])
+                self.assertNotIn("checkout_unchanged.py", jobs["changes"])
+                run = (
+                    '        run: uv run --no-project --python 3.12 "$RG/checkout-unchanged/checkout_unchanged.py"'
+                    f' check "$GITHUB_WORKSPACE/repo"{self.FILES.get(language, "")}\n'
+                )
+                checks, coverage = self.last_step(jobs["checks"]), self.last_step(jobs["coverage"])
+                self.assertTrue(checks.startswith("name: Checkout unchanged\n"), checks)
+                self.assertIn(self.GATE, checks)
+                self.assertTrue(coverage.startswith("&checkout-unchanged\n        name: Checkout unchanged\n"), coverage)
+                self.assertIn("if: ${{ !cancelled() }}\n", coverage)
+                for step in (checks, coverage):
+                    # From the runner's temp directory without uv config: neither the PR's uv settings nor its files are read.
+                    self.assertIn("working-directory: ${{ runner.temp }}\n", step)
+                    self.assertIn('UV_NO_CONFIG: "1"\n', step)
+                    self.assertEqual(step.count(run), 1, step)
+                for job in ("coverage-shard", "api-snapshot"):
+                    self.assertEqual(self.last_step(jobs[job]).split("\n", 1)[0], "*checkout-unchanged")
+                self.assertEqual(sum(job.count("checkout_unchanged.py\" check") for job in jobs.values()), 2)
 
 
 if __name__ == "__main__":
